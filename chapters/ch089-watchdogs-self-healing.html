@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watchdogs and self-healing — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch089">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act X · Harness Anatomy</div>
+        <h1>Watchdogs and self-healing</h1>
+        <p class="ch-tagline">An agent that runs while you sleep needs a guardian that never does: heartbeats, symptom detection, restart-with-backoff, waking humans well — and who guards the guardian.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 90 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>For over a century, mills and warehouses ran their nights on a lovely little machine called the <em>watchman's clock</em>. The night watchman carried a brass clock on a shoulder strap; around the building hung numbered keys on chains — by the boiler, the loading dock, the paint store. On each round he pushed every key into the clock, which punched a mark on a paper disc inside: which station, exactly when. He could not fake it, and he could not skip it quietly.</p>
+        <p>In the morning the manager opened the clock. Evenly spaced punches meant a full night of rounds. A gap between two and four a.m. meant the watchman fell asleep — or something stopped him — and either way the manager needed to know. The trick: the manager never watched the watchman. He required <em>proof of life at fixed intervals</em> and treated silence itself as the alarm. Every 24/7 agent platform runs on this idea, stacked in layers. This chapter is about those layers.</p>
+      </section>
+
+      <h2>Always-on is a different sport</h2>
+      <p>Everything you have built so far had a person in the room. You typed a task, the <a href="ch045-react-loop-by-hand.html">loop</a> ran, you read the answer; if something broke, you were the alarm system. The <a href="ch081-what-is-a-harness.html">harness chapters</a> have been adding armour around that loop, and <a href="ch088-observability.html">the previous chapter</a> gave it eyes: traces, costs, an audit trail. But a production agent — answering customers at 3 a.m., watching a mailbox every minute — has no person in the room, and an unattended system dies in two ways:</p>
+      <ul>
+        <li><strong>Loudly.</strong> The process crashes — an unhandled <a href="ch009-errors-and-tracebacks.html">exception</a>, an out-of-memory kill, a reboot. The easy case, because absence is detectable.</li>
+        <li><strong>Quietly.</strong> The process is alive — but it stopped doing useful work. A token expired and every task now fails politely in a try/except; a queue jammed; the loop is stuck on a reply that will never come. Operators call this a <dfn>zombie</dfn> — up but effectively dead, and far more dangerous, because nothing looks wrong.</li>
+      </ul>
+      <p>The cure for both is a <dfn>watchdog</dfn> — a separate, deliberately simple program that checks on the agent at intervals and acts when the check fails. If Act X's theme is "the loop around the loop", the watchdog is that phrase made literal: a small loop wrapping your agent's big one, forever asking — <em>are you still doing your job?</em></p>
+      <p>One war story sets the stakes. A team ships an always-on messaging agent; a credential silently expires; the agent keeps looping — green process, zero output — for six days, until a customer asks why nobody replied since Tuesday. Nothing crashed. That was precisely the problem.</p>
+
+      <h2>Heartbeats and health checks: proof of useful life</h2>
+      <p>The watchman's clock gives us the first two tools, mirror images of each other. A <dfn>heartbeat</dfn> is a push: the agent sends a "still alive" signal at a fixed interval — a timestamp in a file, a ping to a monitoring endpoint. The watchdog never asks; if the gap since the last beat grows too long, silence becomes the alarm. The watchman punching his disc, exactly.</p>
+      <p>A <dfn>health check</dfn> is a pull: the watchdog probes the agent — calls a status endpoint, runs a tiny test task — and judges the response. The manager walking the floor and asking directly.</p>
+      <p>Both come in two strengths, and the difference matters:</p>
+      <ul>
+        <li>A <dfn>liveness check</dfn> asks "is the process running and responsive?" — cheap, frequent, catches the loud deaths.</li>
+        <li>A <dfn>usefulness check</dfn> (Kubernetes has the cousin term <em>readiness</em>) asks "did the agent complete real work recently?" — a message processed in the last ten minutes, a success counter climbing. This catches zombies.</li>
+      </ul>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The rule that separates teams who sleep well from teams who do not: <strong>beat the heart from the working code, not from a side thread.</strong> A heartbeat from a separate timer thread keeps beating cheerfully while the main loop hangs — a zombie with a pulse. Write the beat after each successfully processed task, so "heartbeat fresh" and "work is happening" are the same fact.</p></div>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">heartbeat</span><span class="flip-back">A "still alive" signal the agent pushes at fixed intervals. Silence past the deadline is itself the alarm.</span></button>
+        <button class="flip" type="button"><span class="flip-front">zombie</span><span class="flip-back">A process that is up but no longer doing useful work. Passes liveness, fails usefulness. The quiet killer of unattended systems.</span></button>
+        <button class="flip" type="button"><span class="flip-front">symptom signature</span><span class="flip-back">A known failure's fingerprint in the logs — a phrase or pattern that identifies the disease, not just the fever.</span></button>
+        <button class="flip" type="button"><span class="flip-front">exponential backoff</span><span class="flip-back">Waiting longer after each consecutive failure — 1s, 2s, 4s, 8s — so retries stop hammering a struggling system.</span></button>
+        <button class="flip" type="button"><span class="flip-front">crash loop</span><span class="flip-back">Fail, restart instantly, fail again — thousands of times an hour. What restart-without-backoff turns into.</span></button>
+        <button class="flip" type="button"><span class="flip-front">dead man's switch</span><span class="flip-back">An external service that expects your check-in on schedule and alerts when it does not arrive. Guards the guardian.</span></button>
+      </div>
+
+      <h2>Symptom detection: reading the logs like a doctor</h2>
+      <p>A missed heartbeat tells you the patient has a fever, not the disease. For that, watchdogs read what the agent has been saying — its <a href="ch019-logging-config-env.html">logs</a> — looking for <dfn>symptom signatures</dfn>: known fingerprints of past failures — phrases or patterns to scan for in the recent log tail.</p>
+      <p>Every mature always-on system accumulates a signature table — each row a past 3 a.m. incident converted into a five-second automated diagnosis:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Signature in the logs</th><th>What it means</th><th>Sensible reflex</th></tr>
+        <tr><td><code>401 Unauthorized</code> repeating</td><td>Credential or token expired</td><td>Refresh the token; restarting alone will NOT fix this</td></tr>
+        <tr><td><code>429 Too Many Requests</code> in a burst</td><td>Rate limit hit — often self-inflicted by retries</td><td>Back off hard; do not restart into the same wall</td></tr>
+        <tr><td>Same traceback, same line, N times</td><td>Deterministic bug or poisoned input at the head of a queue</td><td>Quarantine the bad item, then restart</td></tr>
+        <tr><td>No log lines at all for 10 minutes</td><td>Hang, deadlock, or a dead log pipe</td><td>Kill and restart; log freshness is itself a heartbeat</td></tr>
+        <tr><td><code>disk full</code> / <code>No space left</code></td><td>Environment problem, not code</td><td>Restarting will fail identically — escalate with the disk detail</td></tr>
+      </table></div>
+
+      <p>Notice the third column. The signature does not just detect — it <em>routes</em>. Some diseases are cured by a restart (hangs, leaked memory, wedged connections); some are made worse by one (rate limits); some are immune entirely (expired credentials, full disks). A watchdog that restarts blindly is a well-meaning fool; one that knows which symptoms restarting cannot cure skips straight to the correct medicine — or to a human. You met this taxonomy in <a href="ch048-failure-modes.html">the failure-modes chapter</a>; the signature table is that taxonomy turned into an if-statement.</p>
+
+      <h2>One incident, minute by minute</h2>
+      <p>Watch a single incident travel through a watchdog, from first silence to closed case. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Steady state">
+          <h3>1. Steady state — everyone does their job</h3>
+          <div class="diagram">
+            <div class="d-box">Agent<small>processing tasks</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Heartbeat<small>beat every 60s, after each task</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Watchdog<small>watching the clock</small></div>
+            <div class="d-box dim">Human<small>asleep</small></div>
+          </div>
+          <p class="step-cap">The agent writes a heartbeat after each completed task; the watchdog checks the timestamp every minute. The human is asleep — the whole point.</p>
+        </div>
+        <div class="step" data-title="Silence">
+          <h3>2. The heartbeat stops</h3>
+          <div class="diagram">
+            <div class="d-box dim">Agent<small>hung on a network call</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Heartbeat<small>last beat: 4 min ago</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Watchdog<small>2 checks missed — threshold crossed</small></div>
+            <div class="d-box dim">Human<small>still asleep</small></div>
+          </div>
+          <p class="step-cap">The agent hangs mid-task. The process is alive — naive liveness says all is well — but the beat goes stale. The watchdog tolerates one late beat, then declares it unhealthy.</p>
+        </div>
+        <div class="step" data-title="Diagnose">
+          <h3>3. Scan the logs before acting</h3>
+          <div class="diagram">
+            <div class="d-box dim">Agent</div>
+            <div class="d-box hot">Watchdog<small>reads last 50 log lines</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Signatures<small>match: "no output for 10 min" = hang</small></div>
+            <div class="d-box dim">Human</div>
+          </div>
+          <p class="step-cap">Before touching anything, the watchdog tails recent logs against its signature table. Verdict: a hang — a disease restarts cure. A "401 Unauthorized" match would have meant a different plan.</p>
+        </div>
+        <div class="step" data-title="Self-heal">
+          <h3>4. Restart, politely</h3>
+          <div class="diagram">
+            <div class="d-box hot">Watchdog<small>kill, wait 2s, restart #1</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Agent<small>fresh process, resumes from saved state</small></div>
+            <div class="d-box dim">Human<small>still asleep</small></div>
+          </div>
+          <p class="step-cap">Kill the hung process, wait the backoff interval, start fresh. Because the agent <a href="ch061-checkpointing.html">checkpoints its state</a>, the restart loses at most the task in flight — what makes restarting safe medicine.</p>
+        </div>
+        <div class="step" data-title="Verify">
+          <h3>5. Trust, then verify the recovery</h3>
+          <div class="diagram">
+            <div class="d-box">Agent<small>task completed</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Heartbeat<small>fresh beat arrives</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Watchdog<small>incident closed, counters reset</small></div>
+          </div>
+          <p class="step-cap">A restart is not a recovery until a fresh heartbeat proves work has resumed. Counters reset, the incident is logged, watching resumes. Total human involvement: zero.</p>
+        </div>
+        <div class="step" data-title="Escalate">
+          <h3>6. The other ending: restarts are not working</h3>
+          <div class="diagram">
+            <div class="d-box dim">Agent<small>fails again after restart #3</small></div>
+            <div class="d-box hot">Watchdog<small>budget spent — stop restarting</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Human<small>paged, with symptom + attempts + runbook</small></div>
+          </div>
+          <p class="step-cap">Three restarts failed, so restarting is not the cure. The watchdog stops, preserves the evidence, and pages a human with everything it knows. Giving up well is a feature.</p>
+        </div>
+      </div>
+
+      <h2>Self-healing: restart with backoff</h2>
+      <p>The naive watchdog restarts the instant anything fails, creating one of the oldest patterns in operations: the <dfn>crash loop</dfn> — fail at startup, restart immediately, fail again, at machine speed. A classic flavour: an agent crashes on a malformed config at 11 p.m., and the supervisor restarts it instantly, every time. By morning: tens of thousands of restarts, a full log disk — a second incident born from the first — and, since the agent made an LLM warm-up call on every boot, a real API bill. Nobody was paged: technically the agent was always "just about to start".</p>
+      <p>The fix is decades old and beautifully simple. <dfn>Exponential backoff</dfn> means waiting longer after each consecutive failure — 1 second, then 2, 4, 8, capped — so a failing system gets breathing room instead of a hammering. Two refinements complete it: reset the delay once the agent is verified healthy again, and add <dfn>jitter</dfn> — a random sliver of extra delay so a fleet restarting after a shared outage does not stampede back in synchronised waves.</p>
+      <p>The final ingredient is a <dfn>restart budget</dfn>: a cap on consecutive attempts — three strikes, five — after which restarting is declared not the cure and the watchdog escalates instead. Without one, a watchdog will restart an agent with an expired credential every 60 seconds until the end of time.</p>
+      <p>Enough theory. Below is a complete watchdog — probe, symptom scan, backoff, budget, escalation — supervising a scripted agent through one bad night. The timeline is fixed so the run is repeatable; everything the watchdog does is what production code does. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A watchdog surviving a bad night — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- The agent's night, scripted ---------------------------
+# Each entry is what a health probe finds at that moment.
+# (A real watchdog probes a live process; scripting the answers
+# keeps this demo repeatable.)
+TIMELINE = ["ok", "ok", "hang", "hang", "ok",
+            "crash", "crash", "crash", "crash"]
+
+SIGNATURES = {
+    "hang":  "no heartbeat for 2 intervals (process alive, work stopped)",
+    "crash": "process exited unexpectedly",
+}
+
+def watchdog(timeline, max_strikes=3):
+    backoff = 1     # seconds to wait before next restart (simulated)
+    strikes = 0     # consecutive failures in THIS incident
+    for t, state in enumerate(timeline):
+        if state == "ok":
+            if strikes:
+                print(f"t={t}  healthy again -- incident closed, counters reset")
+            else:
+                print(f"t={t}  heartbeat OK")
+            backoff, strikes = 1, 0
+            continue
+
+        strikes += 1
+        print(f"t={t}  UNHEALTHY ({strikes} in a row): {SIGNATURES[state]}")
+
+        if strikes &gt; max_strikes:
+            print("      restart budget spent -- restarting is not fixing this")
+            print("      PAGING A HUMAN: symptom + attempts made + runbook link")
+            return "escalated to on-call"
+
+        print(f"      waiting {backoff}s (simulated), then restarting the agent")
+        backoff = min(backoff * 2, 60)   # exponential backoff, capped
+
+    return "survived the night unattended"
+
+print("VERDICT:", watchdog(TIMELINE))
+</textarea>
+      </div>
+
+      <p>Read the output like an operator. The hang at t=2 is healed by restarts and closed at t=4; no human ever knew. The crash spiral from t=5 burns the budget, and the watchdog does the mature thing: stops and escalates with context. One night, two incidents, one page — that ratio is the value proposition of self-healing.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now break it on purpose. Set <code>max_strikes=10</code> and watch the watchdog waste the night restarting into a wall. End the timeline in <code>"ok"</code> for a full unattended recovery. Or add an <code>"auth-error"</code> state and make the watchdog escalate <em>immediately</em> — a restart cannot mint a fresh credential.</p></div>
+
+      <h2>Escalation: waking a human is a feature</h2>
+      <p>Self-healing systems still need humans — they just spend human attention <em>precisely</em>. Page people for every wobble and you create <dfn>alert fatigue</dfn> — the numbed state where pages get swiped away on reflex — eventually including the one that mattered. The watchman's clock worked because the manager checked one disc each morning, not because a bell rang in his bedroom at every creaky floorboard.</p>
+      <p>Two rules keep escalation healthy. First, a severity ladder: log-only for self-healed blips, a next-morning ticket for degraded-but-recovered, a wake-someone-now page only when users or money are at risk <em>and</em> automation has given up. Second, every page must be actionable — the <strong>symptom</strong> ("no completed tasks for 25 minutes; repeating 401"), the <strong>attempts</strong> ("3 restarts; still failing"), and a <strong>runbook</strong> link. "Agent unhealthy" at 3 a.m. is not an alert; it is a small act of cruelty to whoever is on call. This is <a href="ch062-human-in-the-loop.html">human-in-the-loop</a> applied to operations: the machine does all it safely can, then hands the human a decision, not a mystery.</p>
+
+      <h2>Who watches the watchdog?</h2>
+      <p>Here is the question that eventually keeps every platform owner up at night: the watchdog is also a program, and programs die. If the watchdog dies at midnight and the agent at 2 a.m., nobody notices either until a customer does. So who watches the watchdog? Before you say "a second watchdog" — who watches <em>that</em>? You can smell the infinite regress.</p>
+      <p>The escape is not more watchdogs — it is <em>different</em> ones, in layers, obeying one design law: <strong>each guardian must be simpler and more reliable than the thing it guards.</strong> The regress terminates because each layer up is boring enough to trust.</p>
+      <ul>
+        <li><strong>Below your watchdog: the operating system's supervisor.</strong> Init systems — systemd on Linux, launchd on macOS, the restart policy in Kubernetes or Docker — are battle-hardened programs whose whole career is keeping processes running. Run your watchdog <em>under</em> one; if it crashes, the OS resurrects it.</li>
+        <li><strong>Above your watchdog: an external <dfn>dead man's switch</dfn>.</strong> The watchdog sends its own heartbeat to a service on <em>different infrastructure</em> — a hosted check-in monitor — that expects a ping on schedule and alerts a human when silence falls. Now even "the whole machine lost power" produces a page, because the alarm lives where the outage cannot reach. The watchman's clock, one level up.</li>
+      </ul>
+      <p>This layering is also why watchdogs must stay dumb. Every clever feature — an LLM call, a database dependency, a rich dashboard — is a way for the guardian to be down when the guarded needs it. Production watchdogs are small, dependency-free loops for the same reason hospital backup generators are diesel, not smart-grid software.</p>
+      <p>You configure rather than write the bottom layer, so you should be able to read one. Here is a real systemd service unit — the file that tells Linux's init system how to babysit a process. Click the lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">agent-worker.service — the OS as your under-watchdog</div>
+        <div class="wl-line"><code>[Unit]</code>
+          <div class="wl-note">Unit files are INI-style: section headers in brackets, key=value lines beneath. [Unit] holds identity and unit-wide policy.</div></div>
+        <div class="wl-line"><code>Description=Invoice-agent worker (always on)</code></div>
+        <div class="wl-line"><code>StartLimitIntervalSec=300</code>
+          <div class="wl-note">Half of the restart budget: the observation window. With the next line: more than 5 start attempts within 300 seconds means stop trying.</div></div>
+        <div class="wl-line"><code>StartLimitBurst=5</code>
+          <div class="wl-note">The other half. Budget spent, systemd marks the unit failed and stops restarting — the crash-loop breaker, and your escalation hook: alert on failed units and this becomes a page.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>[Service]</code></div>
+        <div class="wl-line"><code>ExecStart=/usr/bin/python3 /opt/agent/worker.py</code>
+          <div class="wl-note">The command to run. systemd starts it and notices the moment the process exits — the liveness layer, for free.</div></div>
+        <div class="wl-line"><code>Restart=on-failure</code>
+          <div class="wl-note">Auto-restart policy: resurrect the process when it dies with an error — the "self" in self-healing for thousands of production services.</div></div>
+        <div class="wl-line"><code>RestartSec=5</code>
+          <div class="wl-note">The pause before each restart. Fixed here; newer systemd versions can grow it exponentially between attempts — our backoff pattern, built into the OS.</div></div>
+        <div class="wl-line"><code>WatchdogSec=90</code>
+          <div class="wl-note">The zombie-catcher and star of the file. The service must notify systemd "still alive" every 90 seconds — a real heartbeat from the agent's own code. Miss it, and systemd kills and restarts the process even though it never crashed.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>[Install]</code></div>
+        <div class="wl-line"><code>WantedBy=multi-user.target</code>
+          <div class="wl-note">Start at boot. Machines reboot — after a power cut, your agent should not need a human to remember it exists.</div></div>
+      </div>
+
+      <h2>On-call for a fleet</h2>
+      <p>One agent needs a watchdog. A fleet of twenty needs an operating discipline — mostly what site-reliability teams refined for ordinary services, imported into the agent world:</p>
+      <ul>
+        <li><strong>One pane of glass.</strong> Every agent's heartbeat, restart count, and last incident on one dashboard — nobody assembles the picture from five terminals mid-incident.</li>
+        <li><strong>Deduplicate before paging.</strong> When a shared dependency fails — the LLM provider, a database — twenty agents fail together. Group alerts by signature and time window; twenty pages about one root cause is how engineers learn to hate their phones.</li>
+        <li><strong>A runbook per signature.</strong> Each table row links to a short document: what the symptom means, what automation already does, what to check first. Runbooks turn 40-minute investigations into 5-minute ones.</li>
+        <li><strong>Review the pages weekly.</strong> If the response is always "restarted it, fine now", that response belongs in the watchdog, not in a human. Boring pages are your automation backlog, sorted by annoyance.</li>
+        <li><strong>Practice the failure.</strong> Kill an agent on purpose during working hours: did the watchdog catch it, did the backoff behave, did the page carry its runbook? An unrehearsed recovery path is a rumour, not a system.</li>
+      </ul>
+      <p>The quiet theme across all five: <strong>every incident should make the system smarter.</strong> A new failure earns a signature; a repeated page earns automation; a confusing recovery earns a better runbook. Fleets run this way get calmer every month; fleets run on heroics get louder.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this chapter everywhere infrastructure lives. In repositories: <code>Restart=on-failure</code> in a systemd unit, <code>KeepAlive</code> in a launchd plist, <code>restart: unless-stopped</code> plus a <code>healthcheck:</code> block in docker-compose, <code>livenessProbe</code> / <code>readinessProbe</code> in a Kubernetes manifest (Act XIII covers those properly). In merge requests: "added a watchdog for the consumer", "backoff was missing jitter", "bumped the restart budget". In tooling: hosted dead-man's-switch monitors, and paging platforms whose "escalation policy" screens are this chapter's severity ladder as a product. And when an incident channel says "it was up but not processing since Friday" — that was a zombie, and you know which check was missing.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. An always-on agent's process has been up for six days, but it has not completed a single task in five of them. Which guardian was missing?</p>
+          <div class="q-opts">
+            <button data-opt="a">A liveness check — something to detect the process crashing</button>
+            <button data-opt="b">A usefulness check — proof of recent completed work, such as a heartbeat written after each task</button>
+            <button data-opt="c">A faster restart policy, so failures clear more quickly</button>
+          </div>
+          <p class="q-explain">The process never crashed, so liveness stayed green — this is a zombie. Only a check tied to actual completed work exposes a process that is up but useless.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Why does a good watchdog wait 1s, 2s, 4s, 8s between restart attempts instead of restarting instantly every time?</p>
+          <div class="q-opts">
+            <button data-opt="a">Restarting a process too quickly corrupts its files</button>
+            <button data-opt="b">It gives the human on call time to respond first</button>
+            <button data-opt="c">Instant retries create a crash loop that hammers failing dependencies, floods logs, and can burn money at machine speed</button>
+          </div>
+          <p class="q-explain">Restart-without-backoff spins at machine speed: thousands of failed starts, full logs, rate limits worsened by the retries themselves. Backoff gives the world time to heal; the budget makes the watchdog escalate when restarting is not the cure.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. The watchdog is also a program that can die. What is the standard answer to "who watches the watchdog?"</p>
+          <div class="q-opts">
+            <button data-opt="a">Layers: run the watchdog under the OS's own supervisor, and have it check in with an external dead man's switch on separate infrastructure</button>
+            <button data-opt="b">Write a second identical watchdog that watches the first</button>
+            <button data-opt="c">Make the watchdog robust enough that it cannot fail</button>
+          </div>
+          <p class="q-explain">A second identical watchdog restates the question. The regress ends with layers each simpler and more reliable than what they guard: an init system below, an external check-in monitor above — so even a power cut still produces an alert.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. The logs show <code>401 Unauthorized</code> repeating on every task. What should a well-designed watchdog do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Restart the agent — restarts are the universal cure</button>
+            <button data-opt="b">Recognise the signature as one restarts cannot fix, and escalate (or trigger a token refresh) instead of restarting</button>
+            <button data-opt="c">Silence the alert — 401s are the provider's problem</button>
+          </div>
+          <p class="q-explain">An expired credential survives any number of restarts. Signatures route: restart-curable diseases get restarts; everything else gets the correct medicine or a human.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Unattended systems die loudly (crash) or quietly (zombie — up but useless). Liveness catches the first; only proof of recent useful work — a heartbeat from the working code — catches the second.</li>
+          <li>A watchdog is the loop around the loop: probe at intervals, scan logs for symptom signatures, apply the matching remedy — knowing which symptoms restarts cannot cure.</li>
+          <li>Self-healing means restart with exponential backoff, jitter, and a restart budget. No backoff means crash loops; no budget means restarting into the same wall forever.</li>
+          <li>Escalation is a feature: page rarely, and carry the symptom, the attempts made, and a runbook link. Alert fatigue is how the important page gets missed.</li>
+          <li>"Who watches the watchdog?" is answered with layers, not clones: an OS supervisor below, a dead man's switch above — each guardian simpler than what it guards.</li>
+          <li>Fleet on-call is a discipline: one dashboard, deduplicated alerts, a runbook per signature, weekly page review, rehearsed failures — every incident should leave the system smarter.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

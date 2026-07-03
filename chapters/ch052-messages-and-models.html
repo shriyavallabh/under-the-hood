@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Messages and chat models — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch052">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VI · LangChain</div>
+        <h1>Messages and chat models</h1>
+        <p class="ch-tagline">Four message classes and one factory function — the same raw dicts you hand-built in Act IV, now wearing name badges. Learn this vocabulary and half of every LangChain file becomes instantly readable.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 53 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your export business in Pune ships with three courier companies. Each one has its own airway bill: the first wants the sender's address in box 3, the second wants it on page two, the third insists on block capitals and its own reference codes. Same parcel, same addresses — three different forms, three sets of clerical errors waiting to happen. Last month a shipment sat in a warehouse for a week because the declared value was written in the wrong box.</p>
+        <p>So you hire a freight forwarder. She hands you one standard form — FROM, TO, CONTENTS, DECLARED VALUE — and says: "Fill this in the same way every time. I will translate it into whichever courier's paperwork today's shipment needs." Suddenly, switching couriers is no longer a re-training exercise. It is one word on the booking sheet: <em>carrier = DHL</em>.</p>
+        <p>LangChain's message-and-model layer is that forwarder. The message classes are the standard form. <code>init_chat_model</code> is the line where you name the carrier. And <code>.invoke()</code> is the moment you hand the parcel over the counter.</p>
+      </section>
+
+      <h2>You already know the hard part</h2>
+      <p>Back in <a href="ch033-first-api-call.html">your first API call</a>, you did all of this by hand: you built a list of plain dicts — each one shaped like <code>{"role": "user", "content": "..."}</code> — posted the whole list to a provider's API, and got a reply back as raw JSON. In <a href="ch035-tool-calling.html">tool calling</a> you saw the model answer with a structured request instead of prose, and in <a href="ch045-react-loop-by-hand.html">the ReAct loop</a> you fed tool results back into that growing list and watched an agent come alive. Nothing in this chapter is a new idea. This chapter is a <em>renaming ceremony</em>.</p>
+      <p>Why rename something that already works? Because the raw dicts have a dirty secret: every provider wants them shaped slightly differently. OpenAI's chat API takes the system instructions as a message inside the list. Anthropic's API wants them hoisted out into a separate top-level <code>system</code> parameter. Tool results ride in a <code>"tool"</code> role message on one API and inside a content block on another. Model names, parameter names, error shapes — all slightly different dialects of the same conversation.</p>
+      <p>If you write your application directly against one provider's dict format, you have married that provider. Every experiment with a different model becomes a rewrite. LangChain's answer is the freight forwarder's standard form: <em>you</em> write one neutral format — typed message objects — and a per-provider adapter translates them into whichever dialect the chosen API speaks. That neutral format is the vocabulary of this chapter.</p>
+
+      <h2>Four envelopes, clearly labelled</h2>
+      <p>A <dfn>message</dfn> is one turn of a conversation, wrapped in a small Python object that says who is speaking. LangChain defines a handful of message classes, and four of them carry almost every conversation you will ever read in its code. They import from <code>langchain_core.messages</code>, and each one maps <em>exactly</em> onto a raw dict you have already written by hand:</p>
+
+      <div class="tbl"><table>
+        <tr><th>LangChain object</th><th>The raw dict from Act IV</th><th>Who is speaking</th></tr>
+        <tr><td><code>SystemMessage("Be concise.")</code></td><td><code>{"role": "system", "content": "Be concise."}</code></td><td>You — standing instructions</td></tr>
+        <tr><td><code>HumanMessage("What is 20% GST?")</code></td><td><code>{"role": "user", "content": "What is 20% GST?"}</code></td><td>The user</td></tr>
+        <tr><td><code>AIMessage("It is 300 rupees.")</code></td><td><code>{"role": "assistant", "content": "It is 300 rupees."}</code></td><td>The model</td></tr>
+        <tr><td><code>ToolMessage("300.0", tool_call_id="call_1")</code></td><td><code>{"role": "tool", "content": "300.0", ...}</code></td><td>Your tool code, reporting a result</td></tr>
+      </table></div>
+
+      <p>Read that table twice — it is the entire mapping. <code>HumanMessage</code> is not a new concept; it is <code>{"role": "user"}</code> with a class name. The win is that a typed object can carry extras that a bare dict handles clumsily: an <code>AIMessage</code> knows about its tool calls and token usage, and a <code>ToolMessage</code> insists you supply the <code>tool_call_id</code> that pairs a result with the exact request it answers — the same pairing discipline you met in <a href="ch035-tool-calling.html">the tool-calling chapter</a>, now enforced by the constructor instead of by your own care.</p>
+      <p>Flip these cards until every one feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">SystemMessage</span><span class="flip-back">The standing instructions: persona, rules, tone. Role "system" in the raw dict. Some providers hoist it out of the list entirely — the adapter handles that for you.</span></button>
+        <button class="flip" type="button"><span class="flip-front">HumanMessage</span><span class="flip-back">What the user said. Role "user". If you pass a bare string to a model, LangChain quietly wraps it in one of these.</span></button>
+        <button class="flip" type="button"><span class="flip-front">AIMessage</span><span class="flip-back">What the model said back. Role "assistant". Carries .content (the text) and .tool_calls (structured requests for your code to act on).</span></button>
+        <button class="flip" type="button"><span class="flip-front">ToolMessage</span><span class="flip-back">A tool result travelling back to the model — the OBSERVATION from your ReAct loop, with a tool_call_id linking it to the request it answers.</span></button>
+        <button class="flip" type="button"><span class="flip-front">init_chat_model</span><span class="flip-back">A factory function: give it a provider-and-model string, get back a ready-to-use chat model object. The one line you change to switch providers.</span></button>
+        <button class="flip" type="button"><span class="flip-front">AIMessageChunk</span><span class="flip-back">One fragment of a streamed reply. .stream() yields a series of these; each carries the newly arrived piece of .content.</span></button>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p><code>content</code> is usually a plain string, but it can also be a list of content blocks — that is how images, documents, and a model's visible reasoning travel inside a single message. You will meet multi-part content later; for now, string in, string out covers everything we do.</p></div>
+
+      <h2>init_chat_model: name the carrier, get a counter clerk</h2>
+      <p>Messages are the form; now you need someone to hand it to. A <dfn>chat model</dfn> is LangChain's object wrapping one provider's API — it knows the wire format, the authentication, the retries, and how to translate your neutral messages both ways. You could import a provider class directly (<code>ChatAnthropic</code>, <code>ChatOpenAI</code>…), but modern LangChain code overwhelmingly uses the factory function <code>init_chat_model</code> instead:</p>
+
+      <div class="code-title">choose_a_model.py</div>
+      <pre><code class="language-python">from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, SystemMessage
+
+model = init_chat_model("anthropic:claude-sonnet-4-5", temperature=0)
+
+messages = [
+    SystemMessage("You are a concise accountant."),
+    HumanMessage("What is 20% GST on a 1,500 rupee invoice?"),
+]
+reply = model.invoke(messages)
+print(reply.content)</code></pre>
+
+      <p>The string <code>"anthropic:claude-sonnet-4-5"</code> is a <dfn>provider string</dfn> — the provider's name, a colon, then the model id. You can also pass the pieces separately as <code>init_chat_model("claude-sonnet-4-5", model_provider="anthropic")</code>, and for famous name prefixes (<code>gpt-…</code>, <code>claude-…</code>, <code>gemini-…</code>) the factory can infer the provider from the model id alone. Extra keyword arguments like <code>temperature</code> pass straight through to the model — the same sampling dial you tuned in <a href="ch034-sampling-params.html">the sampling chapter</a>.</p>
+      <p>And here is the promise from the story, kept. Moving this program to a different provider is a one-line diff:</p>
+
+      <div class="code-title">the entire migration</div>
+      <pre><code class="language-diff">-model = init_chat_model("anthropic:claude-sonnet-4-5", temperature=0)
++model = init_chat_model("openai:gpt-5.4-mini", temperature=0)</code></pre>
+
+      <p>The messages do not change. The <code>.invoke()</code> call does not change. The reply is still an <code>AIMessage</code> with the same attributes. Everything downstream of that one line is provider-neutral — which is exactly what makes "let's benchmark three models on our eval set" an afternoon's work instead of a quarter's. Two small practicalities: each provider needs its adapter package installed (<code>pip install langchain-anthropic</code>, <code>langchain-openai</code>, and so on — the factory tells you plainly if one is missing), and each needs its API key in the environment, the same hygiene you learned in <a href="ch019-logging-config-env.html">the config chapter</a>.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Because the swap is one string, teams often lift it into config: <code>init_chat_model(os.environ["APP_MODEL"])</code>. When you see a deployment change a model by editing an environment variable rather than code, this is the mechanism underneath.</p></div>
+
+      <h2>What .invoke() actually does</h2>
+      <p><code>.invoke(messages)</code> is the counter moment: parcel over, receipt back. It sends the conversation, waits for the whole reply, and returns one <code>AIMessage</code>. It is worth watching the journey once in slow motion, because this is the "translation both ways" that earns the framework its keep:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="You call invoke">
+          <h3>1. You hand over neutral messages</h3>
+          <div class="diagram">
+            <div class="d-box hot">Your code<small>model.invoke([SystemMessage, HumanMessage])</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Chat model<small>the adapter</small></div>
+            <div class="d-box dim">Provider API</div>
+          </div>
+          <p class="step-cap">Your list of message objects goes in. Nothing provider-specific has happened yet — this same list would be accepted by any chat model.</p>
+        </div>
+        <div class="step" data-title="Translate out">
+          <h3>2. The adapter writes the courier's form</h3>
+          <div class="diagram">
+            <div class="d-box dim">Your code</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Chat model<small>objects &#8594; this provider's exact wire format</small></div>
+            <div class="d-box dim">Provider API</div>
+          </div>
+          <p class="step-cap">Message objects become the provider's dialect of raw dicts. For one API the SystemMessage stays in the list as role "system"; for another it is hoisted into a top-level parameter. You never see this paperwork.</p>
+        </div>
+        <div class="step" data-title="HTTPS call">
+          <h3>3. The parcel ships</h3>
+          <div class="diagram">
+            <div class="d-box dim">Your code</div>
+            <div class="d-box">Chat model</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Provider API<small>HTTPS request, API key from env, retries</small></div>
+          </div>
+          <p class="step-cap">One network call — the same POST you made yourself in ch033, now with authentication, timeouts, and retry logic handled for you.</p>
+        </div>
+        <div class="step" data-title="Translate back">
+          <h3>4. Raw JSON returns and is translated back</h3>
+          <div class="diagram">
+            <div class="d-box dim">Your code</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Chat model<small>provider JSON &#8594; AIMessage</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box">Provider API</div>
+          </div>
+          <p class="step-cap">The provider's response — a different JSON shape per provider — is parsed into one standard object. Whatever carrier delivered it, you receive the same envelope.</p>
+        </div>
+        <div class="step" data-title="AIMessage in hand">
+          <h3>5. You hold an AIMessage</h3>
+          <div class="diagram">
+            <div class="d-box good">AIMessage<small>.content · .tool_calls · .usage_metadata</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Your code<small>reads the same attributes, always</small></div>
+          </div>
+          <p class="step-cap">Your code reads .content and .tool_calls without knowing or caring which provider answered. This symmetry — neutral in, neutral out — is the whole trick.</p>
+        </div>
+      </div>
+
+      <p>Two conveniences to recognise in other people's code: <code>.invoke("plain string")</code> works — the string is wrapped in a <code>HumanMessage</code> for you — and so does a list of raw <code>{"role": ..., "content": ...}</code> dicts, which LangChain converts to message objects on the way in. Handy for quick scripts; typed objects are clearer in real codebases.</p>
+      <p>The sibling method is <code>.stream(messages)</code>, which you will reach for any time a human is watching the answer appear. Instead of waiting for the full reply, it yields a series of <code>AIMessageChunk</code> objects as tokens arrive — the same incremental delivery you saw in <a href="ch040-streaming-responses.html">the streaming chapter</a>, dressed in message clothing:</p>
+
+      <div class="code-title">streaming the same conversation</div>
+      <pre><code class="language-python">for chunk in model.stream(messages):
+    print(chunk.content, end="", flush=True)</code></pre>
+
+      <h2>Anatomy of the reply: .content and .tool_calls</h2>
+      <p>The <code>AIMessage</code> you get back deserves a closer look, because two of its attributes run the entire agent world. <code>.content</code> is the text — what you print, what the user reads. <code>.tool_calls</code> is the structured version of the ACTION line you parsed by hand in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>: a list of dicts, each with a <code>name</code>, an <code>args</code> dict, and an <code>id</code>. When the model wants to talk, <code>.content</code> is full and <code>.tool_calls</code> is an empty list. When it wants to act, <code>.tool_calls</code> carries the requests — and your code, never the model, does the acting.</p>
+      <p>Notice one quiet gift: <code>args</code> arrives as an already-parsed Python dict. Raw provider APIs typically hand you the arguments as a JSON string you must decode yourself — LangChain has done the string surgery before you ever see it. And when your tool finishes, you package the result as a <code>ToolMessage</code> whose <code>tool_call_id</code> echoes the request's <code>id</code>, append it to the conversation, and call the model again. That is the ReAct loop, verbatim, in the new vocabulary.</p>
+      <p>Read this short exchange the way a reviewer would — click the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">one_agent_turn.py — the ch045 loop in LangChain vocabulary</div>
+        <div class="wl-line"><code>from langchain.chat_models import init_chat_model</code>
+          <div class="wl-note">The factory lives in the main <code>langchain</code> package. This is the modern import — if you see <code>ChatOpenAI</code> imported directly instead, it is the same machinery chosen by hand.</div></div>
+        <div class="wl-line"><code>from langchain_core.messages import HumanMessage, ToolMessage</code>
+          <div class="wl-note">Message classes live in <code>langchain_core</code> — the small foundation package from the ecosystem map chapter that every other LangChain package builds on.</div></div>
+        <div class="wl-line"><code>model = init_chat_model("anthropic:claude-sonnet-4-5")</code>
+          <div class="wl-note">Provider string: provider, colon, model id. Changing providers means changing this string and nothing else in the file.</div></div>
+        <div class="wl-line"><code>history = [HumanMessage("What is 20% GST on 1500 rupees?")]</code>
+          <div class="wl-note">The same history list as your hand-built agent — except each entry is a typed object instead of a labelled string. Still the model's entire memory, still re-sent every turn.</div></div>
+        <div class="wl-line"><code>reply = model.invoke(history)</code>
+          <div class="wl-note">One round trip: translate out, HTTPS call, translate back. In your ReAct loop this line was <code>fake_llm(history)</code> — the interface is identical: history in, one message out.</div></div>
+        <div class="wl-line"><code>call = reply.tool_calls[0]</code>
+          <div class="wl-note">Suppose the model asked to use a calculator (the next chapter shows how it knows one exists). No string parsing, no split("ACTION:") — the request arrives pre-parsed: <code>{"name": "calculate", "args": {"expression": "1500 * 0.20"}, "id": "call_1", ...}</code>.</div></div>
+        <div class="wl-line"><code>result = my_tools[call["name"]](**call["args"])</code>
+          <div class="wl-note">Your code executes the tool — the security boundary from ch045, unchanged. The model asked; your dict of functions decides what is even possible.</div></div>
+        <div class="wl-line"><code>history.append(reply)</code>
+          <div class="wl-note">The AIMessage itself goes into history, tool request and all, so the model can see what it asked for last turn.</div></div>
+        <div class="wl-line"><code>history.append(ToolMessage(str(result), tool_call_id=call["id"]))</code>
+          <div class="wl-note">The OBSERVATION step, formalised. The <code>tool_call_id</code> pairs this result with the exact request — essential when a model fires several tool calls in one turn.</div></div>
+        <div class="wl-line"><code>final = model.invoke(history)</code>
+          <div class="wl-note">Round two: the model sees its own request and the result, and now answers in prose. <code>final.content</code> holds the answer; <code>final.tool_calls</code> is empty — which is precisely how agent loops know they are done.</div></div>
+      </div>
+
+      <p>One more attribute earns its keep in production: <code>reply.usage_metadata</code> reports input and output token counts for the call — the raw numbers behind every cost dashboard you have ever squinted at, straight from <a href="ch041-tokens-and-cost.html">the tokens-and-cost chapter</a>.</p>
+
+      <h2>Run the whole layer yourself</h2>
+      <p>The best way to make this vocabulary stick is to build a working miniature of it — message classes, factory, adapter, and all — in about forty lines of plain Python. The "provider" below is a scripted stand-in (this page cannot call a paid API), but every other part is faithful: watch the neutral objects become wire-format dicts on the way out, and an <code>AIMessage</code> with <code>.tool_calls</code> come back. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A miniature of LangChain's message layer — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- The four envelopes -----------------------------------
+class SystemMessage:
+    role = "system"
+    def __init__(self, content): self.content = content
+
+class HumanMessage:
+    role = "user"
+    def __init__(self, content): self.content = content
+
+class AIMessage:
+    role = "assistant"
+    def __init__(self, content, tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls or []
+
+class ToolMessage:
+    role = "tool"
+    def __init__(self, content, tool_call_id):
+        self.content = content
+        self.tool_call_id = tool_call_id
+
+# ---- What .invoke() does before the HTTP call -------------
+def to_wire_format(messages):
+    return [{"role": m.role, "content": m.content} for m in messages]
+
+# ---- A scripted stand-in for a real provider API ----------
+def fake_provider_api(raw):
+    if raw[-1]["role"] != "tool":                 # first turn: ask for a tool
+        return {"content": "", "tool_calls": [
+            {"name": "calculate",
+             "args": {"expression": "1500 * 0.20"},
+             "id": "call_1"}]}
+    return {"content": f"GST at 20% on 1,500 rupees is "
+                       f"{raw[-1]['content']} rupees.", "tool_calls": []}
+
+class FakeChatModel:
+    def invoke(self, messages):
+        raw = to_wire_format(messages)            # translate OUT
+        print("  wire format sent:")
+        for d in raw:
+            print("   ", d)
+        reply = fake_provider_api(raw)            # the network call
+        return AIMessage(reply["content"], reply["tool_calls"])  # translate BACK
+
+def init_chat_model(model_string):
+    provider, _, name = model_string.partition(":")
+    print(f"[factory] provider={provider!r}  model={name!r}")
+    return FakeChatModel()   # real factory returns a provider-specific adapter
+
+# ---- Use it exactly like the real thing -------------------
+model = init_chat_model("anthropic:claude-sonnet-4-5")
+history = [SystemMessage("You are a concise accountant."),
+           HumanMessage("What is 20% GST on a 1500 rupee invoice?")]
+
+print("\nTURN 1 -- model.invoke(history)")
+reply = model.invoke(history)
+print("  reply.content    :", repr(reply.content))
+print("  reply.tool_calls :", reply.tool_calls)
+
+# our code runs the tool, then reports back with a ToolMessage
+call = reply.tool_calls[0]
+result = eval(call["args"]["expression"])         # 1500 * 0.20
+history.append(ToolMessage(str(result), tool_call_id=call["id"]))
+
+print("\nTURN 2 -- model.invoke(history)")
+final = model.invoke(history)
+print("  final.content    :", final.content)
+print("  final.tool_calls :", final.tool_calls)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now poke it. Change the provider string to <code>"openai:gpt-5.4-mini"</code> and confirm nothing else needs to change. Add a second <code>HumanMessage</code> and watch the wire format grow. Then delete the <code>ToolMessage</code> append and see turn 2 ask for the tool all over again — the "agent repeats the same tool call" bug from ch045, reproduced in miniature.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any modern LangChain or LangGraph repository and this vocabulary is everywhere. Grep for <code>init_chat_model</code> and you will usually find it once, near the top, often fed from an environment variable — that is the whole model configuration. Graph states carry a <code>messages</code> key holding exactly these objects, and debugging sessions are full of <code>for m in result["messages"]: m.pretty_print()</code>. In a merge request titled "switch to the cheaper model for triage", expect a one-line provider-string diff — now you know why that is safe. And when a stack trace complains that a <code>ToolMessage</code> is missing a <code>tool_call_id</code>, you can hear what it is really saying: a tool result came back without the receipt number that pairs it to its request.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. What does <code>HumanMessage("hello")</code> actually become when it reaches a provider's API?</p>
+          <div class="q-opts">
+            <button data-opt="a">A special binary format only LangChain understands</button>
+            <button data-opt="b">A Python object serialised with pickle</button>
+            <button data-opt="c">A raw dict like <code>{"role": "user", "content": "hello"}</code> — the same shape you hand-wrote in Act IV</button>
+          </div>
+          <p class="q-explain">Message classes are typed wrappers around the role/content dicts from ch033. The chat model translates them into the chosen provider's exact dialect just before the HTTP call.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Your app runs on one provider's model and you want to trial a competitor's. With <code>init_chat_model</code>, what has to change in your code?</p>
+          <div class="q-opts">
+            <button data-opt="a">Every message must be rebuilt in the new provider's format</button>
+            <button data-opt="b">The provider string in the <code>init_chat_model(...)</code> call — the messages and <code>.invoke()</code> calls stay identical</button>
+            <button data-opt="c">Nothing at all — LangChain picks the best provider automatically</button>
+          </div>
+          <p class="q-explain">The one-line swap is the point of the neutral layer — though operationally you still need the new provider's adapter package installed and its API key in the environment. Option c overshoots: you must still choose the model; LangChain never chooses for you.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. An <code>AIMessage</code> comes back with an empty <code>.content</code> and one entry in <code>.tool_calls</code>. What is the model telling you?</p>
+          <div class="q-opts">
+            <button data-opt="a">It wants your code to run a tool and report the result before it can answer</button>
+            <button data-opt="b">The API call failed and should be retried</button>
+            <button data-opt="c">The model has executed the tool and is returning its output</button>
+          </div>
+          <p class="q-explain">Tool calls are requests, never actions — the model cannot execute anything. Your code runs the tool, wraps the result in a <code>ToolMessage</code>, and invokes the model again, exactly like the ReAct loop from ch045.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Why does <code>ToolMessage</code> require a <code>tool_call_id</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">It is a security token proving the tool was authorised</button>
+            <button data-opt="b">Providers use it to bill tool usage separately</button>
+            <button data-opt="c">It pairs each result with the exact request it answers — vital when the model fires several tool calls in one turn</button>
+          </div>
+          <p class="q-explain">A model can request three tools at once; three results come back. The id — echoed from the tool call's own <code>id</code> field — is the receipt number that keeps the pairings straight.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. When would you reach for <code>.stream()</code> instead of <code>.invoke()</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">When you need the reply as one complete message for further processing</button>
+            <button data-opt="b">When a human is watching and you want text to appear as it is generated, chunk by chunk</button>
+            <button data-opt="c">When the conversation is too long for a single request</button>
+          </div>
+          <p class="q-explain"><code>.invoke()</code> waits and returns one full <code>AIMessage</code>; <code>.stream()</code> yields <code>AIMessageChunk</code> objects as tokens arrive — the difference between a letter and a live phone call. Both send the same conversation.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>LangChain's message classes are the raw role/content dicts of Act IV with name badges: <code>SystemMessage</code> is role "system", <code>HumanMessage</code> is "user", <code>AIMessage</code> is "assistant", <code>ToolMessage</code> is "tool" plus a pairing id.</li>
+          <li><code>init_chat_model("provider:model")</code> is a factory that returns a provider adapter; swapping providers is a one-line change because translation in both directions is the adapter's job, not yours.</li>
+          <li><code>.invoke(messages)</code> is one full round trip returning a single <code>AIMessage</code>; <code>.stream(messages)</code> yields <code>AIMessageChunk</code> fragments as the reply is generated.</li>
+          <li>On every <code>AIMessage</code>, <code>.content</code> carries the text and <code>.tool_calls</code> carries pre-parsed action requests — empty <code>tool_calls</code> is how loops know the model is done.</li>
+          <li>The model still executes nothing: tool calls are requests, your code acts, and the result rides back as a <code>ToolMessage</code> — the ReAct loop of ch045 in formal dress.</li>
+          <li>This vocabulary is half the battle for reading LangChain code; the next chapter adds the other half — how the model learns which tools exist at all.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

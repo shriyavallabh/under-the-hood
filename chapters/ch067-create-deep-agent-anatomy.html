@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>create_deep_agent, dissected — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch067">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VIII · Deep Agents</div>
+        <h1>create_deep_agent, dissected</h1>
+        <p class="ch-tagline">One function call hands your agent a plan board, a filing cabinet, a delegation line, and a note-condenser. This chapter opens the box and shows you every layer inside.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 68 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You have just hired a brilliant analyst, and she needs somewhere to work. Option one: rent her a bare room. She is smart, so she copes — but every plan lives in her head, every document is balanced in her arms, and the moment the pile grows taller than she can carry, things start slipping onto the floor. You watched exactly this happen to plain agents on long tasks in the last chapter.</p>
+        <p>Option two: you sign one contract with a serviced-office company. The very same room now arrives fitted out. A whiteboard on the wall for her plan. A filing cabinet so nothing has to be carried. A phone with specialists on speed dial for work she should not do herself. And a quiet assistant who condenses yesterday's meeting minutes into one tidy page before the paperwork drowns her.</p>
+        <p>Same analyst. Same brain. One signature. That signature is <strong>create_deep_agent</strong> — one call that takes the plain agent you already know and moves it into a fully serviced office before the first task even arrives.</p>
+      </section>
+
+      <h2>Four pillars, one signature</h2>
+      <p>In <a href="ch066-what-makes-an-agent-deep.html">the previous chapter</a> you saw what separates a deep agent from a plain tool-caller: it <em>plans</em> before acting, it <em>parks</em> bulky material in a filesystem instead of its own context, it <em>delegates</em> messy research to fresh-context subagents, and it <em>manages its own context</em> so an hours-long run does not drown in its own transcript. Four pillars. What that chapter deliberately skipped is how much wiring those pillars need — and how little of it you have to do yourself.</p>
+      <p>The answer is the <code>deepagents</code> library, and its answer is one function:</p>
+
+      <div class="code-title">one import, one call</div>
+      <pre><code class="language-python">from deepagents import create_deep_agent
+
+agent = create_deep_agent(
+    tools=[search_invoices],
+    system_prompt="You are a meticulous finance researcher.",
+)</code></pre>
+
+      <p>If that shape looks familiar, it should. It is almost exactly <a href="ch054-create-agent.html"><code>create_agent</code></a> — model, tools, system prompt — which gave you a native tool-calling version of the <a href="ch045-react-loop-by-hand.html">fifty-line ReAct loop you built by hand</a>. <code>create_deep_agent</code> starts from that same core and then keeps going: it wraps the loop in a stack of <a href="ch055-middleware.html">middleware</a> — remember, middleware is code that hooks into the agent loop at defined points, able to add tools, extend the prompt, and intercept messages on the way in and out. Each pillar of deepness is one middleware layer, pre-wired and pre-tested, installed for you by this single call. That makes <code>create_deep_agent</code> a <dfn>factory function</dfn> — a function whose whole job is to assemble and return a configured object, so you never touch the assembly line yourself.</p>
+      <p>Here is the fuller signature with the parameters you will actually meet in real code. Every one of them is optional except the ones you care about that day:</p>
+
+      <div class="code-title">the knobs you will meet in the wild</div>
+      <pre><code class="language-python">agent = create_deep_agent(
+    model="openai:gpt-5.5",   # a model string or model object
+    tools=[search_invoices],  # your tools, same as create_agent
+    system_prompt="...",      # your standing instructions
+    subagents=[...],          # specialist workers        (ch70)
+    middleware=[...],         # your own extra layers     (ch55)
+    backend=...,              # where "files" really live (ch69)
+    checkpointer=...,         # pause, resume, threads    (ch61)
+    interrupt_on={...},       # approval gates per tool   (ch62)
+)</code></pre>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The <code>model</code> accepts the same shorthand strings as <code>init_chat_model</code> — <code>"openai:gpt-5.5"</code>, <code>"anthropic:claude-sonnet-4-6"</code>, a local model — or a ready-made model object. Leave it out and the library falls back to its own default; production code almost always passes it explicitly, so check the current docs for what your version defaults to.</p></div>
+
+      <h2>What comes back: a graph you already know</h2>
+      <p>Here is the part that makes this chapter short on new machinery: <code>create_deep_agent</code> does not return some exotic <code>DeepAgent</code> object with its own rules. It returns a <dfn>compiled LangGraph graph</dfn> — the finished, runnable object of the same kind you get when you call <code>.compile()</code> on a <a href="ch058-stategraph-anatomy.html">StateGraph you built yourself</a>. The factory assembles nodes, edges, and middleware on your behalf, compiles the result, and hands it over.</p>
+      <p>That one fact carries the whole of Act VII with it, unchanged:</p>
+      <ul>
+        <li>You run it with <code>.invoke()</code> or watch it live with <code>.stream()</code>, exactly as in <a href="ch060-compile-invoke-stream.html">the compile-and-invoke chapter</a>.</li>
+        <li>Give it a <a href="ch061-checkpointing.html">checkpointer</a> and a <code>thread_id</code> and it can pause, resume, and survive restarts.</li>
+        <li><a href="ch062-human-in-the-loop.html">Human-in-the-loop</a> works too: pass <code>interrupt_on</code> a mapping like <code>{"write_file": True}</code> and the graph pauses for approval before that tool runs — a checkpointer is required for this, since pausing means saving state.</li>
+      </ul>
+      <p>Invoking it looks like invoking any other graph, because it is any other graph:</p>
+
+      <div class="code-title">invoke it like any graph</div>
+      <pre><code class="language-python">result = agent.invoke(
+    {"messages": [{"role": "user",
+                   "content": "Research our March invoicing."}]},
+    config={"configurable": {"thread_id": "run-42"}},
+)</code></pre>
+
+      <p>The state that comes back, though, is richer than a plain agent's. Alongside <code>result["messages"]</code> you will find a <code>"todos"</code> key holding the plan the agent wrote for itself, and — with the default backend — a <code>"files"</code> key holding everything it filed away during the run. Those two keys are the visible fingerprints of the middleware stack, which it is now time to open up.</p>
+
+      <h2>The stack, layer by layer</h2>
+      <p>Picture the assembly line inside the factory. It starts with the bare chassis — the loop — and each station bolts on one layer. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The chassis">
+          <h3>1. The chassis: a plain tool-calling loop</h3>
+          <div class="diagram">
+            <div class="d-box">Model</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">ReAct core<small>call model, run tools, repeat</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box">Your tools<small>search_invoices</small></div>
+          </div>
+          <p class="step-cap">Underneath everything sits the loop from ch45, in its ch54 form: send the transcript to the model, execute any tool calls, feed results back, repeat until the model stops asking. Nothing deep yet — this is the bare room.</p>
+        </div>
+        <div class="step" data-title="Planning layer">
+          <h3>2. TodoListMiddleware: the whiteboard</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">TodoListMiddleware<small>installs write_todos + planning rules</small></div>
+              <div class="d-box dim">ReAct core<small>model + your tools</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The first layer bolts a planning tool called <code>write_todos</code> onto the tool belt and appends instructions to the system prompt telling the model to plan multi-step work before diving in. The plan it writes lands in graph state under <code>"todos"</code> — visible to you, revisable by the agent. The next chapter lives entirely inside this layer.</p>
+        </div>
+        <div class="step" data-title="Filesystem layer">
+          <h3>3. FilesystemMiddleware: the filing cabinet</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">FilesystemMiddleware<small>ls, read_file, write_file, edit_file</small></div>
+              <div class="d-box">TodoListMiddleware</div>
+              <div class="d-box dim">ReAct core</div>
+            </div>
+          </div>
+          <p class="step-cap">Four file tools arrive: <code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code> (recent versions add <code>glob</code> and <code>grep</code> for finding things). By default they operate on a <em>virtual</em> filesystem living in graph state — paths like <code>/notes/march.txt</code> that never touch your disk. Swap the <code>backend</code> to reach a real disk or a store. Chapter 69 dissects this layer.</p>
+        </div>
+        <div class="step" data-title="Subagent layer">
+          <h3>4. SubAgentMiddleware: the speed dial</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">SubAgentMiddleware<small>installs the task tool</small></div>
+              <div class="d-box">FilesystemMiddleware</div>
+              <div class="d-box">TodoListMiddleware</div>
+              <div class="d-box dim">ReAct core</div>
+            </div>
+          </div>
+          <p class="step-cap">One tool called <code>task</code> lets the main agent hand a subtask to a fresh-context worker and receive only the final report back — a hundred noisy searches happen in the worker's context, one clean paragraph returns. Specialists you declare via <code>subagents=</code> get their own name, description, and system prompt. Chapter 70 goes deep here.</p>
+        </div>
+        <div class="step" data-title="Summarization layer">
+          <h3>5. SummarizationMiddleware: the note-condenser</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">SummarizationMiddleware<small>compacts old history when context swells</small></div>
+              <div class="d-box">SubAgentMiddleware</div>
+              <div class="d-box">FilesystemMiddleware</div>
+              <div class="d-box">TodoListMiddleware</div>
+              <div class="d-box dim">ReAct core</div>
+            </div>
+          </div>
+          <p class="step-cap">The quiet assistant. It watches the growing transcript, and when it gets too long it condenses the older turns into a summary while keeping recent messages intact — so an hours-long run never hits the context ceiling. This is the <a href="ch047-memory-and-context.html">context-management problem</a> handled as a standing service.</p>
+        </div>
+        <div class="step" data-title="Quiet layers + compile">
+          <h3>6. The quiet layers, then compile</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">the whole stack<small>plus SkillsMiddleware + PatchToolCallsMiddleware</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">compiled graph<small>agent.invoke(...) just works</small></div>
+          </div>
+          <p class="step-cap">Two quieter layers ride along: <code>SkillsMiddleware</code> exposes reusable skill instructions to the agent, and <code>PatchToolCallsMiddleware</code> repairs tool calls left dangling by an interrupted run. Any <code>middleware=[...]</code> you pass is slotted in near the tail. Then the whole assembly is compiled into a single LangGraph graph — the return value. One call in, one serviced office out.</p>
+        </div>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>A lovely detail hides in the subagent layer: workers spawned through <code>task</code> get almost the same serviced office themselves — planning, files, summarization — but <em>no</em> <code>SubAgentMiddleware</code> of their own. Subagents cannot spawn subagents by default, so a confused agent cannot recurse into an org chart of infinite interns.</p></div>
+
+      <h2>Count what one call installed</h2>
+      <p>You passed in one tool. Look at what the model actually sees on its menu now:</p>
+
+      <div class="viz-tiles">
+        <div class="tile"><div class="tile-label">Tools you wrote</div>
+          <div class="tile-value">1</div><div class="tile-delta">search_invoices</div></div>
+        <div class="tile"><div class="tile-label">Tools the agent carries</div>
+          <div class="tile-value">7</div><div class="tile-delta">yours + six built-ins</div></div>
+        <div class="tile"><div class="tile-label">Wiring code you typed</div>
+          <div class="tile-value">0 lines</div><div class="tile-delta">the factory did it</div></div>
+      </div>
+
+      <div class="tbl"><table>
+        <tr><th>Tool</th><th>Installed by</th><th>What it is for</th></tr>
+        <tr><td><code>search_invoices</code></td><td>You</td><td>Your domain work — the only part the library cannot guess</td></tr>
+        <tr><td><code>write_todos</code></td><td>TodoListMiddleware</td><td>Write and revise the plan for multi-step work</td></tr>
+        <tr><td><code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code></td><td>FilesystemMiddleware</td><td>Park bulky material in files instead of the transcript</td></tr>
+        <tr><td><code>task</code></td><td>SubAgentMiddleware</td><td>Delegate a subtask to a fresh-context worker, get one report back</td></tr>
+      </table></div>
+
+      <p>And one more thing changed that you cannot see in the tool list: your <code>system_prompt</code> is no longer the whole system prompt. Each middleware layer appends its own usage instructions — how to plan with <code>write_todos</code>, when to reach for files, how to phrase a <code>task</code> delegation. If you ever print the final prompt of a deep agent and wonder where all that extra text came from, now you know: the office manual came with the office.</p>
+
+      <h2>Build the miniature and run it</h2>
+      <p>The real library wires middleware classes into a LangGraph graph. The toy below wires plain functions into the fifty-line loop from ch45 — same architecture, small enough to hold in one hand. As always in the browser, the model is a scripted <code>fake_llm</code>; everything else is honest. Press <strong>Run</strong> and watch one call assemble the office, then watch the agent plan, delegate, and file.</p>
+
+      <div class="pyrun" data-title="A miniature create_deep_agent — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- The factory: each layer adds tools + prompt rules ----
+def base_agent(tools, system_prompt):
+    return {"tools": dict(tools), "prompt": [system_prompt],
+            "todos": [], "files": {}}
+
+def todo_layer(agent):
+    def write_todos(arg):
+        agent["todos"] = [t.strip() for t in arg.split(";")]
+        return f"plan recorded: {len(agent['todos'])} todos"
+    agent["tools"]["write_todos"] = write_todos
+    agent["prompt"].append("Plan multi-step work with write_todos.")
+    return agent
+
+def filesystem_layer(agent):      # real one also adds edit_file
+    files = agent["files"]
+    def write_file(arg):
+        path, _, body = arg.partition("::")
+        files[path.strip()] = body.strip()
+        return f"wrote {path.strip()}"
+    def read_file(path):
+        return files.get(path.strip(), "ERROR: no such file")
+    def ls(_arg):
+        return ", ".join(files) or "(no files yet)"
+    agent["tools"].update(
+        {"ls": ls, "read_file": read_file, "write_file": write_file})
+    agent["prompt"].append("Park bulky results in files.")
+    return agent
+
+def subagent_layer(agent):
+    def task(subtask):
+        # Fresh history, fresh context -- the whole point.
+        sub_history = [f"SUBTASK: {subtask}",
+                       "(worker grinds through 3 invoices...)"]
+        return "sub-agent report: 3 invoices, total 40000 rupees"
+    agent["tools"]["task"] = task
+    agent["prompt"].append("Delegate bulky research with task(...).")
+    return agent
+
+def create_deep_agent(tools, system_prompt):
+    agent = base_agent(tools, system_prompt)
+    for layer in (todo_layer, filesystem_layer, subagent_layer):
+        agent = layer(agent)
+    return agent
+
+# ---- One call assembles the office ------------------------
+def check_gst(month):             # the one tool YOU wrote
+    return "GST filed for " + month.strip()
+
+agent = create_deep_agent(
+    tools={"check_gst": check_gst},
+    system_prompt="You are a careful finance assistant.")
+
+print(f"You supplied 1 tool. The agent carries {len(agent['tools'])}:")
+for name in agent["tools"]:
+    print("  -", name)
+
+# ---- The 'model': scripted, as ever -----------------------
+SCRIPT = [
+    "ACTION: write_todos(total March invoices; save a note; answer)",
+    "ACTION: task(add up the March invoices)",
+    "ACTION: write_file(/notes/march.txt :: total 40000, 3 invoices)",
+    "FINAL ANSWER: March invoicing was 40,000 rupees (3 invoices).",
+]
+replies = iter(SCRIPT)
+def fake_llm(history):            # a real agent calls an LLM here
+    return next(replies)
+
+# ---- The same ch45 loop, unchanged ------------------------
+def run(task_text, max_turns=6):
+    history = [f"TASK: {task_text}"]
+    for turn in range(1, max_turns + 1):
+        reply = fake_llm(history)
+        history.append(reply)
+        print(f"--- turn {turn} ---")
+        print(reply)
+        if "FINAL ANSWER:" in reply:
+            return reply.split("FINAL ANSWER:")[1].strip()
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            name = call.split("(")[0].strip()
+            arg = call[call.index("(") + 1 : call.rindex(")")]
+            obs = f"OBSERVATION: {agent['tools'][name](arg)}"
+            history.append(obs)
+            print(obs)
+    return "hit max turns"
+
+print()
+answer = run("What did we invoice in March?")
+print()
+print("ANSWER:", answer)
+print("state 'todos':", agent["todos"])
+print("state 'files':", agent["files"])
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now poke it. Comment out <code>subagent_layer</code> in the factory and watch turn 2 crash — the model asked for a tool that no layer installed. Add a fourth SCRIPT action that calls <code>read_file(/notes/march.txt)</code> and see the filed note come back. Every experiment here maps one-to-one onto behaviour you will see in real deep-agent traces.</p></div>
+
+      <h2>Reading the real call, line by line</h2>
+      <p>Back to the real library. Here is the complete production shape — click through the annotations until every line feels boring. Boring means fluent.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">deep_agent.py — the whole thing</div>
+        <div class="wl-line"><code>from deepagents import create_deep_agent</code>
+          <div class="wl-note">The entire library surface most users touch. It sits on top of LangChain's <code>create_agent</code> and LangGraph — you are importing a factory, not a framework.</div></div>
+        <div class="wl-line"><code>def search_invoices(month: str) -&gt; str:</code>
+          <div class="wl-note">A plain function with type hints — the same tool shape as ch53. The library turns the signature and docstring into the schema the model sees.</div></div>
+        <div class="wl-line"><code>    """Return every invoice issued in the given month."""</code>
+          <div class="wl-note">The docstring is the tool's advertisement. The model chooses tools by reading these, so write them for the model, not for your colleagues.</div></div>
+        <div class="wl-line"><code>    ...</code></div>
+        <div class="wl-line"><code>agent = create_deep_agent(</code>
+          <div class="wl-note">The one call this chapter is about. Everything the stepper showed — planning, files, subagents, summarization, the quiet layers — is assembled between this bracket and the closing one.</div></div>
+        <div class="wl-line"><code>    tools=[search_invoices],</code>
+          <div class="wl-note">Your tools ride alongside the built-ins; the model sees one flat menu of seven. You add domain skills, the library adds office equipment.</div></div>
+        <div class="wl-line"><code>    system_prompt="Plan first, file notes, answer last.",</code>
+          <div class="wl-note">Your instructions come first, and each middleware layer appends its own tool manual after them. What the model receives is your prompt plus the office manual.</div></div>
+        <div class="wl-line"><code>)</code></div>
+        <div class="wl-line"><code>result = agent.invoke(</code>
+          <div class="wl-note">Because the return value is a compiled LangGraph graph, this is the same <code>.invoke()</code> from ch60. Swap in <code>.stream()</code> to watch turns arrive live.</div></div>
+        <div class="wl-line"><code>    {"messages": [{"role": "user",</code>
+          <div class="wl-note">Input is a state update, and <code>messages</code> is the key the agent core reads. You could also seed <code>"files"</code> here to hand the agent documents before it starts — virtual paths begin with <code>/</code>.</div></div>
+        <div class="wl-line"><code>                   "content": "Research our March invoicing."}]}</code></div>
+        <div class="wl-line"><code>)</code></div>
+        <div class="wl-line"><code>print(result["messages"][-1].content)</code>
+          <div class="wl-note">The last message is the final answer, exactly as with any LangGraph agent.</div></div>
+        <div class="wl-line"><code>print(result["todos"])</code>
+          <div class="wl-note">The plan the agent wrote with <code>write_todos</code>, straight out of graph state — each item with its status. Dashboards that show an agent's live checklist read this key.</div></div>
+        <div class="wl-line"><code>print(result["files"])</code>
+          <div class="wl-note">Everything the agent filed during the run. With the default state backend these are virtual and vanish with the run unless you checkpoint; other backends persist them. Chapter 69 covers the choices.</div></div>
+      </div>
+
+      <h2>The words that will come up</h2>
+      <p>Six terms carry every conversation about this stack. Flip until fluent:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">deep agent</span><span class="flip-back">A tool-calling agent fitted with planning, a filesystem, subagents, and context management — equipment for tasks that take hours, not seconds.</span></button>
+        <button class="flip" type="button"><span class="flip-front">middleware stack</span><span class="flip-back">The ordered layers wrapped around the agent loop. Each layer can add tools, extend the prompt, and intercept messages. create_deep_agent installs the standard set.</span></button>
+        <button class="flip" type="button"><span class="flip-front">write_todos</span><span class="flip-back">The built-in planning tool. The agent calls it to write and revise its own checklist, which lives in graph state under "todos".</span></button>
+        <button class="flip" type="button"><span class="flip-front">virtual filesystem</span><span class="flip-back">The default home of ls / read_file / write_file / edit_file — files stored in graph state, not on disk. Swap the backend to change where they really live.</span></button>
+        <button class="flip" type="button"><span class="flip-front">task tool</span><span class="flip-back">The delegation tool. The main agent describes a subtask; a fresh-context worker does the messy part and returns one clean report.</span></button>
+        <button class="flip" type="button"><span class="flip-front">compiled graph</span><span class="flip-back">What create_deep_agent returns — a compiled LangGraph graph, identical in kind to any you built by hand. Invoke, stream, checkpoint as usual.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open the trace of almost any deepagents-based run and the fingerprints are unmistakable: the first tool call is nearly always <code>write_todos</code>, long research bursts appear as single <code>task</code> calls whose inner storm you can expand, and file paths like <code>/notes/findings.md</code> flow through <code>write_file</code>. In code review you will meet <code>create_deep_agent(</code> with a <code>subagents=[...]</code> list of dicts — name, description, system prompt — and someone asking "should this backend persist?". And when you watch a production coding agent print a checklist and then spawn a subtask, you are watching this exact architecture wearing a different badge; chapter <a href="ch072-deep-agents-vs-claude-code.html">72</a> puts the two side by side.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What kind of object does <code>create_deep_agent</code> return?</p>
+          <div class="q-opts">
+            <button data-opt="a">A special DeepAgent class with its own run() method and rules</button>
+            <button data-opt="b">A compiled LangGraph graph — the same kind your own StateGraph().compile() produces</button>
+            <button data-opt="c">A plain Python function you call with a string</button>
+          </div>
+          <p class="q-explain">It is a compiled graph. That is why nothing from Act VII changes: invoke, stream, checkpointers, thread ids, and interrupts all work exactly as you learned them.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. You pass <code>tools=[search_invoices]</code> — one tool. What menu does the model actually see?</p>
+          <div class="q-opts">
+            <button data-opt="a">Exactly one tool — what you pass is what it gets</button>
+            <button data-opt="b">Two — yours plus a stop tool</button>
+            <button data-opt="c">Around seven — yours plus write_todos, the file tools, and task</button>
+          </div>
+          <p class="q-explain">The middleware layers each bolt their tools onto the belt: planning adds write_todos, the filesystem layer adds ls / read_file / write_file / edit_file, and the subagent layer adds task. Your tool rides alongside the built-ins on one flat menu.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. With the default backend, where does <code>write_file("/notes/plan.txt", ...)</code> actually put the file?</p>
+          <div class="q-opts">
+            <button data-opt="a">Into the graph's state — a virtual filesystem in memory, not on your disk</button>
+            <button data-opt="b">Into the current working directory of your machine</button>
+            <button data-opt="c">Into a cloud bucket the library manages for you</button>
+          </div>
+          <p class="q-explain">The default is the state backend: files are entries in graph state, gone when the run ends unless checkpointed. Swap in a filesystem or store backend when you want real persistence — that trade-off is the whole of chapter 69.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. An agent has been running for an hour and its transcript is enormous. Which layer stops it drowning?</p>
+          <div class="q-opts">
+            <button data-opt="a">TodoListMiddleware, by deleting completed todos</button>
+            <button data-opt="b">SummarizationMiddleware, by compacting older messages into a summary when context swells</button>
+            <button data-opt="c">The task tool, by restarting the agent with an empty history</button>
+          </div>
+          <p class="q-explain">Summarization is the standing context-management service: it watches transcript size and condenses the older turns while keeping recent ones intact, so long runs never slam into the context ceiling.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">5. You print the deep agent's final system prompt and it is far longer than the <code>system_prompt</code> you passed. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">Each middleware layer appends usage instructions for the tools it installs</button>
+            <button data-opt="b">The model added text to its own prompt during the run</button>
+            <button data-opt="c">LangGraph pads every prompt to a fixed length</button>
+          </div>
+          <p class="q-explain">Your prompt is the opening chapter, not the whole book. Planning, filesystem, and subagent layers each append their tool manuals — how to plan, when to file, how to delegate — so the model knows how to use the office it was given.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li><code>create_deep_agent(tools=..., system_prompt=...)</code> is a factory: one call assembles the four pillars of deepness around a standard tool-calling loop and returns the result.</li>
+          <li>What it returns is a compiled LangGraph graph — invoke it, stream it, checkpoint it, interrupt it exactly like any graph you built by hand in Act VII.</li>
+          <li>The assembly is a middleware stack, in order: planning (<code>write_todos</code>), skills, filesystem (<code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code>), subagents (<code>task</code>), summarization, and tool-call repair.</li>
+          <li>You supplied one tool; the model sees about seven — and your system prompt gains each layer's usage manual automatically.</li>
+          <li>By default files and todos live in graph state: virtual, inspectable in the result, gone unless checkpointed or given a persistent backend.</li>
+          <li>Subagents get the same equipment minus the <code>task</code> tool — delegation goes one level down, never infinitely.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

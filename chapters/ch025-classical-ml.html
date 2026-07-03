@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The classical toolkit: sklearn and friends — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch025">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act III · The Data Scientist's World</div>
+        <h1>The classical toolkit: sklearn and friends</h1>
+        <p class="ch-tagline">fit(), predict(), features, training — by the end of this chapter, the product-prediction models a bank runs every day will read like three plain verbs, because that is all they are.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 25 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Meera has run the same bank branch for twenty-two years. She can glance at a customer file and tell you, with unsettling accuracy, who is about to quietly move their money elsewhere — the salary credit that stopped, the balance drifting downwards, the two complaint calls nobody returned. No one taught her a formula. She read thousands of files, watched what each customer eventually did, and the pattern settled into her.</p>
+        <p>This month she retires, and she leaves her replacement one instruction: <em>"Sit with the archive. Ten thousand closed files, each stamped with what the customer finally did — stayed or left. Study the columns. Notice what the leavers had in common. When you are done, I will hand you today's files, and you will tell me who to call."</em></p>
+        <p>That archive session is <code>fit()</code>. The "who do we call today" is <code>predict()</code>. And the standard kit every data scientist uses to run this apprenticeship is a free Python library called <strong>scikit-learn</strong>.</p>
+      </section>
+
+      <h2>A two-minute rewind, then the toolbox</h2>
+      <p>Last chapter — <a href="ch024-what-is-a-model.html">what a model actually is</a> — landed one idea: a model is just a function whose internal numbers were not typed by a programmer but <em>learned from data</em>. Training is the process of nudging those numbers until the function's outputs match historical reality. And the chapter before that, <a href="ch023-pandas-numpy-notebooks.html">DataFrames and notebooks</a>, gave you pandas — the tool that gets messy history into a clean table. This chapter is where those two ideas meet in practice.</p>
+      <p><dfn>scikit-learn</dfn> — imported as <code>sklearn</code>, and pronounced "sy-kit learn" — is the free, open-source Python library that has been the standard toolkit for <dfn>classical machine learning</dfn> for well over a decade: everything that came before deep learning and LLMs. Credit scoring, churn prediction, fraud flags, "customers like you also bought" — when a bank says it "runs models in production", the overwhelming majority are this kind: modest, fast, trained on tables of customer data, and built with sklearn or one of its close friends.</p>
+      <p>Here is the part that makes this chapter a treat rather than a slog: sklearn's designers made <em>every single model speak the same three verbs</em>. Learn the grammar once and you can read essentially any classical ML script on Earth.</p>
+
+      <h2>Three verbs run the whole show</h2>
+      <p>Every model in sklearn is an object — an instance of a class, exactly the machinery you met in <a href="ch013-classes-and-oop.html">the classes chapter</a>. sklearn calls these objects <dfn>estimators</dfn>: things that can estimate an answer once they have seen data. Whatever the estimator is — a humble linear model or a forest of five hundred decision trees — it exposes the same methods:</p>
+
+      <div class="code-title">the entire sklearn grammar</div>
+      <pre><code class="language-python">model = LogisticRegression()          # 1. choose an estimator
+model.fit(X_train, y_train)           # 2. learn from labelled history
+answers = model.predict(X_new)        # 3. apply it to new rows
+scores  = model.predict_proba(X_new)  #    ...or ask for confidence instead</code></pre>
+
+      <p>Two names in there deserve a proper introduction, because your data-science colleagues use them constantly. <dfn>X</dfn> (always capital) is the table of <dfn>features</dfn> — the input columns the model is allowed to look at: months active, balance trend, number of complaints, products held. One row per customer. <dfn>y</dfn> (always lowercase) is the <dfn>target</dfn>, also called the label — the single column of known outcomes: did this customer churn, yes or no? One value per row, lined up with X. Meera's archive files are X; the "stayed or left" stamp on each file is y.</p>
+      <p>The third verb belongs to a different kind of object. A <dfn>transformer</dfn> is an estimator that reshapes data rather than answering questions — rescaling columns so "annual income in lakhs" does not drown out "number of complaints", or turning a city name into numbers a model can use. Transformers use <code>fit()</code> to learn <em>how</em> to reshape (say, each column's average and spread), and <code>transform()</code> to apply it:</p>
+
+      <div class="code-title">the transformer half of the grammar</div>
+      <pre><code class="language-python">scaler = StandardScaler()
+scaler.fit(X_train)                   # learn each column's mean and spread
+X_scaled = scaler.transform(X_train)  # apply the rescaling to the table</code></pre>
+
+      <p>That is genuinely the whole grammar. Models: <code>fit</code> then <code>predict</code>. Preprocessors: <code>fit</code> then <code>transform</code>. Every sklearn script you will ever skim is these verbs in a trench coat. Flip the vocabulary until it feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">feature</span><span class="flip-back">An input column the model may look at — months active, balance trend, complaints. The columns of X. Choosing good ones is half the craft.</span></button>
+        <button class="flip" type="button"><span class="flip-front">target (y)</span><span class="flip-back">The known outcome for each historical row — churned or not, bought or not. The answer sheet the model learns from.</span></button>
+        <button class="flip" type="button"><span class="flip-front">estimator</span><span class="flip-back">sklearn's word for any model object. Whatever the algorithm inside, it answers to fit() and predict().</span></button>
+        <button class="flip" type="button"><span class="flip-front">fit()</span><span class="flip-back">The training moment: the estimator studies X and y and adjusts its internal numbers until its outputs match history. Runs once, then you keep the result.</span></button>
+        <button class="flip" type="button"><span class="flip-front">predict()</span><span class="flip-back">Apply the fitted model to rows it has never seen. Cheap and instant — this is the part that runs every day in production.</span></button>
+        <button class="flip" type="button"><span class="flip-front">transform()</span><span class="flip-back">The preprocessor verb: reshape a table — rescale, encode, fill gaps — using whatever was learned during fit().</span></button>
+        <button class="flip" type="button"><span class="flip-front">train_test_split</span><span class="flip-back">Deal the historical rows into a training pile and a locked-away exam pile, so the model can be graded on questions it never studied.</span></button>
+        <button class="flip" type="button"><span class="flip-front">overfitting</span><span class="flip-back">When a model memorises its training rows instead of learning the pattern — brilliant on the past, useless on tomorrow. The disease train_test_split exists to detect.</span></button>
+      </div>
+
+      <h2>The honest exam: train_test_split</h2>
+      <p>Suppose you fit a churn model on all ten thousand archive files and it gets 99% of them right. Impressive? Not yet — because you graded the student on the very textbook it studied. A model with enough internal knobs can simply <em>memorise</em> its training rows, the way a weak student memorises last year's question paper. It will score perfectly on the past and fall apart on the first customer it has never seen. That failure mode is <dfn>overfitting</dfn>, and it is the single most common way a promising model turns out to be worthless.</p>
+      <p>The defence is almost embarrassingly simple: before training, deal the rows into two piles. Train on one; lock the other away; grade the model only on the locked pile. sklearn ships this as <code>train_test_split</code>, and you will see this exact line in nearly every training script ever written:</p>
+
+      <div class="code-title">the most copied line in data science</div>
+      <pre><code class="language-python">from sklearn.model_selection import train_test_split
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42)</code></pre>
+
+      <p><code>test_size=0.2</code> reserves 20% of the rows as the exam. <code>random_state=42</code> pins the shuffle so the split comes out identical every run — the same reproducibility instinct you will meet all over data science (the number 42 is just a nerd tradition; any fixed number works). When your colleagues talk about "the held-out set", "the test score", or "how it does out of sample", this split is what they mean: the model's grade on questions it never studied is the only grade anyone trusts.</p>
+
+      <h2>A churn model, end to end</h2>
+      <p>Now watch a real workflow — the one behind roughly every "which customers should we call" model a retail bank runs. The same shape serves <dfn>churn prediction</dfn> (who is about to leave) and <dfn>product propensity</dfn> (who is likely to say yes to an offer); only the target column changes. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="History arrives">
+          <h3>1. Pull the labelled history</h3>
+          <div class="diagram">
+            <div class="d-box hot">customers.csv<small>50,000 rows of history</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">X<small>feature columns</small></div>
+            <div class="d-box">y<small>churned? 1 or 0</small></div>
+          </div>
+          <p class="step-cap">pandas loads the archive: one row per customer, columns like months active, balance trend, complaints. The target y is what each customer actually did — knowable only because time has passed. This is Meera's stamped archive.</p>
+        </div>
+        <div class="step" data-title="Split">
+          <h3>2. Deal out the exam pile</h3>
+          <div class="diagram">
+            <div class="d-box hot">Training set<small>40,000 rows — study these</small></div>
+            <div class="d-box dim">Test set<small>10,000 rows — locked away</small></div>
+          </div>
+          <p class="step-cap">train_test_split holds back 20%. The model will never see these rows during training; they exist purely to catch memorisation.</p>
+        </div>
+        <div class="step" data-title="fit()">
+          <h3>3. Train: one call to fit()</h3>
+          <div class="diagram">
+            <div class="d-box">X_train, y_train</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Estimator<small>adjusts its internal numbers</small></div>
+          </div>
+          <p class="step-cap">The learning moment. For tabular data this usually takes seconds to minutes, not the GPU-weeks of LLM lore. Afterwards the fitted object holds everything it learned.</p>
+        </div>
+        <div class="step" data-title="The exam">
+          <h3>4. Grade it on the unseen rows</h3>
+          <div class="diagram">
+            <div class="d-box">Fitted model</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">predict(X_test)<small>vs the real y_test</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">score<small>say, 0.84</small></div>
+          </div>
+          <p class="step-cap">Predictions on the locked-away rows are compared with what those customers really did. If this grade is good, the model earned it honestly. (Accuracy is the bluntest scorecard — sharper ones arrive in two chapters.)</p>
+        </div>
+        <div class="step" data-title="The payoff">
+          <h3>5. Score today's customers</h3>
+          <div class="diagram">
+            <div class="d-box">Today's customers<small>no labels yet</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">predict_proba()<small>churn risk per customer</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Ranked call list<small>retention team calls the top 500</small></div>
+          </div>
+          <p class="step-cap">The business moment. predict_proba gives a probability instead of a bare yes/no, so customers can be ranked by risk. A human team works the top of the list. This step reruns every night; fit() does not.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Notice the asymmetry: training happens rarely (weekly, monthly, or when the world shifts), while prediction runs constantly. When a colleague says "the model needs retraining", they mean the world has drifted away from the history it studied — new products, new customer behaviour — and it is time to run <code>fit()</code> again on fresher rows. The code does not change; the data does.</p></div>
+
+      <h2>Build fit() and predict() yourself, right now</h2>
+      <p>Honesty first: scikit-learn itself is a large compiled library and cannot load in this page's browser sandbox. But that is no loss — the <em>grammar</em> is the lesson, and the grammar fits in forty lines of pure Python. Below is a miniature estimator with a real <code>fit()</code> and a real <code>predict()</code>, trained on two hundred toy customers. Its "learning" is charmingly simple: it computes the profile of the average churner and the average stayer, then classifies each new customer by which average they sit closer to. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="a miniature sklearn — fit() and predict() in pure Python">
+<textarea class="py-src" spellcheck="false">
+# scikit-learn cannot load in this browser sandbox, so we build a
+# tiny estimator that speaks the SAME grammar: fit() then predict().
+
+import random
+random.seed(7)
+
+# ---- 200 past customers: [months_inactive, complaints] ------
+def make_customer():
+    churned = random.random() &lt; 0.5
+    if churned:   # churners drifted away: quiet and unhappy
+        return [random.uniform(4, 9), random.uniform(2, 6)], 1
+    return [random.uniform(0, 4), random.uniform(0, 2)], 0
+
+history = [make_customer() for _ in range(200)]
+X = [features for features, label in history]
+y = [label for features, label in history]
+
+# ---- a tiny train_test_split --------------------------------
+def train_test_split(X, y, test_size=0.25):
+    cut = int(len(X) * (1 - test_size))
+    return X[:cut], X[cut:], y[:cut], y[cut:]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y)
+
+# ---- a miniature estimator, sklearn-style -------------------
+class NearestCentroidClassifier:
+    def fit(self, X, y):
+        # "learning" = the average customer of each class
+        self.centroids = {}
+        for label in set(y):
+            rows = [x for x, lab in zip(X, y) if lab == label]
+            self.centroids[label] = [sum(col) / len(rows)
+                                     for col in zip(*rows)]
+        return self
+
+    def predict(self, X):
+        def closest(x):
+            return min(self.centroids,
+                       key=lambda lab: sum((a - b) ** 2 for a, b
+                           in zip(x, self.centroids[lab])))
+        return [closest(x) for x in X]
+
+model = NearestCentroidClassifier()
+model.fit(X_train, y_train)        # learn from history
+preds = model.predict(X_test)      # grade on unseen customers
+
+correct = sum(p == t for p, t in zip(preds, y_test))
+print(f"accuracy on {len(y_test)} unseen customers: "
+      f"{correct}/{len(y_test)}")
+print("learned average churner :",
+      [round(v, 1) for v in model.centroids[1]])
+print("learned average stayer  :",
+      [round(v, 1) for v in model.centroids[0]])
+print()
+
+# ---- score two of "today's" customers -----------------------
+for name, row in [("Customer A (8 mo quiet, 5 complaints)", [8, 5]),
+                  ("Customer B (active, zero complaints) ", [0.5, 0])]:
+    verdict = "CHURN RISK" if model.predict([row])[0] else "looks fine"
+    print(name, "-&gt;", verdict)
+</textarea>
+      </div>
+
+      <p>Read what just happened. <code>fit()</code> looked at labelled history and distilled it into a few stored numbers — two average profiles. <code>predict()</code> used only those stored numbers to judge fresh customers. The toy data is deliberately easy, so the accuracy is flattering; real customers overlap far more messily. But the shape is exact: after <code>fit()</code>, the model <em>is</em> its learned numbers — which is precisely what makes it saveable to a file, the subject of the <a href="ch026-pkl-files.html">next chapter</a>.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it, gently. Make the two groups overlap (change <code>uniform(4, 9)</code> to <code>uniform(1, 9)</code>) and watch the accuracy sag — that is what real data feels like. Or train on only the first 10 customers (<code>X[:10], y[:10]</code> inside the fit call) and watch a small sample mislead the model. Every lesson about data quality your colleagues repeat lives in those two edits.</p></div>
+
+      <h2>Pipelines: staple the recipe to the model</h2>
+      <p>One more idea and you can read production training code. Real data needs preparation before a model sees it — scaling, encoding, gap-filling. Here is the trap: whatever preparation you did at training time must be repeated <em>identically</em> at prediction time, forever. If training data was scaled using March's column averages and tonight's scoring run scales with October's, the model receives subtly different inputs and quietly degrades. Nobody gets an error; the call list just gets worse. This "training worked, production drifted" bug family is infamous enough to have a name — training/serving skew.</p>
+      <p>sklearn's answer is the <dfn>Pipeline</dfn>: an object that chains preprocessing steps and the final model into one estimator, like a recipe card stapled to the dish. Call <code>fit()</code> on the pipeline and every step learns in order; call <code>predict()</code> and new data flows through the exact same steps with the exact same learned settings. One object, one grammar, no skew — and one object to save to disk when you ship it.</p>
+
+      <h2>Read it like a reviewer</h2>
+      <p>Here is the whole workflow as it actually appears in repositories — typically a file named <code>train.py</code> or <code>churn_model.py</code>. Click the annotated lines; your goal is for every one to feel boring.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">churn_model.py — the shape you will meet in real repos</div>
+        <div class="wl-line"><code>import pandas as pd</code>
+          <div class="wl-note">The table wrangler from <a href="ch023-pandas-numpy-notebooks.html">ch23</a>. A pandas DataFrame is sklearn's favourite input format.</div></div>
+        <div class="wl-line"><code>from sklearn.model_selection import train_test_split</code>
+          <div class="wl-note">sklearn is organised into submodules by job: <code>model_selection</code> for splitting and tuning, <code>preprocessing</code> for transformers, <code>linear_model</code> and friends for estimators. The import paths in a script tell you its plot in advance.</div></div>
+        <div class="wl-line"><code>from sklearn.preprocessing import StandardScaler</code></div>
+        <div class="wl-line"><code>from sklearn.pipeline import Pipeline</code></div>
+        <div class="wl-line"><code>from sklearn.linear_model import LogisticRegression</code>
+          <div class="wl-note">The model itself. Logistic regression is the dependable workhorse for yes/no questions — fast, stable, explainable to a regulator. Note the beauty of the shared grammar: upgrading to a fancier model changes this one line and nothing else.</div></div>
+        <div class="wl-line"><code>df = pd.read_csv("customers.csv")</code></div>
+        <div class="wl-line"><code>X = df[["months_active", "balance_trend", "complaints"]]</code>
+          <div class="wl-note">The feature table: only the columns the model may look at. Deciding what goes in this list — and what must not, legally and ethically — is a big part of the data scientist's actual job.</div></div>
+        <div class="wl-line"><code>y = df["churned"]</code>
+          <div class="wl-note">The target: one known outcome per row, say 1 if the customer left within 90 days. History has already graded these answers for us.</div></div>
+        <div class="wl-line"><code>X_train, X_test, y_train, y_test = train_test_split(</code>
+          <div class="wl-note">The honest-exam split from earlier: four pieces, one line. Twenty percent goes into the vault.</div></div>
+        <div class="wl-line"><code>    X, y, test_size=0.2, random_state=42)</code></div>
+        <div class="wl-line"><code>model = Pipeline([</code>
+          <div class="wl-note">The assembly line. Each step is a ("name", object) pair in a list (<a href="ch004-collections.html">ch4</a> patterns doing real work). Data will flow through the steps in order.</div></div>
+        <div class="wl-line"><code>    ("scale", StandardScaler()),</code>
+          <div class="wl-note">A transformer: during fit it learns each column's mean and spread from the <em>training</em> rows; during predict it applies those same learned numbers to new rows. Skew, prevented.</div></div>
+        <div class="wl-line"><code>    ("clf", LogisticRegression()),</code>
+          <div class="wl-note">The final step is the estimator — "clf" is the conventional shorthand for classifier. The pipeline as a whole now behaves like one model.</div></div>
+        <div class="wl-line"><code>])</code></div>
+        <div class="wl-line"><code>model.fit(X_train, y_train)</code>
+          <div class="wl-note">The training moment. One call fits every step in order: the scaler learns its averages, transforms the data, and passes it on for the classifier to learn from. When a colleague says "training takes ten minutes", this is the line taking ten minutes.</div></div>
+        <div class="wl-line"><code>print("held-out score:", model.score(X_test, y_test))</code>
+          <div class="wl-note">The exam. <code>score()</code> is shorthand for "predict on X_test, compare with y_test, report the fraction right". This number goes in the merge request description.</div></div>
+        <div class="wl-line"><code>today = pd.read_csv("customers_today.csv")[X.columns]</code>
+          <div class="wl-note">Fresh customers, no labels — nobody knows yet who will leave. Selecting <code>X.columns</code> guarantees the same features in the same order.</div></div>
+        <div class="wl-line"><code>risk = model.predict_proba(today)[:, 1]</code>
+          <div class="wl-note"><code>predict_proba</code> returns probabilities instead of bare verdicts; the <code>[:, 1]</code> slice takes the probability of class 1 — churn — giving each customer a risk between 0.0 and 1.0.</div></div>
+        <div class="wl-line"><code>today.assign(churn_risk=risk).sort_values(</code>
+          <div class="wl-note">The payoff: attach the risk score, sort descending, write the file the retention team opens tomorrow morning. Months of modelling, delivered as a ranked call list.</div></div>
+        <div class="wl-line"><code>    "churn_risk", ascending=False).to_csv("call_list.csv")</code></div>
+      </div>
+
+      <h2>XGBoost and the rest of the family</h2>
+      <p>You will hear one more name in every tabular-modelling conversation: <dfn>XGBoost</dfn>, a separate open-source library (not part of sklearn) that builds <dfn>gradient-boosted decision trees</dfn> — hundreds of small decision trees trained in sequence, each one correcting the mistakes of the ones before it. For predictions on tables of business data, boosted trees are usually the strongest thing available; they became famous by winning tabular machine-learning competitions so relentlessly that "just try XGBoost first" became folk wisdom. Its cousin LightGBM plays the same game. And here is the punchline that should feel earned by now: both deliberately copy sklearn's grammar. <code>XGBClassifier().fit(X_train, y_train)</code> then <code>.predict()</code> — a different engine under the same three pedals, and they slot straight into a Pipeline.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Friend</th><th>What it is</th><th>Its job in the workflow</th></tr>
+        <tr><td>pandas</td><td>the table wrangler</td><td>gets messy history into a clean X and y</td></tr>
+        <tr><td>scikit-learn</td><td>the classical toolkit</td><td>estimators, splits, transformers, pipelines, scoring</td></tr>
+        <tr><td>XGBoost / LightGBM</td><td>gradient-boosted trees</td><td>the usual champions on tabular data; same fit/predict grammar</td></tr>
+        <tr><td>joblib / pickle</td><td>the jar</td><td>saves the fitted pipeline to a file — the whole of the <a href="ch026-pkl-files.html">next chapter</a></td></tr>
+      </table></div>
+
+      <p>One closing thought to carry into the rest of this Act. An LLM is <em>also</em> a function fitted to data — the same two verbs, scaled to absurdity: fit on a large slice of the written internet over GPU-months, predict one token at a time. What breaks between this chapter and that world is not the grammar but the data: tables of numbers give way to language, and classical tools genuinely could not cope. Why text broke this beautiful toolkit — and what had to be invented instead — is exactly where this Act goes next.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any data-science repository at a large bank and the fingerprints are everywhere: <code>from sklearn</code> imports at the top of <code>train.py</code>, a <code>train_test_split(..., random_state=42)</code>, a <code>Pipeline([...])</code>, and a <code>model.fit(X_train, y_train)</code> at the centre of it all. In merge requests, "retrained on Q3 data, AUC up two points" means fit() was rerun on fresher history and the exam score improved; "propensity scores refreshed nightly" means a scheduled job calls predict_proba and writes a ranked list; "there's leakage in the features" means a column in X accidentally contains the answer — a bug you can now picture precisely. And when a notebook casually says <code>import xgboost as xgb</code>, you know both what it is and why it was chosen.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A colleague says "training the churn model takes about ten minutes". Which line is doing those ten minutes?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>model = LogisticRegression()</code></button>
+            <button data-opt="b"><code>model.fit(X_train, y_train)</code></button>
+            <button data-opt="c"><code>model.predict(X_test)</code></button>
+          </div>
+          <p class="q-explain">Creating the estimator just builds an empty object with default settings; predicting is a cheap application of already-learned numbers. fit() is the training moment — the only step where the model studies history and adjusts itself.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Why grade the model on a held-out test set instead of the rows it trained on?</p>
+          <div class="q-opts">
+            <button data-opt="a">It makes training faster by using fewer rows</button>
+            <button data-opt="b">sklearn refuses to score training rows</button>
+            <button data-opt="c">A model can memorise its training rows, so only unseen rows give an honest grade</button>
+          </div>
+          <p class="q-explain">Grading on training data is letting the student mark last year's paper it memorised. Overfitting looks like brilliance until the first genuinely new customer arrives — the held-out set is the only trustworthy exam.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. For a product-propensity model, what exactly is <code>y</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">The known outcome for each historical row — bought the product or did not</button>
+            <button data-opt="b">The model's prediction for each customer</button>
+            <button data-opt="c">The list of feature columns the model may use</button>
+          </div>
+          <p class="q-explain">y is the answer sheet: one already-known outcome per historical row, lined up with the feature table X. The model learns the X-to-y pattern from the past, then produces its own estimates for rows where y does not exist yet.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. What problem does wrapping the scaler and the model in a Pipeline actually solve?</p>
+          <div class="q-opts">
+            <button data-opt="a">It makes the model more accurate by adding extra steps</button>
+            <button data-opt="b">It guarantees the exact same preprocessing, with the same learned settings, runs at training and prediction time — as one object</button>
+            <button data-opt="c">It lets the model train without any data preparation</button>
+          </div>
+          <p class="q-explain">The danger is skew: preparing data one way during training and a subtly different way in production, which degrades predictions silently. A Pipeline staples the recipe to the model — and gives you a single object to save and ship.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. XGBoost is best described as...</p>
+          <div class="q-opts">
+            <button data-opt="a">A component inside scikit-learn</button>
+            <button data-opt="b">A deep-learning framework like the ones behind LLMs</button>
+            <button data-opt="c">A separate gradient-boosted-trees library that follows the same fit/predict grammar</button>
+          </div>
+          <p class="q-explain">XGBoost is its own library, and boosted trees are classical ML, not deep learning. It deliberately mimics sklearn's grammar, which is why an XGBClassifier drops into existing pipelines with a one-line change.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>scikit-learn is the standard toolkit for classical machine learning, and its entire API is three verbs: <code>fit()</code> learns from labelled history, <code>predict()</code> applies the result to new rows, <code>transform()</code> reshapes data.</li>
+          <li>X is the table of features (inputs the model may see); y is the target (the known outcome per row). Models learn only from history where the answer is already stamped on the file.</li>
+          <li><code>train_test_split</code> locks away an exam the model never studied — the held-out score is the only honest grade, and memorising instead of learning is called overfitting.</li>
+          <li>A Pipeline chains preprocessing and model into one object so the exact same steps run at training and prediction time — and that one object is what gets saved and shipped.</li>
+          <li>XGBoost and LightGBM are separate gradient-boosted-tree libraries that usually win on tabular data, and they deliberately speak the same fit/predict grammar.</li>
+          <li>The daily rhythm of a bank's models is asymmetric: fit() runs rarely on fresh history; predict_proba() runs nightly to produce ranked lists that human teams act on.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

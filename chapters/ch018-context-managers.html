@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Context managers: the with block — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch018">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act II · The Engineering Layer</div>
+        <h1>Context managers: the with block</h1>
+        <p class="ch-tagline">The with block is Python's built-in promise that whatever your code borrows — a file, a database session, an API connection — goes back on the shelf, even when everything inside blows up.</p>
+        <div class="ch-meta"><span>~20 min</span><span>Chapter 18 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Every Saturday, Meera runs the tool-lending library at a community centre — drills, ladders, soldering irons, exactly one of each. The rule is simple: sign a tool out at her desk, sign it back in when you leave. But Meera has seen everything. Borrowers get urgent phone calls and rush off. They crack a tile, panic, and bolt. Once, the fire alarm went off with nine people mid-project. In the early days, tools vanished every single week — not stolen, just never returned, because returning depended on people remembering during their worst moments.</p>
+        <p>So the centre rebuilt the room with one clever feature: there is exactly one way out, and it passes her desk. However your visit ends — job finished, job abandoned, alarm ringing — you physically cross the desk on the way out, and the drill comes off your shoulder and goes back on the shelf. Nobody has to remember. Nobody has to be having a good day. Returns are built into the architecture of the room.</p>
+        <p>Python's <code>with</code> block is that room. The desk on the way in is called <code>__enter__</code>, the desk on the way out is <code>__exit__</code>, and the one-door design is the guarantee: whatever happens inside, borrowed things go back.</p>
+      </section>
+
+      <h2>The problem: borrowing is easy, returning is hard</h2>
+      <p>Your programs constantly borrow things they do not own. The operating system owns file handles and lends you one when you call <code>open()</code>. A database owns a small, fixed pool of connections and lends you one per query. An API provider holds a network socket open on your behalf. Each of these is a <dfn>resource</dfn> — something scarce, borrowed from outside your program, that must be given back when you are done.</p>
+      <p>Borrowing takes one line. The trap is the return, because the return depends on the future good behaviour of code that has not run yet. Here is the naive version:</p>
+
+      <div class="code-title">the careless version</div>
+      <pre><code class="language-python">f = open("state.json", encoding="utf-8")
+data = json.load(f)     # ...but what if THIS line raises?
+f.close()               # ...then this line simply never runs</code></pre>
+
+      <p>Recall from <a href="ch009-errors-and-tracebacks.html">the errors chapter</a>: when an exception is raised, Python abandons the rest of the current block on the spot and goes hunting for a handler. If <code>json.load</code> chokes on a corrupt file, execution never reaches <code>f.close()</code>. The file handle is now signed out forever — a <dfn>resource leak</dfn>, meaning a borrowed thing that is never returned and quietly stays counted against you.</p>
+      <p>One leaked handle is harmless. But agents and services are long-running programs that repeat the same operation thousands of times, and leaks accumulate. This is the anatomy of a whole family of production incidents you may already have met from the operator's side: <em>"Too many open files"</em> after a crash-looping log writer, a database refusing queries with <em>"connection pool exhausted"</em>, an HTTP client that slowly starves the machine of sockets. These failures share a signature: the code ran perfectly in every demo, because demos are short. Leaks only show up when nobody is watching.</p>
+      <p>Python's classic first-aid for this is <code>try/finally</code> — the <code>finally</code> block runs no matter how the <code>try</code> block ends:</p>
+
+      <div class="code-title">the careful-but-noisy version</div>
+      <pre><code class="language-python">f = open("state.json", encoding="utf-8")
+try:
+    data = json.load(f)
+finally:
+    f.close()           # runs on success AND on failure</code></pre>
+
+      <p>This is correct. It is also four lines of ceremony around one line of intent, it doubles when you have two resources, and it relies on every developer remembering to write it, every time, forever. Meera tried "please remember to return the tools" as a policy. It did not work for her either. What you want is the one-door room: a way to make the return <em>structural</em>.</p>
+
+      <h2>The with block: the return desk built into the syntax</h2>
+      <p>Here is the same code written the way you will see it in essentially every real Python codebase:</p>
+
+      <div class="code-title">the idiomatic version</div>
+      <pre><code class="language-python">with open("state.json", encoding="utf-8") as f:
+    data = json.load(f)
+# by this line, f is ALREADY closed — success or crash</code></pre>
+
+      <p>Read it aloud and it almost parses as English: <em>"with this file open, as the name <code>f</code>, do the following."</em> The indented body is the borrowing period. The moment execution leaves that body — <em>by any exit whatsoever</em> — Python closes the file. Block finished normally? Closed. <code>json.load</code> raised? Closed, and <em>then</em> the exception continues on its way. The body hit a <code>return</code> or a <code>break</code>? Still closed. There is no path out of a <code>with</code> block that skips the cleanup. That is the entire pitch: <strong>borrow it, then put it back — guaranteed</strong>.</p>
+      <p>An object that can be used in a <code>with</code> statement is called a <dfn>context manager</dfn> — an object that knows what "on the way in" and "on the way out" mean for itself. A file's version of "on the way out" is <em>close the handle</em>. A database session's is <em>return the connection to the pool</em>. A lock's is <em>release me so other code can proceed</em>. Same door, different desks.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>You can borrow several things in one line — <code>with open(src) as fin, open(dst, "w") as fout:</code> — and Python returns them in reverse order on the way out, like nested doors. Since Python 3.10 you may also wrap the managers in parentheses across multiple lines when the list gets long.</p></div>
+
+      <h2>Under the hood: __enter__ and __exit__</h2>
+      <p>In <a href="ch014-dunders-object-protocol.html">the dunder-methods chapter</a> you learned Python's favourite trick: language features are secretly method calls with double-underscore names. <code>len(x)</code> quietly calls <code>x.__len__()</code>; a <code>for</code> loop quietly calls <code>__iter__</code> and <code>__next__</code>; <code>a + b</code> is <code>a.__add__(b)</code>. Whenever Python syntax appears to "just know" how to handle your object, there is a dunder protocol underneath. The <code>with</code> statement is exactly this trick, one more time, with two methods: <code>__enter__</code> and <code>__exit__</code>.</p>
+      <p>Here is what a <code>with</code> block actually expands to, line by line. Click each line to unfold it:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">what "with open(...) as f:" really does</div>
+        <div class="wl-line"><code>mgr = open("state.json", encoding="utf-8")</code>
+          <div class="wl-note">First, the expression after <code>with</code> is evaluated, producing the manager object. For files that object is the file handle itself — file objects are their own context managers. Nothing special has happened yet; this is an ordinary call.</div></div>
+        <div class="wl-line"><code>f = mgr.__enter__()</code>
+          <div class="wl-note">The sign-out desk. Python calls <code>__enter__()</code>, and <em>whatever it returns</em> is bound to the name after <code>as</code>. For a file, <code>__enter__</code> returns the file itself, so <code>f</code> and <code>mgr</code> are the same object here — but other managers return something different, like a session or a cursor. The <code>as</code> name is always "what <code>__enter__</code> handed me", nothing more.</div></div>
+        <div class="wl-line"><code>try:</code>
+          <div class="wl-note">Python wraps your entire block body in a <code>try</code> — this is where the guarantee comes from. You never see this <code>try</code>; the compiler writes it for you.</div></div>
+        <div class="wl-line"><code>    data = json.load(f)</code>
+          <div class="wl-note">Your body, exactly as you wrote it. It may finish, raise, or return early — all three paths lead to the same place next.</div></div>
+        <div class="wl-line"><code>finally:</code>
+          <div class="wl-note">The one door out of the room. Every possible exit from the body passes through here.</div></div>
+        <div class="wl-line"><code>    mgr.__exit__(exc_type, exc_value, tb)</code>
+          <div class="wl-note">The sign-in desk. On a clean exit the three arguments are <code>None, None, None</code> — "nothing went wrong". If the body raised, they carry the exception's class, the exception itself, and the traceback — so the manager can see <em>how</em> the visit ended before it cleans up. For a file, <code>__exit__</code> calls <code>close()</code> either way.</div></div>
+      </div>
+
+      <p>One subtlety is worth knowing because you will meet it in code review: <code>__exit__</code> returns a value. If it returns <code>True</code>, Python treats the exception as handled and <em>swallows it</em> — execution continues after the block as if nothing happened. Returning <code>False</code> (or <code>None</code>, which is what a bare method returns) lets the exception continue outward after cleanup. Almost every context manager you write should return <code>False</code>: cleaning up is your job, deciding whether an error matters is your caller's.</p>
+
+      <p>Watch the whole lifecycle move, including the crash path:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The with line">
+          <h3>1. The with line runs</h3>
+          <div class="diagram">
+            <div class="d-box hot">with open(...)<small>manager created</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">__enter__</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">body</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">__exit__</div>
+          </div>
+          <p class="step-cap">The expression after <code>with</code> is evaluated like any other call. You now hold a context manager — a visitor standing at Meera's desk, tool still on the shelf.</p>
+        </div>
+        <div class="step" data-title="Signing out">
+          <h3>2. __enter__ — signing out</h3>
+          <div class="diagram">
+            <div class="d-box dim">with open(...)</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">__enter__<small>returns the resource</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">body<small>as f</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">__exit__</div>
+          </div>
+          <p class="step-cap">Python calls <code>__enter__()</code> and binds its return value to the name after <code>as</code>. The resource is officially borrowed and the ledger says so.</p>
+        </div>
+        <div class="step" data-title="The body runs">
+          <h3>3. Your code uses the resource</h3>
+          <div class="diagram">
+            <div class="d-box dim">with open(...)</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">__enter__</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">body<small>read, query, send...</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">__exit__</div>
+          </div>
+          <p class="step-cap">The indented block is the borrowing period. Everything here is your ordinary code — the with statement adds nothing to it and slows nothing down.</p>
+        </div>
+        <div class="step" data-title="A crash mid-body">
+          <h3>4. Something goes wrong halfway</h3>
+          <div class="diagram">
+            <div class="d-box dim">__enter__</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">body<small>raises ValueError!</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">__exit__<small>still next in line</small></div>
+          </div>
+          <p class="step-cap">An exception abandons the rest of the body — but it cannot leave the room without passing the desk. Python routes the failure straight to <code>__exit__</code>, handing over the exception's details as arguments.</p>
+        </div>
+        <div class="step" data-title="Signing in, guaranteed">
+          <h3>5. __exit__ — signing in, no matter what</h3>
+          <div class="diagram">
+            <div class="d-box good">__exit__<small>cleanup runs</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">resource returned<small>file closed, session back in pool</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">exception continues<small>only if there was one</small></div>
+          </div>
+          <p class="step-cap">Clean finish or crash, <code>__exit__</code> runs and the resource goes back. If there was an exception and <code>__exit__</code> returned <code>False</code>, the error then resumes its journey outward — cleaned up, but not covered up.</p>
+        </div>
+      </div>
+
+      <h2>Build one yourself, right now</h2>
+      <p>The fastest way to make this concrete is to be Meera. Below is a context manager class with loud print statements at the desk, and two visits: one polite, one that crashes mid-job. Press <strong>Run</strong>, then read the output slowly — the second visit is the whole point of the chapter.</p>
+
+      <div class="pyrun" data-title="Your first context manager — run me">
+<textarea class="py-src" spellcheck="false">
+# The lending desk from the story, as a Python class.
+class ToolCounter:
+    def __init__(self, tool):
+        self.tool = tool
+
+    def __enter__(self):
+        print(f"[desk] signing OUT the {self.tool}")
+        return self.tool              # this is what 'as' receives
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is None:
+            print(f"[desk] signing IN the {self.tool} - clean finish")
+        else:
+            print(f"[desk] signing IN the {self.tool} - "
+                  f"even though {exc_type.__name__} happened!")
+        return False                  # False = never hide the error
+
+# Visit 1: everything goes fine
+with ToolCounter("drill") as tool:
+    print(f"   ...using the {tool}...")
+
+print()
+
+# Visit 2: the job crashes halfway. Watch the desk still run.
+try:
+    with ToolCounter("angle grinder") as tool:
+        print(f"   ...using the {tool}...")
+        raise RuntimeError("power cut mid-job")
+        print("   this line never runs")
+except RuntimeError as e:
+    print(f"(the error still reached the caller: {e})")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now experiment. Change <code>return False</code> to <code>return True</code> and re-run: the error vanishes and the <code>except</code> block goes quiet — you have just built an error-swallowing manager, and felt why reviewers frown at it. Then delete the <code>__exit__</code> method entirely and watch Python refuse to even enter the block: no exit desk, no borrowing.</p></div>
+
+      <h2>Files were the training wheels — sessions and clients are the cargo</h2>
+      <p><code>with open(...)</code> is the example every tutorial uses, but in the systems you operate, the pattern earns its keep on far more expensive resources. Three you will meet constantly:</p>
+
+      <div class="code-title">the same shape, wrapped around real infrastructure</div>
+      <pre><code class="language-python"># An HTTP/API client - sockets and connection pools cleaned up
+with httpx.Client() as client:
+    r = client.get("https://api.example.com/health")
+
+# A database session (SQLAlchemy 2.x style) - the connection
+# goes back to the pool even if the query raises
+with Session(engine) as session:
+    session.add(order)
+    session.commit()
+
+# A lock - released even if the critical section crashes,
+# so the rest of the program is never deadlocked
+with lock:
+    counter += 1</code></pre>
+
+      <p>Look at what varies and what does not. The resource changes — socket, pooled connection, lock. The cleanup changes — close, return, release. The <em>shape</em> never changes: one line to borrow, an indented body to use, and an exit that cannot be skipped. This is why experienced reviewers can spot a leak in seconds: any bare <code>something = acquire_thing()</code> without a <code>with</code> (or a very deliberate <code>try/finally</code>) is a question waiting to be asked.</p>
+      <p>LLM SDKs lean on the same protocol. The Anthropic Python SDK, for instance, streams a response through a context manager — <code>with client.messages.stream(...) as stream:</code> — so the underlying HTTP connection is torn down properly whether the stream completes or your code stops reading halfway. And the asynchronous flavour, <code>async with</code>, is the identical idea built on <code>__aenter__</code> and <code>__aexit__</code>; you will see it all over async agent code, including MCP client sessions in the Python SDK. When Act V wires up real agents, the with blocks will already read as old friends.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>"On the way out" means whatever the class decided it means — it is not always <em>close</em>. The classic surprise is the standard library's <code>sqlite3</code>: using a connection in a <code>with</code> block commits the transaction on success and rolls back on error, but does <strong>not</strong> close the connection. When you meet a new context manager, spend ten seconds finding out what its <code>__exit__</code> actually does. The guarantee is that it runs, not that it reads your mind.</p></div>
+
+      <h2>The shortcut: contextlib.contextmanager</h2>
+      <p>Writing a full class with <code>__enter__</code> and <code>__exit__</code> is fine for a library, but heavy for the small before/after brackets you want in everyday code. The standard library offers a lighter path, and it reuses something you learned one chapter ago: <a href="ch017-decorators.html">a decorator</a> — a function that wraps another function to change how it behaves.</p>
+
+      <div class="code-title">a stopwatch bracket in eight lines</div>
+      <pre><code class="language-python">from contextlib import contextmanager
+import time
+
+@contextmanager
+def timed(label):
+    start = time.perf_counter()        # the way IN
+    try:
+        yield                          # the body runs here
+    finally:
+        ms = (time.perf_counter() - start) * 1000
+        print(f"{label}: {ms:.1f} ms") # the way OUT - guaranteed
+
+with timed("load config"):
+    do_expensive_thing()</code></pre>
+
+      <p>The one new word is <code>yield</code>. You will study it properly later in the course; for now, read it as <em>"pause this function here and let the with-body run; resume me afterwards"</em>. Everything before the <code>yield</code> plays the role of <code>__enter__</code> (and whatever you yield is what <code>as</code> receives). Everything after it plays <code>__exit__</code>. Wrapping the <code>yield</code> in <code>try/finally</code> is what makes the exit half guaranteed even on error — the decorator does the rest, manufacturing a real context manager out of your little function. Notice also what this example proves: context managers are not only about returning resources. Any paired before/after ritual — start a timer and report it, open a spinner and clear it, begin a transaction and commit it — fits the same door.</p>
+      <p>Time to see the guarantee pay for itself at production scale, in miniature. The simulation below has a database pool with exactly three connections and code that crashes on every single query — five times in a row. Round one borrows carelessly; round two borrows through a <code>@contextmanager</code>. Same crashes, opposite outcomes:</p>
+
+      <div class="pyrun" data-title="Watch a connection pool die, then survive">
+<textarea class="py-src" spellcheck="false">
+from contextlib import contextmanager
+
+class Pool:
+    """A tiny stand-in for a real database connection pool."""
+    def __init__(self, size):
+        self.free = [f"conn-{n}" for n in range(1, size + 1)]
+    def acquire(self):
+        if not self.free:
+            raise RuntimeError("pool exhausted - no connections left")
+        return self.free.pop()
+    def release(self, conn):
+        self.free.append(conn)
+
+pool = Pool(size=3)
+
+print("ROUND 1 - careless: acquire, crash, never release")
+for attempt in range(1, 6):
+    try:
+        conn = pool.acquire()
+        print(f"  attempt {attempt}: borrowed {conn}... query crashed")
+        raise ValueError("query failed")
+    except ValueError:
+        pass                    # we survived, but conn leaked
+    except RuntimeError as e:
+        print(f"  attempt {attempt}: {e}")
+
+pool = Pool(size=3)             # fresh pool for round two
+
+@contextmanager
+def session():
+    conn = pool.acquire()       # before yield = the way IN
+    try:
+        yield conn              # the with-body runs here
+    finally:
+        pool.release(conn)      # after yield = the way OUT
+
+print()
+print("ROUND 2 - same five crashes, borrowed through 'with'")
+for attempt in range(1, 6):
+    try:
+        with session() as conn:
+            print(f"  attempt {attempt}: borrowed {conn}... query crashed")
+            raise ValueError("query failed")
+    except ValueError:
+        pass
+print(f"  pool after five crashes: {len(pool.free)} of 3 free")
+</textarea>
+      </div>
+
+      <p>Round one limps to a halt after three attempts: every crash walks out the fire escape with a connection under its arm, and attempts four and five find the shelf empty. Round two crashes just as hard, five times — and ends with all three connections back home. Nothing about the failures changed. Only the architecture of the room did.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Once you know the shape, you will see it everywhere. In any Python repository, <code>with open(...)</code> appears wherever configs, prompts, or logs are read; <code>with Session(...)</code> or <code>with engine.connect()</code> guards the database layer; <code>with lock:</code> protects shared state; tests use <code>with pytest.raises(ValueError):</code> — a context manager whose exit desk checks that the right error happened; and <code>tempfile.TemporaryDirectory()</code> hands you a scratch folder that deletes itself on the way out. In merge requests, the review comment "this leaks a session — wrap it in a with" is this chapter in one line, and a diff replacing <code>try/finally</code> ceremony with a slim <code>with</code> block is a reviewer-pleasing classic. Grep any framework you rely on for <code>def __exit__</code> or <code>@contextmanager</code> and you will find its lending desks.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What exactly does a with block guarantee?</p>
+          <div class="q-opts">
+            <button data-opt="a">That the code inside it will not raise exceptions</button>
+            <button data-opt="b">That the manager's __exit__ cleanup runs however the block ends — success, crash, or early return</button>
+            <button data-opt="c">That the resource is used efficiently while borrowed</button>
+          </div>
+          <p class="q-explain">A with block never prevents errors — it guarantees the exit desk. Whatever path execution takes out of the body, __exit__ runs first, and only then does any exception continue outward.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. In <code>with Session(engine) as s:</code>, what is <code>s</code> bound to?</p>
+          <div class="q-opts">
+            <button data-opt="a">The string name of the session</button>
+            <button data-opt="b">Always the object created by the with expression</button>
+            <button data-opt="c">Whatever the manager's __enter__ method returns</button>
+          </div>
+          <p class="q-explain">The as name receives __enter__'s return value — nothing more. For files it happens to be the same object, but other managers hand back something different, which is why the distinction matters.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. An exception is raised in the middle of a with body. What happens next?</p>
+          <div class="q-opts">
+            <button data-opt="a">__exit__ runs with the exception's details, then the exception continues outward (unless __exit__ returns True)</button>
+            <button data-opt="b">The exception skips the with machinery and goes straight to the nearest except</button>
+            <button data-opt="c">Python retries the body once before giving up</button>
+          </div>
+          <p class="q-explain">The compiler wraps the body in a hidden try/finally, so the failure is routed through __exit__ — which receives the exception type, value, and traceback — before resuming its journey. Cleaned up, not covered up.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Why is <code>f = open(path)</code> ... <code>f.close()</code> without a with block considered a bug waiting to happen?</p>
+          <div class="q-opts">
+            <button data-opt="a">Calling close() manually is slower than letting with do it</button>
+            <button data-opt="b">Any exception between open and close skips the close, leaking the handle — and leaks compound in long-running programs</button>
+            <button data-opt="c">Python forbids calling close() outside a with block</button>
+          </div>
+          <p class="q-explain">The close line only runs if everything before it succeeds. Short scripts get away with it; agents and services that run for weeks do not — that is where "too many open files" and "pool exhausted" incidents come from.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. What does the @contextmanager decorator from contextlib do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Automatically adds a with block around every call to the function</button>
+            <button data-opt="b">Converts a class into a generator</button>
+            <button data-opt="c">Turns a function with a single yield into a context manager — code before the yield is the enter, code after is the exit</button>
+          </div>
+          <p class="q-explain">The decorator manufactures the __enter__/__exit__ machinery from your little function: it runs it up to the yield on the way in, hands the yielded value to as, and resumes it on the way out — with try/finally making the exit half crash-proof.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A resource is anything scarce your program borrows — file handles, database connections, sockets, locks — and every borrow needs a guaranteed return.</li>
+          <li><code>with open(path) as f:</code> means "borrow it, use it in this indented block, and put it back on any exit whatsoever" — success, exception, or early return.</li>
+          <li>Under the hood it is a dunder protocol: <code>__enter__</code> signs the resource out (its return value becomes the <code>as</code> name), and <code>__exit__</code> signs it back in, receiving the exception details if the body crashed.</li>
+          <li><code>__exit__</code> returning <code>False</code> lets errors continue after cleanup; returning <code>True</code> swallows them — clean up, don't cover up.</li>
+          <li>Files are the tutorial example; DB sessions, API clients, locks, and streaming LLM responses are where the guarantee actually saves your 3 a.m. — and <code>async with</code> is the same idea for async code.</li>
+          <li><code>@contextmanager</code> from <code>contextlib</code> builds a manager from a small function with one <code>yield</code>: before the yield is the way in, after it is the way out.</li>
+          <li>Review heuristic: any bare <code>acquire()</code> without a <code>with</code> or a deliberate <code>try/finally</code> is a leak until proven otherwise.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

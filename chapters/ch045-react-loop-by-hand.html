@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build a ReAct loop by hand — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch045">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act V · Agents From Scratch</div>
+        <h1>Build a ReAct loop by hand</h1>
+        <p class="ch-tagline">Fifty lines of Python. That is the entire secret. By the end of this chapter you will have built, run, and modified the same loop that beats inside Claude Code, LangChain, and every agent harness on Earth.</p>
+        <div class="ch-meta"><span>~40 min</span><span>Chapter 46 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A brilliant consultant is locked in a hotel room. No laptop, no phone — only a walkie-talkie to you, standing outside. She can reason about anything, but she cannot <em>touch</em> anything. So you agree on a protocol: she says <em>"ACTION: check the invoice total"</em>, you go check it, and you radio back <em>"OBSERVATION: 1,500 rupees"</em>. She thinks again, asks for the next thing, and the two of you go back and forth until she says <em>"FINAL ANSWER"</em>.</p>
+        <p>That consultant is the LLM. You — the person outside actually pressing the buttons — are the code you're about to write. The walkie-talkie protocol is called <strong>ReAct</strong>, and the back-and-forth is <strong>the loop</strong>. Every agent you have ever operated is this hotel room, scaled up.</p>
+      </section>
+
+      <h2>The idea: reasoning and acting, taking turns</h2>
+      <p><dfn>ReAct</dfn> — short for <em>Reason + Act</em> — is a simple contract with the model: instead of answering in one shot, it alternates between thinking out loud and requesting actions, and after every action it gets to see the result before deciding what to do next. The name comes from a 2022 research paper, but the pattern is older than the name: it is just how a careful person solves a problem when they can look things up as they go.</p>
+      <p>Remember from <a href="ch035-tool-calling.html">the tool-calling chapter</a>: an LLM can only ever produce text. It cannot run a calculator, query a database, or read a file. What it <em>can</em> do is produce text that <em>describes</em> an action — and then something else, outside the model, must actually perform it. That "something else" is the loop you are about to build.</p>
+      <p>Watch one full turn of the cycle before we write any code:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Task arrives">
+          <h3>1. The task arrives</h3>
+          <div class="diagram">
+            <div class="d-box hot">User<small>"What is 20% GST on a 1,500 rupee invoice?"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">LLM</div>
+            <div class="d-box dim">Tools<small>calculator</small></div>
+          </div>
+          <p class="step-cap">The user's question goes into the conversation history — the running transcript that will be re-sent to the model on every turn. The tools sit ready but untouched.</p>
+        </div>
+        <div class="step" data-title="Model thinks and asks">
+          <h3>2. The model thinks, then requests an action</h3>
+          <div class="diagram">
+            <div class="d-box dim">User</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">LLM<small>"THOUGHT: I should compute it. ACTION: calculate(1500 * 0.20)"</small></div>
+            <div class="d-box dim">Tools</div>
+          </div>
+          <p class="step-cap">The model replies with text in the agreed format: a thought, then an action request. It has not calculated anything — it has written a wish.</p>
+        </div>
+        <div class="step" data-title="Your code acts">
+          <h3>3. Your loop executes the action</h3>
+          <div class="diagram">
+            <div class="d-box dim">User</div>
+            <div class="d-box">LLM</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Tools<small>calculate("1500 * 0.20") = 300.0</small></div>
+          </div>
+          <p class="step-cap">Your Python code spots the ACTION line, looks up the matching function, runs it, and captures the result. This is the only step where anything real happens.</p>
+        </div>
+        <div class="step" data-title="Observation returns">
+          <h3>4. The result goes back as an observation</h3>
+          <div class="diagram">
+            <div class="d-box dim">User</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">LLM<small>sees "OBSERVATION: 300.0"</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box">Tools</div>
+          </div>
+          <p class="step-cap">The observation is appended to the history and the whole transcript is sent to the model again. From the model's point of view, the world just answered back.</p>
+        </div>
+        <div class="step" data-title="Repeat or finish">
+          <h3>5. Loop until FINAL ANSWER</h3>
+          <div class="diagram">
+            <div class="d-box good">LLM<small>"FINAL ANSWER: GST is 300 rupees"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">User<small>gets the answer</small></div>
+          </div>
+          <p class="step-cap">If the model needs more information it requests another action and the cycle repeats. When it writes FINAL ANSWER, the loop breaks and the answer is returned. Think, act, observe — around and around.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>In this chapter the model "requests" actions with plain text like <code>ACTION: calculate(...)</code>, and we parse it ourselves. Modern APIs offer a cleaner, structured version of the same handshake — <a href="ch035-tool-calling.html">native tool calling</a> — and frameworks build on that. We use the text version here because you can see every moving part with your own eyes. The logic is identical.</p></div>
+
+      <h2>The vocabulary you need</h2>
+      <p>Five words carry this whole chapter. Flip each card until the definitions feel obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">agent</span><span class="flip-back">An LLM given tools and run in a loop until the task is done. Not magic — a while-loop with a talkative brain inside.</span></button>
+        <button class="flip" type="button"><span class="flip-front">tool</span><span class="flip-back">A plain function your code is willing to run on the model's behalf — calculator, file reader, web search. The model only knows its name and description.</span></button>
+        <button class="flip" type="button"><span class="flip-front">observation</span><span class="flip-back">The result of a tool run, fed back to the model as text. The model's only window into the real world.</span></button>
+        <button class="flip" type="button"><span class="flip-front">history</span><span class="flip-back">The growing transcript of everything so far — task, thoughts, actions, observations. Re-sent to the model on every single turn.</span></button>
+        <button class="flip" type="button"><span class="flip-front">system prompt</span><span class="flip-back">The standing instructions that teach the model the protocol: what tools exist, what format to reply in, when to stop.</span></button>
+        <button class="flip" type="button"><span class="flip-front">max turns</span><span class="flip-back">A hard cap on loop iterations, so a confused model cannot run (and bill you) forever. Every serious harness has one.</span></button>
+      </div>
+
+      <h2>Run a real agent, right now</h2>
+      <p>Below is a complete working agent. Because this page cannot call a paid LLM API, the "model" is a tiny scripted stand-in — a <code>fake_llm()</code> function that answers the way a real model would for this task. Everything else — the loop, the parsing, the tool execution, the history — is exactly what production code does. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A complete ReAct agent — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- The tools: plain Python functions --------------------
+def calculate(expression):
+    """Safely evaluate a simple arithmetic expression."""
+    allowed = set("0123456789+-*/(). ")
+    if not set(expression) &lt;= allowed:
+        return "ERROR: only arithmetic is allowed"
+    return str(eval(expression))
+
+TOOLS = {"calculate": calculate}
+
+# ---- The 'model': a scripted stand-in for a real LLM ------
+# A real agent would call an LLM API here. The interface is
+# identical: history in, next message out.
+def fake_llm(history):
+    if "OBSERVATION" not in history[-1]:
+        return ("THOUGHT: 20% GST on 1500 means 1500 * 0.20.\n"
+                "ACTION: calculate(1500 * 0.20)")
+    return ("THOUGHT: The observation says 300.0.\n"
+            "FINAL ANSWER: GST at 20% on a 1,500 rupee "
+            "invoice is 300 rupees.")
+
+# ---- The loop: the entire agent ---------------------------
+def run_agent(task, max_turns=5):
+    history = [f"TASK: {task}"]
+    for turn in range(1, max_turns + 1):
+        reply = fake_llm(history)
+        history.append(reply)
+        print(f"--- turn {turn} ---")
+        print(reply)
+
+        if "FINAL ANSWER:" in reply:
+            return reply.split("FINAL ANSWER:")[1].strip()
+
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            name = call.split("(")[0].strip()
+            arg = call[call.index("(") + 1 : call.rindex(")")]
+            result = TOOLS[name](arg.strip())
+            observation = f"OBSERVATION: {result}"
+            history.append(observation)
+            print(observation)
+
+    return "Gave up: hit the max-turns limit."
+
+answer = run_agent("What is 20% GST on a 1500 rupee invoice?")
+print()
+print("AGENT RETURNED:", answer)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now break it on purpose — this is where the learning happens. Change the task text, rename the tool to <code>ganit</code> in one place but not the other and read the error, or set <code>max_turns=1</code> and watch the agent give up mid-thought. Every failure you cause here is one you will recognise instantly in production logs later.</p></div>
+
+      <h2>The same fifty lines, one line at a time</h2>
+      <p>You just ran it. Now read it the way a reviewer would — click the annotated lines and make sure each one is boring to you. Boring means fluent.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">react_agent.py — the heart of it</div>
+        <div class="wl-line"><code>def run_agent(task, max_turns=5):</code>
+          <div class="wl-note">The whole agent is one function. It takes the user's task and a safety cap — <code>max_turns=5</code> is a default argument (<a href="ch007-functions.html">ch7</a>), so callers may omit it. Every framework's "agent" object ultimately wraps a function shaped like this.</div></div>
+        <div class="wl-line"><code>    history = [f"TASK: {task}"]</code>
+          <div class="wl-note">The conversation history starts as a one-item list. This list is the agent's entire memory — when people say "context", they mean this. The f-string stitches the task text in (<a href="ch003-strings-and-fstrings.html">ch3</a>).</div></div>
+        <div class="wl-line"><code>    for turn in range(1, max_turns + 1):</code>
+          <div class="wl-note">The famous loop, and it is just a for-loop. Bounded, not while-True: if the model dithers, we stop paying after five turns. Runaway agents are a real cost incident — <a href="ch048-failure-modes.html">ch48</a> has the war stories.</div></div>
+        <div class="wl-line"><code>        reply = fake_llm(history)</code>
+          <div class="wl-note">The only line that talks to a "model". In production this is an API call: <code>client.messages.create(model=..., messages=history)</code>. Note what gets sent: the <em>whole history, every turn</em>. That is why long agent runs get expensive.</div></div>
+        <div class="wl-line"><code>        history.append(reply)</code>
+          <div class="wl-note">Whatever the model said becomes part of the transcript it will see next turn. The agent is building its own context as it goes.</div></div>
+        <div class="wl-line"><code>        if "FINAL ANSWER:" in reply:</code>
+          <div class="wl-note">The stop condition. The protocol says: when the model writes this marker, it is done. Structured tool-calling APIs signal this more elegantly (a response with no tool calls), but it is the same idea: the model decides when to stop, the loop enforces it.</div></div>
+        <div class="wl-line"><code>            return reply.split("FINAL ANSWER:")[1].strip()</code>
+          <div class="wl-note"><code>split</code> cuts the reply at the marker and <code>[1]</code> takes what follows — the answer itself. String surgery like this is exactly what frameworks do for you, hidden behind nicer names.</div></div>
+        <div class="wl-line"><code>        if "ACTION:" in reply:</code>
+          <div class="wl-note">The other branch: the model wants something done. We parse its request from plain text here; native tool calling gives you this pre-parsed as JSON — same handshake, less string surgery.</div></div>
+        <div class="wl-line"><code>            name = call.split("(")[0].strip()</code>
+          <div class="wl-note">Everything before the bracket is the tool's name — <code>calculate</code>. The model chose it from the menu our system prompt advertised.</div></div>
+        <div class="wl-line"><code>            result = TOOLS[name](arg.strip())</code>
+          <div class="wl-note">The most important line in the file. <code>TOOLS</code> is a dict mapping names to functions (<a href="ch004-collections.html">ch4</a>) — we look the name up and call the real Python function. The model asked; <em>our code</em> acted. This boundary is where all agent security lives: the model can only ever reach tools we put in this dict.</div></div>
+        <div class="wl-line"><code>            history.append(observation)</code>
+          <div class="wl-note">The tool's result re-enters the transcript labelled as an OBSERVATION, closing the circle: think, act, observe. Next iteration, the model sees it and reasons again.</div></div>
+        <div class="wl-line"><code>    return "Gave up: hit the max-turns limit."</code>
+          <div class="wl-note">If the loop exhausts its budget, we say so honestly instead of hanging forever. Production harnesses raise alerts here.</div></div>
+      </div>
+
+      <h2>What the frameworks add (spoiler: not magic)</h2>
+      <p>Hold this fifty-line skeleton in your head, because the rest of the course keeps returning to it. When you meet LangChain's <a href="ch054-create-agent.html"><code>create_agent</code></a>, it is this loop with native tool calling, retries, and streaming. When you meet <a href="ch067-create-deep-agent-anatomy.html">deep agents</a>, it is this loop plus a planning tool, a file system, and subagents. When you watch Claude Code work, you are watching this loop with a very good system prompt and a very large toolbox. The loop is the atom.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Your 50 lines</th><th>What a framework swaps in</th></tr>
+        <tr><td><code>fake_llm(history)</code></td><td>A real chat-model API call with native tool calling</td></tr>
+        <tr><td><code>"ACTION:" in reply</code> string parsing</td><td>Structured <code>tool_calls</code> in the API response</td></tr>
+        <tr><td><code>TOOLS</code> dict</td><td>Tool objects with schemas auto-generated from type hints</td></tr>
+        <tr><td><code>history</code> list</td><td>Message objects, persistence, checkpointing</td></tr>
+        <tr><td><code>max_turns</code></td><td>Recursion limits, cost budgets, timeouts</td></tr>
+      </table></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open almost any agent repository and search for its loop — you will find it. In LangChain it hides inside <code>create_agent</code>'s agent node ("call model, if tool calls then run tools, repeat"). In hand-rolled enterprise code you will see the literal <code>while</code> or <code>for</code> with an LLM call at the top, often within a file named <code>agent.py</code>, <code>loop.py</code>, or <code>executor.py</code>. In a merge request, when someone says "I bumped the recursion limit" or "the agent hit max iterations", they are talking about this exact <code>max_turns</code> guard. You now recognise the heartbeat of every one of these systems on sight.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. In a ReAct agent, who actually executes the calculator when the model says <code>ACTION: calculate(1500 * 0.20)</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">The LLM runs it internally and reports the result</button>
+            <button data-opt="b">Your loop code looks the tool up and runs the real function</button>
+            <button data-opt="c">The API provider runs it on their servers</button>
+          </div>
+          <p class="q-explain">The model only produces text describing what it wants. Your code — the loop — is the only thing that executes anything. That boundary is also why agents are securable at all: the model can only reach tools you registered.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Why does the loop send the <em>entire</em> history to the model on every turn?</p>
+          <div class="q-opts">
+            <button data-opt="a">It is a bug that frameworks fix</button>
+            <button data-opt="b">For audit-trail purposes only</button>
+            <button data-opt="c">The model is stateless — the transcript is its only memory of what has happened</button>
+          </div>
+          <p class="q-explain">An LLM remembers nothing between API calls. Whatever you want it to know must be in the messages you send — which is why history grows, why long runs get expensive, and why context management (Act X) is a whole discipline.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What is <code>max_turns</code> protecting you from?</p>
+          <div class="q-opts">
+            <button data-opt="a">A confused model looping forever and burning tokens</button>
+            <button data-opt="b">The tools returning wrong answers</button>
+            <button data-opt="c">Users asking too many questions</button>
+          </div>
+          <p class="q-explain">If the model never writes FINAL ANSWER, an unbounded loop would keep calling the (paid) API indefinitely. A turn cap is the simplest of the cost guardrails every production harness carries.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. The observation step feeds the tool result back into the history. What would happen if you forgot to append it?</p>
+          <div class="q-opts">
+            <button data-opt="a">The loop would crash with a KeyError</button>
+            <button data-opt="b">The model would never learn the result and would either repeat the action or guess</button>
+            <button data-opt="c">Nothing — the model already saw the result when the tool ran</button>
+          </div>
+          <p class="q-explain">The model has no eyes. If the result is not placed into the transcript, then from the model's perspective the action never happened — so it re-asks, or worse, fabricates a result. "Agent keeps repeating the same tool call" bugs are often exactly this.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>An agent is an LLM, a set of tools, and a loop — you have now built all three, and nothing you meet later is more than an upgrade to one of them.</li>
+          <li>The model never executes anything; it writes requests as text (or structured tool calls) and <em>your code</em> acts. All agent security lives at that boundary.</li>
+          <li>The history list is the agent's entire memory; it is re-sent every turn, which is why context size and cost dominate agent engineering.</li>
+          <li>The loop stops when the model signals completion — and a <code>max_turns</code> cap protects you when it never does.</li>
+          <li>Frameworks (LangChain, deep agents, Claude Code) are this same skeleton with better parsing, persistence, planning, and guardrails bolted on.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

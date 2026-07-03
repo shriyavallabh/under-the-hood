@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Durability: checkpoints, resume, replay — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch085">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act X · Harness Anatomy</div>
+        <h1>Durability: checkpoints, resume, replay</h1>
+        <p class="ch-tagline">Your agent's process will die mid-task — a deploy, an out-of-memory kill, a pulled cable. Durability makes that a shrug: write every step down, resume where you stopped, and re-watch any run months later.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 86 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A monsoon evening in 1987, at a small branch of a state bank. The power fails every hour, and the senior clerk is working through a stack of salary transfers — several steps each: verify the form, check the balance, debit this account, credit that one, stamp, sign. The lights die halfway through transfer forty-one. When they flicker back, a <em>different</em> clerk sits at the desk. And nothing is lost — because the branch runs on one iron rule: <strong>ink the register before your hand moves to the next step.</strong></p>
+        <p>The new clerk reads the register, sees exactly where transfer forty-one stopped — debit done, credit not yet — and continues from that line. She does not debit twice: the register says it already happened. And when an inspector asks, six months later, why account 4402 was debited that evening, nobody has to remember anything. They open the register and re-walk the whole night, step by step.</p>
+        <p>That register — <em>write each step before the next, resume from the last written line, re-read the whole day whenever anyone asks</em> — is durability. This chapter gives your agent that register.</p>
+      </section>
+
+      <h2>First, remember the checkpointer</h2>
+      <p>Back in <a href="ch061-checkpointing.html">the checkpointing chapter</a> you met LangGraph's answer to amnesia: pass a <code>checkpointer</code> to <code>.compile()</code>, give each conversation a <code>thread_id</code>, and after every node the graph's state is snapshotted into a database — <code>InMemorySaver</code> for development, Postgres/Redis/SQLite backends (the <code>langgraph-checkpoint-*</code> packages) for production. You even built a toy one yourself. That chapter was <em>one framework's implementation</em>.</p>
+      <p>This chapter zooms out to the harness level — the "loop around the loop" of this act. Whatever framework sits inside, a harness must answer three questions before the first real task runs:</p>
+      <ul>
+        <li><strong>Checkpoint</strong> — when the process dies, how much work do we lose?</li>
+        <li><strong>Resume</strong> — how does a fresh process continue an interrupted task, safely?</li>
+        <li><strong>Replay</strong> — when someone asks "why did the agent do that?", can we show them, step by step?</li>
+      </ul>
+      <p>Notice what is missing: "how do we stop the process dying?" You can't. Durability starts from the honest premise that you never will.</p>
+
+      <h2>Processes die. Being surprised is the real failure</h2>
+      <p>The deaths are mundane. A deploy terminates the old process mid-run. A Kubernetes pod is evicted. The container is OOM-killed — it ate more memory than its limit allowed. An exception goes uncaught and ends the process (<a href="ch009-errors-and-tracebacks.html">ch9</a>). On a busy platform, several of these happen every day.</p>
+      <p>Die mid-task without durability and you lose two things — the second far worse:</p>
+      <ul>
+        <li><strong>The work.</strong> Nine steps of an eleven-step run — twenty expensive LLM calls, minutes of tool time — evaporate. Annoying, but recoverable: run it again.</li>
+        <li><strong>Certainty about the world.</strong> Step seven <em>sent a payment</em>. Or did it? The process died around then, and the record of what it had done died with it. Running again might pay twice; not running might pay zero times. Both answers are wrong.</li>
+      </ul>
+      <p>That second loss is why durability is a harness concern, not a nice-to-have. An agent that only <em>reads</em> can be restarted carelessly; one whose <a href="ch035-tool-calling.html">tools</a> have real side effects cannot. Watch a durable harness handle it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Run begins">
+          <h3>1. A run begins</h3>
+          <div class="diagram">
+            <div class="d-box hot">Agent process A<small>task: pay vendor invoice 8801</small></div>
+            <div class="d-box dim">Checkpoint store<small>empty</small></div>
+            <div class="d-box dim">Bank API<small>the real world</small></div>
+          </div>
+          <p class="step-cap">The task arrives. The checkpoint store — a database outside the process — has nothing for this run yet. The <a href="ch045-react-loop-by-hand.html">familiar loop</a> starts turning.</p>
+        </div>
+        <div class="step" data-title="Step 0 + checkpoint">
+          <h3>2. A step completes, and is inked immediately</h3>
+          <div class="diagram">
+            <div class="d-box">Agent process A<small>checked the balance</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Checkpoint store<small>step 0 done, result saved</small></div>
+            <div class="d-box dim">Bank API</div>
+          </div>
+          <p class="step-cap">The clerk's iron rule: the step's result is written to the durable store <em>before</em> the loop moves on. The write costs milliseconds — nothing next to the LLM call it protects.</p>
+        </div>
+        <div class="step" data-title="The effect fires">
+          <h3>3. The dangerous step's effect fires...</h3>
+          <div class="diagram">
+            <div class="d-box">Agent process A<small>step 1: transfer money</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Checkpoint store<small>still says: step 0 done</small></div>
+            <div class="d-box hot">Bank API<small>1,500 debited — for real</small></div>
+          </div>
+          <p class="step-cap">The transfer tool runs and money actually moves — but this step's checkpoint has not landed yet. For a few milliseconds, the world knows something the register does not.</p>
+        </div>
+        <div class="step" data-title="Death in the window">
+          <h3>4. ...and the process dies inside that window</h3>
+          <div class="diagram">
+            <div class="d-box dim">Agent process A<small>OOM-killed</small></div>
+            <div class="d-box">Checkpoint store<small>last line: step 0 done</small></div>
+            <div class="d-box">Bank API<small>money already moved</small></div>
+          </div>
+          <p class="step-cap">The worst moment: after the effect, before the checkpoint. The store honestly says the run stopped after step 0 — it has no idea step 1's payment went out.</p>
+        </div>
+        <div class="step" data-title="Resume">
+          <h3>5. A fresh process picks up the pen</h3>
+          <div class="diagram">
+            <div class="d-box">Checkpoint store<small>reads: resume at step 1</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Agent process B<small>brand new, retries step 1</small></div>
+            <div class="d-box dim">Bank API</div>
+          </div>
+          <p class="step-cap">Resume is boring by design: the fresh process loads the latest checkpoint and continues. But it is about to retry a payment that already happened.</p>
+        </div>
+        <div class="step" data-title="Idempotency saves it">
+          <h3>6. The idempotency key refuses the double-fire</h3>
+          <div class="diagram">
+            <div class="d-box">Agent process B<small>transfer(..., key-8801)</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Bank API<small>"key-8801 already done" — returns the original result</small></div>
+          </div>
+          <p class="step-cap">The retry carries the same idempotency key. The bank recognises it, executes nothing, and returns the recorded result. Money moved exactly once — the half of durability checkpoints alone cannot give you.</p>
+        </div>
+        <div class="step" data-title="Done + replayable">
+          <h3>7. The run completes — and stays inspectable forever</h3>
+          <div class="diagram">
+            <div class="d-box good">Task complete<small>invoice 8801 paid once</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Full journal<small>every prompt, decision, result</small></div>
+          </div>
+          <p class="step-cap">The checkpoint trail is now a flight recorder: debuggers and auditors can re-walk the run months later without touching the real world.</p>
+        </div>
+      </div>
+
+      <h2>Checkpoint: write the register before the next step</h2>
+      <p>A <dfn>checkpoint</dfn> is a durable snapshot of everything the run would need to continue — written to storage that outlives the process, after every step, before the next begins. That is more than a step counter: a real checkpoint carries the conversation history (the agent's whole memory), the current plan, every tool result so far, and any tool call issued but not yet answered.</p>
+      <p>Two design rules do most of the work:</p>
+      <ul>
+        <li><strong>Durable means outside the process.</strong> A Python variable is not a checkpoint; neither is a container's local disk. Production checkpoints live in Postgres, Redis, or an object store — <a href="ch061-checkpointing.html">ch61</a>'s lesson about checkpointer backends.</li>
+        <li><strong>Frequency follows cost.</strong> Checkpoint after <em>every</em> step: a step is expensive (an LLM call costs seconds and money), a checkpoint write costs milliseconds. The most you can lose is one step — and you know precisely where you stopped.</li>
+      </ul>
+      <p>In LangGraph clothing, this section is one argument and one config key:</p>
+
+      <div class="code-title">durability, the LangGraph way (recap of ch61)</div>
+      <pre><code class="language-python">from langgraph.checkpoint.memory import InMemorySaver  # dev only
+# production backends: langgraph-checkpoint-postgres / -redis / -sqlite
+
+graph = builder.compile(checkpointer=InMemorySaver())
+
+config = {"configurable": {"thread_id": "invoice-8801"}}
+graph.invoke({"task": "pay vendor invoice 8801"}, config)
+
+# process died? a fresh process resumes the same thread
+# by invoking again with the same thread_id
+graph.invoke(None, config)</code></pre>
+
+      <p>The same machinery made <a href="ch062-human-in-the-loop.html">human-in-the-loop pauses</a> possible: <code>interrupt()</code> parks the run as a checkpoint and <code>Command(resume=...)</code> continues it — days later, in a different process. To the checkpoint store, a pause and a crash are nearly the same event. One is just politer.</p>
+
+      <h2>Resume: a fresh process picks up the pen</h2>
+      <p><dfn>Resume</dfn> means a brand-new process loads the latest checkpoint and continues the task forward, with real effects. Done right, it is anticlimactic — read the register, find the next undone step, carry on. The subtlety is the gap you saw in the stepper: the <dfn>crash window</dfn> — after a tool's effect fires, before its checkpoint lands. A crash there means the resumed process will retry a step whose effect already happened.</p>
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>You cannot close the crash window by reordering. Checkpoint <em>before</em> the effect, and a crash between them leaves the register claiming a payment that never happened. Checkpoint <em>after</em>, and the payment happens without the register knowing. Distributed-systems people have proven you cannot get "exactly once" from ordering alone. The real fix is to make the retry itself harmless — the next section.</p></div>
+
+      <h2>The payment that must not fire twice</h2>
+      <p>An operation is <dfn>idempotent</dfn> if doing it twice leaves the world exactly as doing it once — so retries are free. Reading a balance is naturally idempotent. But the operations agents get hired for — send the payment, email the customer, create the ticket — are naturally <em>not</em>. Do them twice and the world is wrong twice.</p>
+      <p>The standard cure is the <dfn>idempotency key</dfn>: a unique ID attached to the effect, chosen <em>before</em> the first attempt, and honoured by the system that owns the effect. The payment API keeps a ledger of keys it has executed; a retry with the same key moves no money — the API returns the first attempt's recorded result. Stripe's <code>Idempotency-Key</code> header is the best-known example; serious payment, messaging, and ordering APIs all offer the same contract.</p>
+      <p>Together they give the guarantee production systems actually run on, sometimes called <em>effectively once</em>: retry whenever in doubt, make every effect idempotent, and the extra attempts collapse into no-ops. Checkpoints make retries <em>rare and precise</em>; idempotency keys make them <em>safe</em>. You need both.</p>
+      <p>Enough theory — crash a process yourself. The code below kills "process A" at the worst moment (after the money moved, before the checkpoint), then starts "process B" to resume. <code>DISK</code> stands in for the durable database, and a scripted plan for the model, like <code>fake_llm</code> in <a href="ch045-react-loop-by-hand.html">ch45</a>. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="Crash a payment run, resume it safely — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- The durable store. In production: Postgres / Redis. ----
+# It lives OUTSIDE any one process, so it survives every crash.
+DISK = {"checkpoint": None, "effect_ledger": {}}
+
+class Crash(Exception):
+    """Stands in for an OOM-kill, pod eviction, deploy, power cut."""
+
+# ---- Tools. One of them moves real money. --------------------
+def check_balance(arg):
+    return f"balance of {arg} is 9,000"
+
+def transfer(arg):
+    # arg looks like "acct-42/acct-77/1500/key-8801"
+    key = arg.split("/")[-1]
+    ledger = DISK["effect_ledger"]        # the payment system's
+    if key in ledger:                     # idempotency ledger
+        return ledger[key] + "  [key seen before: NOT re-executed]"
+    result = "MONEY MOVED: " + arg
+    ledger[key] = result                  # recorded with the effect
+    return result
+
+TOOLS = {"check_balance": check_balance, "transfer": transfer}
+
+# ---- A scripted 'model': the plan for this task ---------------
+PLAN = [
+    ("check_balance", "acct-42"),
+    ("transfer", "acct-42/acct-77/1500/key-8801"),
+    ("check_balance", "acct-77"),
+]
+
+def run_process(name, die_before_checkpointing_step=None):
+    print(f"=== {name} starts ===")
+    ckpt = DISK["checkpoint"]
+    step = 0 if ckpt is None else ckpt["next_step"]
+    if step:
+        print(f"    resumed: register says steps 0..{step-1} are done")
+    while step &lt; len(PLAN):
+        tool, arg = PLAN[step]
+        result = TOOLS[tool](arg)         # the effect happens HERE
+        print(f"    step {step}: {tool} -&gt; {result}")
+        if step == die_before_checkpointing_step:
+            raise Crash(f"{name} died before checkpointing step {step}")
+        DISK["checkpoint"] = {"next_step": step + 1}   # ink the register
+        step += 1
+    print(f"=== {name} finished the task ===\n")
+
+try:
+    run_process("process A", die_before_checkpointing_step=1)
+except Crash as boom:
+    print(f"    !! {boom}\n")
+
+run_process("process B")   # a fresh process, resuming cold
+
+print("payments actually executed:", len(DISK["effect_ledger"]))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now cause the disaster this chapter exists to prevent. Delete the two idempotency lines (<code>if key in ledger:</code> and the early return) and run again — process B moves the money twice. Then restore them and instead move the checkpoint write <em>above</em> the tool call: now the resumed process <em>skips</em> the transfer and the vendor is never paid. Every ordering fails somewhere; only the idempotency key makes the retry safe.</p></div>
+
+      <h2>The same loop, read like a reviewer</h2>
+      <p>Click through the lines that carry the design. Everything else is plumbing.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">durable_loop.py — the load-bearing lines</div>
+        <div class="wl-line"><code>DISK = {"checkpoint": None, "effect_ledger": {}}</code>
+          <div class="wl-note">One dictionary plays two roles a real system splits apart: the harness's checkpoint store (Postgres, usually) and the payment provider's idempotency ledger (theirs, not yours). Both outlive any single process.</div></div>
+        <div class="wl-line"><code>def transfer(arg):</code>
+          <div class="wl-note">The dangerous tool. Every tool in a production harness gets classified: read-only (safe to retry blindly) or effectful (needs an idempotency story before it ships).</div></div>
+        <div class="wl-line"><code>    if key in ledger:</code>
+          <div class="wl-note">The idempotency check — and note <em>where</em> it lives: inside the system that owns the effect. Your dying process cannot be trusted to remember what it did.</div></div>
+        <div class="wl-line"><code>    ledger[key] = result</code>
+          <div class="wl-note">The effect and its record are committed together, on the receiving side. Real payment APIs do this atomically in their own database — that is the service an idempotency key buys.</div></div>
+        <div class="wl-line"><code>    ckpt = DISK["checkpoint"]</code>
+          <div class="wl-note">Resume, in one line: the first thing any process does is read the register. Fresh start and crash recovery share one code path, so recovery is exercised every day — not just on bad ones.</div></div>
+        <div class="wl-line"><code>        result = TOOLS[tool](arg)</code>
+          <div class="wl-note">The effect fires here, one line before the checkpoint write below. Those milliseconds are the crash window — you cannot eliminate it, only make what happens inside it harmless.</div></div>
+        <div class="wl-line"><code>        if step == die_before_checkpointing_step:</code>
+          <div class="wl-note">The simulated OOM-kill, placed at the worst address in the file: after the money, before the ink. Chaos testing does this to staging environments on purpose.</div></div>
+        <div class="wl-line"><code>        DISK["checkpoint"] = {"next_step": step + 1}</code>
+          <div class="wl-note">Ink the register. In LangGraph this write is what the checkpointer does after every node (<a href="ch061-checkpointing.html">ch61</a>); in a durable-execution engine it is the journal append.</div></div>
+        <div class="wl-line"><code>run_process("process B")</code>
+          <div class="wl-note">Recovery is deliberately boring: start anywhere, read, continue. If your resume path needs a runbook and a senior engineer, it will fail you at 3 a.m.</div></div>
+      </div>
+
+      <h2>Replay: the flight recorder</h2>
+      <p>Resume answers "how do we finish the task?" <dfn>Replay</dfn> answers "show me exactly what happened" — re-walking a recorded run step by step <em>without touching the real world</em>. No LLM is called, no tool fires; the recorded outputs are read back in order, like a flight recorder, or the clerk's register under the inspector's lamp.</p>
+      <p>Replay has two customers, and both will find you eventually:</p>
+      <ul>
+        <li><strong>The debugger.</strong> "The agent did something weird on Tuesday" is an anecdote. With replay it becomes reproducible: load run 8801, step to turn 6, see which tool result nudged the model down the wrong branch. Without replay you are re-running a <em>non-deterministic</em> system (<a href="ch031-llms-vs-deterministic.html">ch31</a>: same input, different output) and hoping the ghost reappears.</li>
+        <li><strong>The auditor.</strong> Months later, someone official asks why the agent approved a transaction. The acceptable answer is a record: every prompt, model response, tool call and result, in order, tamper-evident. "We believe it followed the system prompt" is not a record.</li>
+      </ul>
+      <p>Replay's price is paid up front: record <em>everything non-deterministic</em> as it happens — model outputs, tool results, timestamps, random draws. Checkpoint stores that keep full history give you this for free; it is much of what <a href="ch088-observability.html">observability tooling</a>, three chapters from now, is built on.</p>
+
+      <h2>Durable-execution engines, in one picture</h2>
+      <p>Everything so far you could hand-build. But the pattern is so universal that a product category exists for it: <dfn>durable-execution engines</dfn> — systems that run your code as a journaled, crash-proof workflow. Temporal is the best-known; Restate and Azure Durable Functions play in the same space. Hold their one clever idea:</p>
+      <ul>
+        <li>You write the workflow as ordinary-looking code; every step with a side effect is marked as an <em>activity</em>.</li>
+        <li>The engine keeps a <dfn>journal</dfn> — an append-only log of every activity's result, written durably as the run proceeds.</li>
+        <li>After a crash, the engine re-runs your workflow code <em>from the top</em> on a fresh worker. Each activity call checks the journal first: already recorded? Return the recorded result instantly, executing nothing. The code fast-forwards to the exact point of death in milliseconds and keeps going.</li>
+      </ul>
+      <p>That trick is replay-as-resume, and it explains these engines' strict rule: workflow code must be deterministic — it is re-executed against the journal and must take the same branches every time. Model calls and tool calls — non-deterministic by nature — always live inside journaled activities.</p>
+      <p>Squint and the family resemblance shows: LangGraph's checkpointer snapshots state and continues <em>forward</em>; Temporal-style engines journal events and recover by <em>re-running against the record</em>. Different mechanics, identical promise — a death costs at most one step, and never costs you certainty about the world.</p>
+
+      <p>Before the bank walks in, pin the vocabulary:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">checkpoint</span><span class="flip-back">A durable snapshot of the run — history, plan, results — written outside the process after every step, before the next begins.</span></button>
+        <button class="flip" type="button"><span class="flip-front">resume</span><span class="flip-back">A fresh process loads the latest checkpoint and continues the task forward, with real effects. Boring by design.</span></button>
+        <button class="flip" type="button"><span class="flip-front">replay</span><span class="flip-back">Re-walking a recorded run step by step without touching the world — for debugging and audit, not for finishing the task.</span></button>
+        <button class="flip" type="button"><span class="flip-front">crash window</span><span class="flip-back">The gap after a tool's effect fires but before its checkpoint lands. Unclosable by ordering; survivable only via idempotency.</span></button>
+        <button class="flip" type="button"><span class="flip-front">idempotency key</span><span class="flip-back">A unique ID attached to an effect: a retry with the same key executes nothing and returns the first result.</span></button>
+        <button class="flip" type="button"><span class="flip-front">journal</span><span class="flip-back">An append-only log of every step's result. Durable-execution engines recover by re-running code against it, fast-forwarding past completed work.</span></button>
+      </div>
+
+      <h2>Why a bank will not negotiate on this</h2>
+      <p>Four reasons banks treat replayable runs as non-negotiable — only the first is about technology:</p>
+      <ul>
+        <li><strong>The effects are irreversible.</strong> A payment that fires twice is someone's money in the wrong place, a customer call, a manual reversal, sometimes a regulatory report. Idempotent effects with keys are the only "retry" a payments engineer will sign off on.</li>
+        <li><strong>Regulators demand reconstructable decisions.</strong> Supervisors require firms to explain and evidence automated decisions, and to retain the records for years. When an agent touches lending, payments, or trading, "replay run 8801" is the compliance answer; a system that cannot replay does not go live.</li>
+        <li><strong>Operational-resilience rules assume failure.</strong> Critical services must survive infrastructure failure; an in-flight transfer that evaporates with its process is a reportable incident, not bad luck.</li>
+        <li><strong>Disputes are settled by records.</strong> When a customer says "I never authorised this", the institution with the complete, ordered journal wins the argument. The one with "the logs rotated" writes the cheque.</li>
+      </ul>
+      <p>This is why an enterprise harness team asks durability questions before capability questions. A clever agent that loses in-flight state is a demo. A modest agent that checkpoints every step, resumes cleanly, retries idempotently, and replays on demand is a system a risk committee can approve. In a bank, only the second one ships — an ordering that is correct everywhere; banks just write it down.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will trip over this chapter everywhere. In LangGraph code: the <code>checkpointer=</code> argument to <code>.compile()</code> and <code>thread_id</code> in the invoke config. In enterprise repositories: Temporal or Durable Functions workflows wrapped around agent calls, and retry policies on every job queue. In API integrations: Stripe's <code>Idempotency-Key</code> header, or a homegrown <code>request_id</code> column with a unique constraint. In your own terminal: Claude Code's <code>--continue</code> and <code>--resume</code> flags are exactly this machinery, reviving a session from its saved transcript. And in merge requests, the giveaway phrases are "make this handler idempotent" and "what happens if this retries?" — you now know which clerk's register each one defends.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A run crashes <em>after</em> the transfer tool moved the money but <em>before</em> that step's checkpoint was written. On resume, the harness retries the step. What prevents a double payment?</p>
+          <div class="q-opts">
+            <button data-opt="a">The checkpoint store notices the retry and blocks it</button>
+            <button data-opt="b">The retry carries the same idempotency key, and the payment system returns the original result</button>
+            <button data-opt="c">The LLM reads the transcript, realises it already paid, and skips the step</button>
+          </div>
+          <p class="q-explain">The checkpoint store honestly believes the step never ran — that is the crash window. Only the system that owns the effect can catch the repeat; the idempotency key is how it recognises one. Trusting the model to notice is hope, not engineering.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. What is the difference between resume and replay?</p>
+          <div class="q-opts">
+            <button data-opt="a">They are two names for the same recovery mechanism</button>
+            <button data-opt="b">Replay is just a faster kind of resume</button>
+            <button data-opt="c">Resume continues the task forward with real effects; replay re-reads the recorded run without touching the world</button>
+          </div>
+          <p class="q-explain">Resume is for finishing work — a fresh process picks up from the last checkpoint and keeps acting. Replay is for understanding work — debugging and audit read the record back, and nothing real fires.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why checkpoint after every step instead of once at the end of the run?</p>
+          <div class="q-opts">
+            <button data-opt="a">A crash can land at any moment — per-step checkpoints cap the loss at one step and pinpoint where the run stopped</button>
+            <button data-opt="b">Frameworks require it before they will call any tool</button>
+            <button data-opt="c">It makes the final answer more accurate</button>
+          </div>
+          <p class="q-explain">A checkpoint written only at the end protects nothing — the crash, by definition, arrives before the end. Per-step writes cost milliseconds against LLM calls costing seconds and money.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Which of these tool calls is naturally idempotent — safe to retry with no extra machinery?</p>
+          <div class="q-opts">
+            <button data-opt="a">Send a reminder email to the customer</button>
+            <button data-opt="b">Read an account's current balance</button>
+            <button data-opt="c">Append a row to the transactions spreadsheet</button>
+          </div>
+          <p class="q-explain">Reading twice leaves the world identical to reading once. The email arrives twice and the spreadsheet grows two rows — both need an idempotency key (or a duplicate check) before an agent may retry them.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A durable-execution engine recovers from a crash by re-running the workflow code from the top. Why doesn't that double-execute steps that already ran?</p>
+          <div class="q-opts">
+            <button data-opt="a">It skips recovery for workflows that contain side effects</button>
+            <button data-opt="b">It pauses and asks a human operator which steps to skip</button>
+            <button data-opt="c">Completed steps are in the journal, so on re-run those calls return their recorded results instead of executing</button>
+          </div>
+          <p class="q-explain">That is the journal trick: re-execution fast-forwards through recorded results, reaches the point of death, and continues. It is also why workflow code must be deterministic — it must take the same path every replay.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Processes die routinely — deploys, evictions, OOM kills. Durability assumes the death and engineers the aftermath instead of trying to prevent it.</li>
+          <li>Checkpoint after every step, to a store that outlives the process: the maximum loss is one step, and you know exactly where the run stopped.</li>
+          <li>Resume is a fresh process reading the register and continuing forward — boring by design, sharing its code path with normal startup.</li>
+          <li>Checkpoints cannot close the crash window between an effect and its checkpoint; idempotency keys, honoured by the system that owns the effect, make retries safe. Together: effectively once.</li>
+          <li>Replay is the flight recorder: re-walking a recorded run without touching the world — turning "the agent did something weird" into a reproducible bug and an answerable audit question.</li>
+          <li>Durable-execution engines (Temporal and friends) industrialise the pattern with a journal and deterministic re-execution; banks make it all non-negotiable because their effects are irreversible and their regulators demand reconstructable decisions.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

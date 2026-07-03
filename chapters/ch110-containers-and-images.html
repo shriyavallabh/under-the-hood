@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Containers: shipping your agent in a box — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch110">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XIII · The Deployment Platform</div>
+        <h1>Containers: shipping your agent in a box</h1>
+        <p class="ch-tagline">Your agent runs beautifully on your laptop; now it must run identically on a cloud machine you will never touch. Meet the box that makes that possible — the Dockerfile line by line, the build-tag-push commands, and the registry where shipped agents wait.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 111 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your aunt's biryani is legendary. Relatives beg for the recipe, she gives it freely — and every single attempt fails. Different rice, a different pressure cooker, harder water, a substituted spice because "surely it's the same thing". The dish that emerges in Delhi tastes nothing like the one from her kitchen in Pune. Her verdict, delivered with a shrug: <em>"It works in my kitchen."</em></p>
+        <p>So she changes strategy. She stops shipping the recipe and starts shipping a <strong>sealed kit</strong>: the exact rice, every spice pre-measured, the precise amount of water in a pouch, even the right pot — plus one instruction taped on top: <em>"heat for 20 minutes"</em>. Now any kitchen on Earth produces the identical biryani, because the kit carries its whole world with it. She stacks finished kits in a warehouse; family members order one by name — <em>"biryani, version 3"</em> — whenever they want to cook.</p>
+        <p>The sealed kit is a <strong>container image</strong>. The steaming pot cooked from one is a <strong>container</strong>. The warehouse is a <strong>registry</strong>. This chapter is about building kits for your agent.</p>
+      </section>
+
+      <h2>The problem: "works on my machine"</h2>
+      <p>Start with a memory from <a href="ch020-environments-and-packaging.html">the environments chapter</a>: a virtual environment freezes your <em>Python packages</em> — the exact versions of <code>langchain</code>, <code>anthropic</code>, <code>pydantic</code> your agent was tested with. That solved dependency chaos on one machine. But a venv freezes only the bookshelf, not the room. It does not carry the Python interpreter itself, the operating system's shared libraries, the system tools your code shells out to, or the OS's certificate store that HTTPS quietly depends on.</p>
+      <p>The moment your agent leaves your laptop for a cloud machine, all of those loose ends bite. The server has Python 3.10 where you tested on 3.12. It is a different Linux flavour with a different version of the SSL library. Someone forgot one <code>pip install</code>. Your agent — the same loop you built in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> — crashes on a machine you cannot even log in to, at 2 a.m., for a reason that does not exist on your laptop.</p>
+      <p>A <dfn>container</dfn> is the fix: a way to run a program inside a sealed, self-sufficient box that carries <em>everything</em> the program needs — a miniature Linux filesystem, the exact Python, the exact packages, your code — so it behaves identically on any machine that can host the box. The "works on my machine" excuse dies here, because you ship the machine.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>You have actually met containers once before, wearing a different hat: in <a href="ch086-sandboxing.html">the sandboxing chapter</a> they were a wall that keeps an agent <em>in</em>. Here they are a box that carries an agent <em>out</em> — same technology, two superpowers: isolation and portability.</p></div>
+
+      <h2>Image vs container: the recipe kit and the cooked dish</h2>
+      <p>Two words carry this whole act, and people mix them up constantly. An <dfn>image</dfn> is the sealed kit: a frozen, read-only snapshot containing the OS files, Python, your dependencies, and your code — a file sitting on disk, doing nothing, costing nothing to keep. A container is what you get when you <em>run</em> an image: a live process cooked from that kit, with real memory, real CPU, real log output.</p>
+      <p>The relationship is one-to-many. From a single image you can start one container, or fifty identical ones — just as one warehouse of biryani kits can feed fifty kitchens tonight. When a container stops, the image is untouched, ready to be run again. When people say "deploy the agent", they mean: put the image somewhere reachable, then ask a machine to run containers from it. Hold that sentence; it is the entire deployment story of this act.</p>
+      <p>Flip these until each one feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">image</span><span class="flip-back">A frozen, read-only snapshot of everything your program needs — OS files, Python, packages, code. The sealed kit on the shelf.</span></button>
+        <button class="flip" type="button"><span class="flip-front">container</span><span class="flip-back">A running instance of an image — a live process with its own little filesystem and its own logs. The dish being cooked. One image, many containers.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Dockerfile</span><span class="flip-back">The build script that describes how to assemble an image, one instruction per line. The recipe used to manufacture the kit.</span></button>
+        <button class="flip" type="button"><span class="flip-front">layer</span><span class="flip-back">The result of one Dockerfile instruction, stacked like pancakes to form the image. Unchanged layers are reused from cache, which makes rebuilds fast.</span></button>
+        <button class="flip" type="button"><span class="flip-front">tag</span><span class="flip-back">The human-readable label on an image, like <code>agent:v1</code>. The part after the colon is the version; the part before can include the registry's address.</span></button>
+        <button class="flip" type="button"><span class="flip-front">registry</span><span class="flip-back">A server that stores and serves images by name — the warehouse. Docker Hub is the public one; Azure Container Registry is your team's private one.</span></button>
+      </div>
+
+      <h2>The Dockerfile, line by line</h2>
+      <p>A <dfn>Dockerfile</dfn> is a small script — usually six to ten lines, living at the root of the repository — that tells the <code>docker build</code> command how to assemble an image. Each line is one instruction, and the instructions read like a recipe: start from a base, set up the counter, add ingredients, state how to cook.</p>
+      <p>Here is a complete, production-shaped Dockerfile for the kind of small Python agent you built in Act V. This is not a toy — swap in your own file names and this exact shape ships real agents. Click each line:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">Dockerfile — at the root of your agent's repo</div>
+        <div class="wl-line"><code>FROM python:3.12-slim</code>
+          <div class="wl-note">Every image starts on the shoulders of another. <code>python:3.12-slim</code> is an official, publicly maintained image containing a minimal Linux plus Python 3.12 already installed — the pre-stocked kitchen you begin from. The <code>-slim</code> variant strips out compilers and extras you rarely need, so your final image is hundreds of megabytes smaller. Pinning <code>3.12</code> here is what finally freezes the interpreter version a venv never could.</div></div>
+        <div class="wl-line"><code>WORKDIR /app</code>
+          <div class="wl-note">Sets the working directory <em>inside</em> the image to <code>/app</code>, creating it if needed. Every later instruction — and your agent when it runs — starts from this folder. Think of it as <code>cd /app</code> made permanent.</div></div>
+        <div class="wl-line"><code>COPY requirements.txt .</code>
+          <div class="wl-note">Copies exactly one file from your repo into the image's <code>/app</code> (the <code>.</code> means "here, in the WORKDIR"). Why copy this one file alone, before everything else? Caching — the next section is entirely about this line's placement, and it is the single most-quoted Dockerfile trick in code review.</div></div>
+        <div class="wl-line"><code>RUN pip install --no-cache-dir -r requirements.txt</code>
+          <div class="wl-note">Executes a command <em>during the build</em>, baking its results into the image: pip reads the requirements file — the same pinned list from <a href="ch020-environments-and-packaging.html">ch20</a> — and installs every package permanently into the image's Python. This is usually the slowest line, easily 60–90 seconds. <code>--no-cache-dir</code> tells pip not to keep its download cache, which would only bloat the image.</div></div>
+        <div class="wl-line"><code>COPY . .</code>
+          <div class="wl-note">Now copy everything else — <code>agent.py</code>, your tools module, prompt files — from the repo into <code>/app</code>. A sibling file called <code>.dockerignore</code> (same idea as <code>.gitignore</code> from <a href="ch021-just-enough-git.html">ch21</a>) lists what to leave out: <code>.git</code>, <code>.venv</code>, <code>__pycache__</code>, and crucially <code>.env</code> — more on that danger shortly.</div></div>
+        <div class="wl-line"><code>CMD ["python", "agent.py"]</code>
+          <div class="wl-note">The instruction taped on top of the kit: <em>when someone runs this image, execute this command.</em> Nothing runs at build time — <code>CMD</code> only records the default start-up command for later. The bracket form is a JSON list: the program and each argument as separate strings, exactly the argument-splitting discipline you know from the command line.</div></div>
+      </div>
+
+      <p>Read the shape once more from a distance: <em>base, workdir, dependencies, install, code, start command</em>. Six lines, two halves — everything above <code>COPY . .</code> is the slow-changing world of dependencies; everything below is your fast-changing code. That split is deliberate, and here is why.</p>
+
+      <h2>Layers and the cache: why line order matters</h2>
+      <p>Each Dockerfile instruction produces a <dfn>layer</dfn> — a saved snapshot of what that step changed — and Docker stacks the layers to form the image. The payoff: when you rebuild, Docker walks the Dockerfile from the top and reuses any layer whose instruction <em>and inputs</em> have not changed. The first change it meets invalidates that layer and every layer below it.</p>
+      <p>Now the trick clicks. You edit <code>agent.py</code> fifty times a day; you touch <code>requirements.txt</code> once a fortnight. Because the requirements copy and the slow <code>pip install</code> sit <em>above</em> <code>COPY . .</code>, a code edit only rebuilds the cheap final layers — the 90-second install is served from cache. Put <code>COPY . .</code> first instead, and every one-line code tweak would re-run the whole install. Run the simulation and watch the cache do its work:</p>
+
+      <div class="pyrun" data-title="Docker's layer cache, simulated — run me">
+<textarea class="py-src" spellcheck="false">
+# A tiny simulation of Docker's layer cache.
+# Each instruction's layer id depends on the instruction text,
+# its input file contents, AND every layer above it.
+import hashlib
+
+def layer_id(chain, instruction, content):
+    key = chain + "|" + instruction + "|" + content
+    return hashlib.sha256(key.encode()).hexdigest()[:10]
+
+def build(label, files, cache):
+    print("docker build   #", label)
+    steps = [
+        ("FROM python:3.12-slim",             ""),
+        ("WORKDIR /app",                      ""),
+        ("COPY requirements.txt .",           files["requirements.txt"]),
+        ("RUN pip install -r requirements.txt  [SLOW ~90s]", ""),
+        ("COPY . .",                          files["agent.py"]),
+        ("CMD python agent.py",               ""),
+    ]
+    chain = ""
+    for instruction, content in steps:
+        chain = layer_id(chain, instruction, content)
+        status = "CACHED" if chain in cache else "build "
+        cache.add(chain)
+        print(f"  {status}  {instruction}")
+    print()
+
+cache = set()
+files = {"requirements.txt": "langchain==1.2",
+         "agent.py": "print('agent v1')"}
+
+build("first ever build: everything is new", files, cache)
+
+files["agent.py"] = "print('agent v2')"     # the daily case
+build("after editing agent.py only", files, cache)
+
+files["requirements.txt"] = "langchain==1.3"  # the fortnightly case
+build("after bumping requirements.txt", files, cache)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Try reordering the steps in the simulation — move the <code>COPY . .</code> tuple above the requirements pair — and rerun the "after editing agent.py" build. Watch the slow pip layer lose its CACHED status. You have just reproduced the most common Dockerfile review comment in existence.</p></div>
+
+      <h2>Build, run, tag</h2>
+      <p>Three commands take you from a Dockerfile to a running agent. First, the build:</p>
+
+      <div class="code-title">terminal — build the image</div>
+      <pre><code class="language-bash">docker build -t agent:v1 .</code></pre>
+      <p>Walk it word by word. <code>docker build</code> reads the Dockerfile and assembles the image, layer by layer, printing each step as it goes. <code>-t agent:v1</code> tags the result — names it <code>agent</code>, version <code>v1</code> — so you can refer to it later without quoting a 64-character id. The trailing <code>.</code> is easy to miss and mandatory: it says "build from the current folder", which is where Docker looks for the Dockerfile and the files that <code>COPY</code> pulls in.</p>
+      <p>Then, the run:</p>
+
+      <div class="code-title">terminal — cook a container from the kit</div>
+      <pre><code class="language-bash">docker run agent:v1
+docker run --env-file .env agent:v1</code></pre>
+      <p>Line one: <code>docker run agent:v1</code> creates a fresh container from the image and executes its <code>CMD</code> — your <code>python agent.py</code> starts, inside the box, and its output streams to your terminal. Line two is the version you will actually use: <code>--env-file .env</code> injects environment variables — your <code>ANTHROPIC_API_KEY</code> and friends, exactly the pattern from <a href="ch019-logging-config-env.html">the config chapter</a> — into the container <em>at start-up</em>. The key rides in through the door at runtime; it is never baked into the image.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Never <code>COPY</code> a <code>.env</code> file or hard-code an API key into an image. Layers are inspectable: anyone who can pull the image can read every file inside it, and registries keep old versions around for years. Secrets enter a container at runtime — via <code>--env-file</code> locally, and via proper secret stores and workload identity once you reach the cluster (a later chapter in this act). Put <code>.env</code> in <code>.dockerignore</code> today.</p></div>
+
+      <p>The third command, <code>docker tag</code>, looks anticlimactic and is the hinge of everything that follows:</p>
+
+      <div class="code-title">terminal — give the image its shipping address</div>
+      <pre><code class="language-bash">docker tag agent:v1 myagentsacr.azurecr.io/agent:v1</code></pre>
+      <p><code>docker tag</code> gives an existing image an additional name — no copying, no rebuilding, just a second label on the same kit. But look at the shape of the new name: it now <em>starts with a server address</em>. That prefix is how Docker knows where the image should be shipped. An image's full name has three parts:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Part</th><th>Example</th><th>Meaning</th></tr>
+        <tr><td>registry</td><td><code>myagentsacr.azurecr.io</code></td><td>Which warehouse — the server that stores it. Omitted = Docker Hub.</td></tr>
+        <tr><td>repository</td><td><code>agent</code></td><td>Which product — all versions of one image share a repository.</td></tr>
+        <tr><td>tag</td><td><code>v1</code></td><td>Which version. Omitted = <code>latest</code>, which you should treat with suspicion — it is whatever was pushed last, not necessarily newest or stable.</td></tr>
+      </table></div>
+
+      <h2>Registries: the library your images live in</h2>
+      <p>A <dfn>registry</dfn> is a server whose only job is to store images and hand them out by name — the warehouse in the biryani story, or a library where every book is a sealed machine. You already used one without noticing: <code>FROM python:3.12-slim</code> quietly downloaded that base image from <dfn>Docker Hub</dfn>, the big public registry. Anyone can pull public images from it; your company's agent, though, is not going on a public shelf.</p>
+      <p>Teams therefore run private registries, and since this act lives on Azure, ours is <dfn>Azure Container Registry</dfn> (ACR) — a private image warehouse inside your Azure subscription, next door to the Kubernetes cluster that will eventually pull from it. The full journey from laptop to warehouse looks like this:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Build">
+          <h3>1. Build — the kit is assembled on your laptop</h3>
+          <div class="diagram">
+            <div class="d-box hot">Dockerfile + code<small>docker build -t agent:v1 .</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">image agent:v1<small>on your laptop</small></div>
+            <div class="d-box dim">ACR<small>myagentsacr.azurecr.io</small></div>
+          </div>
+          <p class="step-cap">The build runs entirely on your machine. The resulting image exists only in your local Docker storage — nobody else can see it yet.</p>
+        </div>
+        <div class="step" data-title="Tag">
+          <h3>2. Tag — the kit gets a shipping address</h3>
+          <div class="diagram">
+            <div class="d-box">image agent:v1</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">myagentsacr.azurecr.io/agent:v1<small>same image, addressed name</small></div>
+            <div class="d-box dim">ACR</div>
+          </div>
+          <p class="step-cap">docker tag adds a name that starts with the registry's address. Docker reads the destination straight off the name — there is no separate "where to" flag on push.</p>
+        </div>
+        <div class="step" data-title="Login">
+          <h3>3. Login — prove you may use the warehouse</h3>
+          <div class="diagram">
+            <div class="d-box">laptop</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">az acr login<small>Azure hands Docker a short-lived credential</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">ACR<small>door unlocked</small></div>
+          </div>
+          <p class="step-cap">A private registry refuses strangers. az acr login uses your existing Azure session to fetch a temporary token and quietly configures Docker with it.</p>
+        </div>
+        <div class="step" data-title="Push">
+          <h3>4. Push — layers travel to the registry</h3>
+          <div class="diagram">
+            <div class="d-box">laptop</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">docker push<small>uploads layer by layer</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">ACR<small>agent:v1 stored</small></div>
+          </div>
+          <p class="step-cap">Push uploads each layer, skipping any the registry already holds — the same cache thinking as builds. From this moment the image is durable, shared, and independent of your laptop.</p>
+        </div>
+        <div class="step" data-title="Pull">
+          <h3>5. Pull — any machine can now cook the same dish</h3>
+          <div class="diagram">
+            <div class="d-box good">ACR<small>agent:v1</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">cloud machine<small>docker pull … then run</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">running container<small>identical everywhere</small></div>
+          </div>
+          <p class="step-cap">Any authorised machine — a teammate's laptop, a test server, and in the next chapters a Kubernetes cluster — pulls the image by name and runs bit-for-bit what you built. This pull is exactly what a cluster does when you deploy.</p>
+        </div>
+      </div>
+
+      <h2>Azure Container Registry: the commands</h2>
+      <p>Creating and using an ACR is four commands. You have already seen <code>az login</code> and resource groups earlier in this act — the registry is just another resource that lives inside one. Note the naming rule before you run anything: an ACR name must be globally unique across all of Azure, lowercase letters and digits only, because it becomes a public DNS name — <code>&lt;registry-name&gt;.azurecr.io</code>.</p>
+
+      <div class="code-title">terminal — create the registry (once, ever)</div>
+      <pre><code class="language-bash">az acr create --resource-group agents-rg --name myagentsacr --sku Basic</code></pre>
+      <p>Piece by piece: <code>az acr create</code> asks Azure to provision a container registry. <code>--resource-group agents-rg</code> files it inside the resource group you made earlier in the act — remember the hierarchy: subscription, then resource group, then resources. <code>--name myagentsacr</code> is the globally unique name; Azure will answer with your login server, <code>myagentsacr.azurecr.io</code>. <code>--sku Basic</code> picks the cheapest tier — Basic, Standard and Premium differ in storage and speed, and Basic is plenty while you learn.</p>
+
+      <div class="code-title">terminal — authenticate, address, push</div>
+      <pre><code class="language-bash">az acr login --name myagentsacr
+docker tag agent:v1 myagentsacr.azurecr.io/agent:v1
+docker push myagentsacr.azurecr.io/agent:v1</code></pre>
+      <p>Line one, <code>az acr login --name myagentsacr</code>: using your already-logged-in Azure identity, fetch a short-lived credential for this registry and hand it to Docker. It prints <code>Login Succeeded</code> and expires after a few hours — if a push suddenly fails with an authentication error tomorrow, rerun this line before suspecting anything deeper. Line two is the addressing step you met above. Line three, <code>docker push myagentsacr.azurecr.io/agent:v1</code>, reads the destination from the name and uploads the layers. When it finishes, your agent exists as a named, versioned artifact in your team's private library — pullable by any machine you authorise, whether or not your laptop is even switched on.</p>
+
+      <h2>The image IS the artifact</h2>
+      <p>Step back — this is the idea the rest of the act stands on. In <a href="ch021-just-enough-git.html">the git chapter</a> the thing teams shipped around was source code. From here on, it is not: <strong>the deployable unit is the image</strong>. Code review approves source; the pipeline then builds an image from it, pushes it to ACR, and everything downstream — test environments, staging, production — deploys <em>that exact image</em> by name and tag. Nobody re-installs packages on a server ever again; they pull the sealed kit.</p>
+      <p>This is why a CI pipeline's final, triumphant log line is not "tests passed" but <code>docker push …/agent:sha-4f2a91c</code> — teams commonly tag images with the git commit id, so every running container can be traced back to the exact source that produced it. Version <code>v1</code> misbehaving in production? Run <code>v0.9</code> again — the old kit is still on the shelf, unchanged, and rollback is just running yesterday's image. And when the next chapters put your agent into a Kubernetes pod, the manifest will contain one line that makes all of this click: <code>image: myagentsacr.azurecr.io/agent:v1</code>. The cluster is simply the fiftieth kitchen ordering the same kit.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open almost any deployable repo and look at the root: a <code>Dockerfile</code> and a <code>.dockerignore</code> sitting beside the code is the tell that "the artifact here is an image". In CI logs you will recognise the build's layer-by-layer output, the cache hits (<code>CACHED</code>), and the final push to a registry URL. In merge requests, "you broke the layer cache" means someone moved <code>COPY . .</code> above the dependency install; "pin the base image" means <code>FROM python:3.12-slim</code>, not <code>FROM python:latest</code>. And in incident channels, "which image is prod running?" is the first question asked — answered with a registry name and a tag, exactly the anatomy you can now read at a glance.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. You run <code>docker run agent:v1</code> three times. How many images and how many containers exist afterwards?</p>
+          <div class="q-opts">
+            <button data-opt="a">Three images, three containers — each run copies the image</button>
+            <button data-opt="b">Three images, one container — runs stack up inside one box</button>
+            <button data-opt="c">One image, three containers — the image is the frozen kit; each run cooks a fresh dish from it</button>
+          </div>
+          <p class="q-explain">The image is read-only and untouched by running it. Every <code>docker run</code> creates a new, independent container from that same image — one recipe kit, many dishes.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Why does the Dockerfile copy <code>requirements.txt</code> and run <code>pip install</code> <em>before</em> copying the rest of the code?</p>
+          <div class="q-opts">
+            <button data-opt="a">Python refuses to install packages after application code is present</button>
+            <button data-opt="b">Layer caching — code changes daily, dependencies rarely, so the slow install layer stays cached across everyday rebuilds</button>
+            <button data-opt="c">Security — dependencies must be isolated from the application code</button>
+          </div>
+          <p class="q-explain">Docker reuses cached layers from the top until the first change. With the install above <code>COPY . .</code>, editing <code>agent.py</code> only rebuilds the cheap bottom layers; the 90-second pip layer is served from cache.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. How does <code>docker push</code> know to send your image to Azure Container Registry rather than Docker Hub?</p>
+          <div class="q-opts">
+            <button data-opt="a">The destination is baked into the image's name — the <code>myagentsacr.azurecr.io/</code> prefix added by <code>docker tag</code></button>
+            <button data-opt="b">A <code>--registry</code> flag passed to the push command</button>
+            <button data-opt="c">Whatever registry you most recently logged in to becomes the default</button>
+          </div>
+          <p class="q-explain">There is no destination flag. The registry address travels inside the name itself — that is why the seemingly boring <code>docker tag</code> step is mandatory before pushing to a private registry.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. You already used virtual environments (ch20). What does a container freeze that a venv cannot?</p>
+          <div class="q-opts">
+            <button data-opt="a">Nothing — a container is just a venv with a scarier name</button>
+            <button data-opt="b">Only the API keys, which venvs famously leak</button>
+            <button data-opt="c">The whole room: the OS files, system libraries, and the Python interpreter itself — not just the Python packages</button>
+          </div>
+          <p class="q-explain">A venv pins packages against whatever Python and OS happen to be on the machine. An image carries a miniature Linux filesystem, the exact interpreter, the packages, and your code — which is why it runs identically anywhere.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. In a container-based team, what exactly does CI hand over for deployment when a change is approved?</p>
+          <div class="q-opts">
+            <button data-opt="a">The git repository, which each server clones and pip-installs</button>
+            <button data-opt="b">A named, tagged image pushed to the registry — the sealed artifact every environment pulls and runs</button>
+            <button data-opt="c">A zip file of the source code, emailed to the operations team</button>
+          </div>
+          <p class="q-explain">The image is the artifact. CI builds it once, tags it (often with the git commit id), and pushes it to the registry; every environment then runs that identical image — and rollback is just running an older tag.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>An image is the frozen, read-only kit — OS files, Python, packages, code; a container is a live process cooked from it. One image, many containers.</li>
+          <li>Containers finish the job venvs started: they freeze the <em>whole room</em> — interpreter, system libraries, everything — so your agent runs identically on any machine.</li>
+          <li>The Dockerfile reads base, workdir, dependencies, install, code, start command — and dependencies go above <code>COPY . .</code> so the layer cache spares you the slow install on everyday code edits.</li>
+          <li><code>docker build -t</code> makes the image, <code>docker run</code> starts a container from it, and <code>docker tag</code> prefixes the registry address that tells <code>docker push</code> where to ship.</li>
+          <li>On Azure the private warehouse is ACR: <code>az acr create</code> once, <code>az acr login</code> per session, then push to <code>&lt;registry-name&gt;.azurecr.io/agent:v1</code>.</li>
+          <li>Secrets never go inside the image — they enter at runtime via environment variables or secret stores, because image layers are readable by anyone who can pull them.</li>
+          <li>The image is the artifact CI ships: environments pull a named tag, rollback is running an older one, and the Kubernetes manifests ahead will reference exactly this registry path.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

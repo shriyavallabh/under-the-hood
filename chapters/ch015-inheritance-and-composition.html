@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inheritance, composition, and framework style — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch015">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act II · The Engineering Layer</div>
+        <h1>Inheritance, composition, and framework style</h1>
+        <p class="ch-tagline">Why framework code says <code>class MyAgent(BaseAgent)</code>, what <code>super()</code> actually does, and a five-step method for reading any class hierarchy without drowning in it.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 15 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Twenty years ago a woman in Pune perfected a dosa. Today her name is on three hundred franchise outlets, and every new franchisee receives the same fat operating manual from head office: how to open, how to clean, how to bill, how to greet, how to close. A new outlet does not write its own manual. It <em>inherits</em> head office's — and then rewrites exactly one page, because their neighbourhood likes a spicier chutney. The staff rule is simple: if your outlet has its own version of a page, follow yours; for every other page, follow head office's.</p>
+        <p>The smartest franchisees who rewrite a page still open it with "first do everything head office says, <em>then</em> add our step". And notice what the outlet does <em>not</em> inherit: the billing machine. Nobody writes "how to be a billing machine" into the manual — the outlet simply <em>has</em> one, bought off the shelf, replaceable tomorrow without retraining a single cook. Hold those three moves in your head — inherit the manual, override one page, own the machine — and you already understand inheritance, method overriding, and composition. The rest of this chapter is just spelling.</p>
+      </section>
+
+      <h2>The parentheses in a class line are a family tree</h2>
+      <p>You have just spent two chapters inside classes — building objects with <code>__init__</code> and meeting the dunder handshakes Python uses behind the scenes. One small piece of syntax was quietly waiting: the parentheses in a class definition. When you read</p>
+
+      <div class="code-title">the single most common line in framework code</div>
+      <pre><code class="language-python">class InvoiceAgent(BaseAgent):
+    ...</code></pre>
+
+      <p>the parentheses do not mean "call BaseAgent" the way they do after a function name (<a href="ch007-functions.html">chapter 7</a>). Here they declare parentage: <em>InvoiceAgent is a kind of BaseAgent</em>. This is <dfn>inheritance</dfn> — a class receives every method and attribute of another class automatically, without copying a single line. <code>BaseAgent</code> is the <dfn>base class</dfn> (also called the parent or superclass) — the head-office manual. <code>InvoiceAgent</code> is the <dfn>subclass</dfn> (the child) — the new outlet, which gets the whole manual for free and only writes down what it does differently.</p>
+      <p>That is the entire reason frameworks are usable at all. The authors of an agent framework write thousands of lines of hard machinery — retries, streaming, callbacks, message formatting — once, in a base class. You subclass it, write the ten lines that are specific to <em>your</em> situation, and inherit the rest. When you see a tiny class in a repository doing apparently enormous things, this is the trick: the class is small because its parents are large.</p>
+      <p>Six words carry this chapter. Flip each card until the back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">base class</span><span class="flip-back">The parent. The head-office manual: shared behaviour written once, handed to every child class for free.</span></button>
+        <button class="flip" type="button"><span class="flip-front">subclass</span><span class="flip-back">The child. Declared with parentheses — class Child(Parent) — it inherits everything and writes down only its differences.</span></button>
+        <button class="flip" type="button"><span class="flip-front">override</span><span class="flip-back">A subclass defining a method that already exists on the parent. The child's version wins — like the outlet's own chutney page.</span></button>
+        <button class="flip" type="button"><span class="flip-front">super()</span><span class="flip-back">"Also run the parent's version." Most often seen as super().__init__(...) so the parent's setup happens before yours.</span></button>
+        <button class="flip" type="button"><span class="flip-front">composition</span><span class="flip-back">Having instead of being. An object stores another object as an attribute (the billing machine) and delegates work to it. Swap it any time.</span></button>
+        <button class="flip" type="button"><span class="flip-front">abstract base class</span><span class="flip-back">A base class with declared-but-empty methods. It refuses to be instantiated until a subclass fills in the blanks — a form with mandatory fields.</span></button>
+      </div>
+
+      <h2>Run it: one base class, two personalities</h2>
+      <p>Here is a miniature version of what every model-wrapper base class in every framework does. The base class owns the machinery every model shares — counting calls, tidying output. Each subclass overrides exactly one method, <code>_reply</code>, the way an outlet rewrites one page. Press <strong>Run</strong>, then read the code top to bottom.</p>
+
+      <div class="pyrun" data-title="Inheritance, super(), and overriding — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- The base class: shared machinery, written once ---------
+class ChatModel:
+    def __init__(self, name):
+        self.name = name
+        self.calls = 0
+
+    def invoke(self, prompt):
+        # The public method everyone calls. It never changes.
+        self.calls += 1
+        raw = self._reply(prompt)
+        return f"[{self.name}] {raw.strip()}"
+
+    def _reply(self, prompt):
+        # The hook. Subclasses MUST override this.
+        raise NotImplementedError("subclass must implement _reply")
+
+# ---- Subclass 1: adds its own setup, overrides the hook -----
+class ScriptedModel(ChatModel):
+    def __init__(self, name, script):
+        super().__init__(name)      # parent's setup runs FIRST
+        self.script = list(script)  # then our own extra attribute
+
+    def _reply(self, prompt):
+        return self.script.pop(0) if self.script else "(silence)"
+
+# ---- Subclass 2: three lines, yet a complete chat model -----
+class EchoModel(ChatModel):
+    def _reply(self, prompt):
+        return prompt.upper() + "!"
+
+models = [
+    ScriptedModel("scripted", ["Namaste!", "The total is 1500."]),
+    EchoModel("echo"),
+]
+for m in models:
+    print(m.invoke("hello there"))
+    print(m.invoke("what is the total?"))
+    print(m.name, "handled", m.calls, "calls so far")
+    print()
+</textarea>
+      </div>
+
+      <p>Three things to notice, because they are the shape of every framework you will ever read:</p>
+      <p><strong>First, the subclasses never define <code>invoke</code>, yet you called it on both.</strong> When Python cannot find a method on an object's own class, it climbs to the parent and looks there, then the grandparent, all the way up. The formal name for that climbing order is the <dfn>method resolution order</dfn> — the queue Python consults, child first, then ancestors — but "look upwards until you find it" is ninety percent of the truth.</p>
+      <p><strong>Second, <code>ScriptedModel.__init__</code> begins with <code>super().__init__(name)</code>.</strong> <code>super()</code> means "the version of this method from my parent". Overriding <code>__init__</code> <em>replaces</em> the parent's setup entirely — so if you forget that line, <code>self.name</code> and <code>self.calls</code> simply never get created, and some innocent line far away crashes later with <code>AttributeError</code>. This is one of the most common bugs in subclass code, and now you can spot it in review: <em>an overridden <code>__init__</code> with no <code>super().__init__</code> call is a raised eyebrow.</em></p>
+      <p><strong>Third, the base class's <code>_reply</code> exists only to raise <code>NotImplementedError</code>.</strong> That is a deliberate design move called a <dfn>hook</dfn> — a method the base class declares but expects children to fill in. The base owns the skeleton (<code>invoke</code>), the child fills one hole (<code>_reply</code>). Framework authors call this the template-method pattern; you can just call it "the manual and the chutney page".</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it on purpose. Delete the <code>super().__init__(name)</code> line and run again — read the <code>AttributeError</code> carefully, because you will meet it in real logs. Then add a third subclass, <code>PoliteModel</code>, whose <code>_reply</code> returns <code>"With respect: " + prompt</code>. If it works on the first try, inheritance has clicked.</p></div>
+
+      <h2>Reading a framework subclass in the wild</h2>
+      <p>Now let's read the real thing — the kind of file you will find in production agent repositories everywhere. A team wants to use its company's internal model gateway with a LangChain-style framework, so they wrap it in a custom model class. This is lightly simplified from real code (hook names vary slightly between framework versions — the <em>pattern</em> is the lesson). Click the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">chat_acme.py — a custom model, framework style</div>
+        <div class="wl-line"><code>from langchain_core.language_models.chat_models import BaseChatModel</code>
+          <div class="wl-note">The import tells you the family this class is marrying into. <code>BaseChatModel</code> is the framework's head-office manual for "things that behave like a chat model".</div></div>
+        <div class="wl-line"><code>class ChatAcme(BaseChatModel):</code>
+          <div class="wl-note">The headline. Read it aloud as "ChatAcme IS A BaseChatModel". Everything the framework knows how to do with a chat model — invoke it, stream it, retry it, plug it into an agent — it can now do with ChatAcme, sight unseen.</div></div>
+        <div class="wl-line"><code>    model_name: str = "acme-large"</code>
+          <div class="wl-note">Configuration declared as class-level fields — this base class uses the style you will study properly next chapter (type hints and Pydantic). For now: these are the knobs a user can set when creating the object.</div></div>
+        <div class="wl-line"><code>    temperature: float = 0.2</code></div>
+        <div class="wl-line"><code>    @property</code></div>
+        <div class="wl-line"><code>    def _llm_type(self):</code>
+          <div class="wl-note">A tiny required hook: the framework asks every model "what kind are you?" for logging and tracing. One honest string and you are done.</div></div>
+        <div class="wl-line"><code>        return "chat-acme"</code></div>
+        <div class="wl-line"><code>    def _generate(self, messages, stop=None, **kwargs):</code>
+          <div class="wl-note">The chutney page. The base class's public <code>invoke</code> handles callbacks, retries, and message plumbing, then calls THIS hook to do the actual model call. Override one underscore method and the whole framework machine runs through your gateway.</div></div>
+        <div class="wl-line"><code>        payload = to_acme_format(messages)</code>
+          <div class="wl-note">Ordinary code — translate the framework's message objects into whatever the internal gateway expects. Helper functions like this live in the same file, and they are just functions.</div></div>
+        <div class="wl-line"><code>        raw = acme_gateway_call(self.model_name, payload)</code>
+          <div class="wl-note">The only line that touches the outside world. Note it reads <code>self.model_name</code> — the field declared at the top, inherited machinery filling it in from whatever the user passed.</div></div>
+        <div class="wl-line"><code>        return to_chat_result(raw)</code>
+          <div class="wl-note">Translate the gateway's answer back into the framework's expected return shape. Fifteen lines total, and ChatAcme now works everywhere the framework works.</div></div>
+      </div>
+
+      <p>Here is the punchline, and it resolves a mystery you have probably shrugged past a hundred times: <strong>this class has no <code>invoke</code> method, yet every tutorial calls <code>ChatAcme().invoke(...)</code>.</strong> The <code>invoke</code> everyone calls lives on an ancestor. The subclass is not where the action is — it is where the <em>differences</em> are. Which raises the practical question: when you need to find where the action actually lives, how do you climb a five-storey class hierarchy without getting lost?</p>
+
+      <h2>How to read a class hierarchy without drowning</h2>
+      <p>A real <code>BaseChatModel</code>-like chain is several classes deep: your class, on top of a base model class, on top of a general language-model class, on top of a runnable-things class, on top of <code>object</code> — the silent ancestor of every Python class. Newcomers open the base class file, see two thousand lines, and despair. Don't. You are never supposed to read a hierarchy top to bottom like a novel. You read it like a detective with one question. Step through the method:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Start at your class">
+          <h3>1. Start at the class in front of you</h3>
+          <div class="diagram">
+            <div class="d-box hot">ChatAcme<small>your file, ~15 lines</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">BaseChatModel</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">BaseLanguageModel</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Runnable</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">object</div>
+          </div>
+          <p class="step-cap">Read the class you actually have, in full. It is usually shockingly small — a few fields and one or two overridden methods. Whatever it defines is the custom behaviour; everything else is stock.</p>
+        </div>
+        <div class="step" data-title="Read the parentheses">
+          <h3>2. The parentheses are the promise</h3>
+          <div class="diagram">
+            <div class="d-box">ChatAcme<small>(BaseChatModel)</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">BaseChatModel<small>"I behave like a chat model"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">BaseLanguageModel</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Runnable</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">object</div>
+          </div>
+          <p class="step-cap">Climb exactly one level. The parent's name tells you the contract: anything the framework can do with a BaseChatModel, it can do with yours. You rarely need to read the parent's code — its name and docstring carry most of the meaning.</p>
+        </div>
+        <div class="step" data-title="Hunt one method">
+          <h3>3. Hunt for the ONE method you care about</h3>
+          <div class="diagram">
+            <div class="d-box dim">ChatAcme<small>no def invoke here</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">BaseChatModel<small>def invoke found!</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">BaseLanguageModel</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Runnable<small>declares the contract</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">object</div>
+          </div>
+          <p class="step-cap">Wondering what invoke really does? Search each level for "def invoke", child first, climbing until it appears — the first definition you meet is the one that runs, exactly as Python itself resolves it. In this chain the working version sits in the base model layer, fulfilling a promise an ancestor declared.</p>
+        </div>
+        <div class="step" data-title="Find the hooks">
+          <h3>4. Find the hooks — the fill-in-the-blank methods</h3>
+          <div class="diagram">
+            <div class="d-box good">ChatAcme<small>overrides _generate</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">BaseChatModel<small>invoke calls _generate</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">BaseLanguageModel</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Runnable</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">object</div>
+          </div>
+          <p class="step-cap">Base classes usually split into a public face (invoke, stream) and underscore hooks (_generate, _reply) that the public face calls. The hooks are where subclasses plug in. Once you spot the hook pattern, a two-thousand-line base class collapses into "public skeleton up top, holes for children below".</p>
+        </div>
+        <div class="step" data-title="Stop climbing">
+          <h3>5. Stop. Seriously — stop.</h3>
+          <div class="diagram">
+            <div class="d-box good">ChatAcme</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">BaseChatModel</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">BaseLanguageModel<small>plumbing</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Runnable<small>plumbing</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">object<small>the top of every chain</small></div>
+          </div>
+          <p class="step-cap">Everything above the layer that answered your question is plumbing — serialisation, batching, callback wiring. You do not need it today. Drowning in hierarchies is almost always self-inflicted: the reader kept climbing after their question was already answered.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Two power moves for step 3. In any editor, "Go to definition" on a method call jumps you straight to the level that defines it — the climb, automated. And in a pinch, <code>print(ChatAcme.__mro__)</code> prints the full parent chain in resolution order, one of those dunder handshakes from last chapter doing honest work. You may also meet a class line with several parents — <code>class ChatAcme(SerialisableMixin, BaseChatModel)</code>. Those extra parents are usually <em>mixins</em>: small bolt-on ability packs. Read them left to right and do not panic; the hunt-one-method technique works unchanged.</p></div>
+
+      <h2>Composition: the billing machine, not the manual</h2>
+      <p>Inheritance answers "what <em>kind</em> of thing is this?" But look back at the story: the outlet's billing machine was never part of the manual. The outlet simply <em>has</em> one. That is <dfn>composition</dfn> — building an object by giving it other objects as attributes and delegating work to them, rather than by being a subclass of them. Inheritance is <em>is-a</em>; composition is <em>has-a</em>. Run the difference:</p>
+
+      <div class="pyrun" data-title="Composition — swap the engine without touching the car">
+<textarea class="py-src" spellcheck="false">
+# The agent HAS a model. It is not a KIND of model.
+class ScriptedModel:
+    def __init__(self, script):
+        self.script = list(script)
+    def invoke(self, prompt):
+        return self.script.pop(0)
+
+def clock_tool():
+    return "09:30 sharp"
+
+class Agent:
+    def __init__(self, model, tools):
+        self.model = model     # has-a model
+        self.tools = tools     # has-a toolbox (a plain dict)
+
+    def run(self, task):
+        reply = self.model.invoke(task)
+        if reply.startswith("CALL "):
+            name = reply.split()[1]
+            result = self.tools[name]()
+            return f"(via tool {name}) {result}"
+        return reply
+
+# Wire the parts together:
+model = ScriptedModel(["CALL clock"])
+agent = Agent(model, {"clock": clock_tool})
+print("agent 1:", agent.run("When is the meeting?"))
+
+# Now swap the engine. Agent's code does not change AT ALL:
+direct = ScriptedModel(["Half past nine, and do not be late."])
+agent2 = Agent(direct, {})
+print("agent 2:", agent2.run("When is the meeting?"))
+</textarea>
+      </div>
+
+      <p>The <code>Agent</code> class never inherits from <code>ScriptedModel</code>. It receives a model in <code>__init__</code>, stores it on <code>self</code>, and calls <code>self.model.invoke(...)</code> when needed — exactly the shape of the ReAct loop you will build by hand in <a href="ch045-react-loop-by-hand.html">chapter 45</a>. Because the agent only cares that its model <em>has an <code>invoke</code> method</em>, you can hand it any object that does: a real API-backed model, a cached one, a scripted fake for tests. Swapping takes one line at construction time. With inheritance, changing your parent means changing your class definition — surgery. With composition, changing a part means passing a different argument — a plug.</p>
+      <p>This is why the design proverb says <strong>prefer composition over inheritance</strong>. Inheritance is a powerful, rigid bond: the child is coupled to every detail of its ancestors forever. Composition is a loose, swappable bond. Modern agent frameworks lean heavily on it — when LangChain code calls <a href="ch054-create-agent.html"><code>create_agent</code></a> with a model and a list of tools, nothing there subclasses anything of yours. The agent <em>has</em> a model and <em>has</em> tools, and you compose the parts like Lego. The rule of thumb worth memorising: subclass when the framework explicitly asks you to fill in its hooks; compose for everything you might ever want to swap.</p>
+
+      <h2>Abstract base classes: forms with mandatory fields</h2>
+      <p>One refinement and the toolkit is complete. Our <code>ChatModel._reply</code> raised <code>NotImplementedError</code> when called — a polite hint, but it only fires <em>if and when</em> someone calls the missing method, possibly hours into a run. Python offers a stricter contract: the <dfn>abstract base class</dfn> (ABC) — a base class that declares certain methods as mandatory and refuses to create any instance of a subclass until they are all implemented.</p>
+
+      <div class="code-title">abc — the strict version of a hook</div>
+      <pre><code class="language-python">from abc import ABC, abstractmethod
+
+class BaseNotifier(ABC):
+    @abstractmethod
+    def send(self, message):
+        """Every notifier must know how to send."""
+
+class TelegramNotifier(BaseNotifier):
+    def send(self, message):
+        print("sending:", message)
+
+TelegramNotifier().send("Invoice 42 is paid")   # works
+
+class LazyNotifier(BaseNotifier):               # forgot send()
+    pass
+
+# LazyNotifier()  -&gt; TypeError, immediately, at creation time:
+# "Can't instantiate abstract class LazyNotifier..."</code></pre>
+
+      <p>The <code>@abstractmethod</code> marker (a decorator — the machinery behind that <code>@</code> sign gets its own chapter in <a href="ch017-decorators.html">chapter 17</a>) turns "please override this" into "you <em>cannot even construct</em> the object until you do". The failure moves from some random moment at runtime to the instant of creation — loud, early, and easy to fix. When you meet <code>ABC</code> and <code>@abstractmethod</code> in a framework's source, read them as a signpost, because that is what library authors use them for: <em>these are exactly the methods you must implement; everything else is optional.</em> An abstract base class is the framework handing you the form with the mandatory fields highlighted.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Grep any serious Python repository for <code>class </code> and watch the three moves of this chapter appear everywhere. Framework-facing code subclasses to fill hooks: a custom chat model overriding <code>_generate</code>, a Pydantic <code>class Settings(BaseModel)</code> in every config file you will ever open (next chapter's star). Application code composes: an agent constructed from a model, a tool list, and a checkpointer — three swappable parts, no subclassing. deepagents even ships composition as a feature: its file backends (StateBackend, FilesystemBackend, CompositeBackend) are interchangeable parts you hand to <code>create_deep_agent</code>. And in merge-request comments you will now decode the dialect instantly: "push this up into the base class" (three children duplicate a method — move it to the parent), "prefer composition here" (you subclassed something you should have stored as an attribute), and "you forgot to call super()" (the AttributeError you met earlier, caught in review before it hit production).</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A repository contains <code>class InvoiceAgent(BaseAgent):</code>. What does this line mean?</p>
+          <div class="q-opts">
+            <button data-opt="a">InvoiceAgent calls the function BaseAgent and stores the result</button>
+            <button data-opt="b">InvoiceAgent is a kind of BaseAgent — it inherits all of BaseAgent's methods unless it overrides them</button>
+            <button data-opt="c">BaseAgent is stored inside InvoiceAgent as an attribute it can swap later</button>
+          </div>
+          <p class="q-explain">Parentheses in a <em>class</em> line declare a parent, not a call. InvoiceAgent gets BaseAgent's whole manual for free and writes down only its differences. Option c describes composition — a different, looser relationship.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Inside a subclass's <code>__init__</code>, what is <code>super().__init__(name)</code> for?</p>
+          <div class="q-opts">
+            <button data-opt="a">It restarts the object from scratch, clearing all attributes</button>
+            <button data-opt="b">It runs the parent's version of __init__ so the parent's setup still happens before the child adds its own</button>
+            <button data-opt="c">It is mandatory syntax that every Python class must include</button>
+          </div>
+          <p class="q-explain">Overriding a method replaces the parent's version entirely. super() reaches back up and runs the parent's version too — skip it in __init__ and the parent's attributes silently never exist, crashing later with AttributeError.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. You call <code>model.invoke("hi")</code> on a ChatAcme object, but the ChatAcme class contains no <code>def invoke</code>. What happens?</p>
+          <div class="q-opts">
+            <button data-opt="a">Python raises AttributeError — the method does not exist</button>
+            <button data-opt="b">Python climbs the parent chain and runs the first invoke it finds</button>
+            <button data-opt="c">invoke is built into every Python object automatically</button>
+          </div>
+          <p class="q-explain">Method lookup walks the family tree — child first, then each ancestor in order (the method resolution order) — and the first match runs. That is why a fifteen-line subclass can respond to dozens of methods it never wrote.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. An agent is built as <code>Agent(model=ChatAcme(), tools=[search, calculator])</code> and stores both on <code>self</code>. Which relationship is this?</p>
+          <div class="q-opts">
+            <button data-opt="a">Inheritance — Agent is a kind of ChatAcme</button>
+            <button data-opt="b">Overriding — Agent replaces ChatAcme's methods</button>
+            <button data-opt="c">Composition — Agent has a model and has tools, and either can be swapped without editing the Agent class</button>
+          </div>
+          <p class="q-explain">Receiving parts in the constructor and storing them as attributes is has-a, not is-a. That looseness is the point: hand the same Agent a fake scripted model in tests and a real one in production, zero code changes.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. A base class marks <code>send</code> with <code>@abstractmethod</code>. A subclass forgets to implement it. When does Python complain?</p>
+          <div class="q-opts">
+            <button data-opt="a">Immediately when the file is imported</button>
+            <button data-opt="b">The moment you try to create an instance of the incomplete subclass — TypeError</button>
+            <button data-opt="c">Only if send is eventually called on the object</button>
+          </div>
+          <p class="q-explain">That is the whole value of ABCs: the failure fires at construction time, loud and early, instead of lurking until some code path finally calls the missing method mid-run. Option c describes the weaker raise-NotImplementedError style.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li><code>class Child(Parent)</code> means <em>is-a</em>: the child inherits every method and attribute of the parent and overrides only what it does differently — the franchise manual with one rewritten page.</li>
+          <li><code>super()</code> means "also run the parent's version". An overridden <code>__init__</code> without <code>super().__init__(...)</code> silently skips the parent's setup — a classic bug you can now catch in review.</li>
+          <li>Frameworks follow the hook pattern: a big public method in the base class (<code>invoke</code>) calls small underscore hooks (<code>_generate</code>) that your subclass fills in. Small subclass, large inherited machinery.</li>
+          <li>To read a hierarchy: read your class fully, treat the parent's name as a contract, hunt one method at a time up the chain, find the hooks — then stop climbing.</li>
+          <li>Composition (<em>has-a</em>) beats inheritance for anything you might swap: store parts as attributes and delegate, the way an agent has a model and has tools. Subclass only when a framework asks you to fill its hooks.</li>
+          <li>Abstract base classes turn "please override this" into "you cannot construct the object until you do" — the framework's way of highlighting the mandatory fields.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

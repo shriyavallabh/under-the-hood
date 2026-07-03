@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory and the context problem — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch047">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act V · Agents From Scratch</div>
+        <h1>Memory and the context problem</h1>
+        <p class="ch-tagline">Your agent's memory is a Python list you keep appending to. This chapter is about the day that list outgrows the model's world — and the three tricks every harness uses to survive it.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 48 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>At eight every evening, the day doctor on a busy hospital ward hands over to the night doctor. The night doctor was not there for anything that happened earlier — she has no memory of the morning rounds, the test results, the family's anxious questions. Everything she will ever know about a patient arrives on one sheet of paper: the handover sheet. Early in a patient's stay this works beautifully. But by week three the notes would fill a novel, and the sheet is still one page. So the ward has rewriting rules: today's vitals stay word for word, the last three days stay detailed, and everything older is squeezed into two lines at the top — <em>"Admitted 14 May, appendix removed, recovery normal until Tuesday."</em> Whatever the rewrite drops, the night doctor simply does not know. As far as she is concerned, it never happened.</p>
+        <p>Your agent lives on this ward. The model is a brilliant doctor with total amnesia between shifts. The conversation history is the handover sheet. The context window is the size of the paper. And the rewriting rules — what to keep verbatim, what to squeeze, what to drop — are what this chapter teaches you to write.</p>
+      </section>
+
+      <h2>The transcript is the world</h2>
+      <p>In <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> you built a complete agent: a <code>history</code> list that started with the task, a loop that sent the <em>whole</em> list to the model every turn, and two <code>append</code> calls — one for whatever the model said, one for each tool observation. That list was the agent's entire memory. Nothing else existed. If a fact was in the list, the agent "knew" it; if it was not, the agent had never heard of it.</p>
+      <p>The reason is a property worth naming properly. An LLM is <dfn>stateless</dfn> — between one API call and the next, it retains absolutely nothing, like our night doctor between shifts. There is no hidden account where the provider stores "what this model has discussed with you". Every call starts from a blank brain plus whatever messages you send. So when an operator says "the agent remembered the client's budget", the mechanical truth is: <em>the budget was still present in the messages that got sent</em>. When they say "the agent forgot", the truth is equally mechanical: it was not.</p>
+      <div class="code-title">the whole memory system of ch045, three lines</div>
+      <pre><code class="language-python">history = [f"TASK: {task}"]      # the world begins
+reply = fake_llm(history)        # the ENTIRE world is re-sent, every turn
+history.append(observation)      # the world grows, one append at a time</code></pre>
+      <p>Hold on to that mental picture, because everything in this chapter — and half of Act X — is downstream of it. There is no memory. There is only a transcript, and the discipline of deciding what stays in it.</p>
+
+      <h2>It grows every turn — and you pay for all of it, again</h2>
+      <p>Now do the arithmetic that every agent operator eventually does on the back of an invoice. Each turn of the loop adds a model reply and an observation — say 500 tokens together (a <a href="ch030-tokens-embeddings-context.html">token</a>, remember, is roughly three-quarters of a word). But the model is stateless, so each new call must re-send everything so far. Turn one sends 500 tokens. Turn ten sends about 5,000. Turn forty sends about 20,000 — <em>per call</em>. And your bill is the sum of all those calls, which grows roughly with the <em>square</em> of the number of turns. A conversation ten times longer does not cost ten times more in input tokens; it costs closer to a hundred times more. This is the mechanism behind the harmless-looking loops that became bills in <a href="ch041-tokens-and-cost.html">the token-economics chapter</a>.</p>
+      <p>Providers soften the blow with prompt caching — the unchanged prefix of your messages is recognised and billed at a discount — but caching only makes re-sending cheaper. It does not make the transcript smaller. And the transcript's size has a hard ceiling of its own.</p>
+
+      <h2>The wall: when the world is full</h2>
+      <p>You met the <dfn>context window</dfn> in <a href="ch030-tokens-embeddings-context.html">chapter 30</a> — the maximum number of tokens a model can attend to in a single call. One refinement matters enormously for agents: the window covers the input <em>and the output together</em>. If the window is 200,000 tokens and your transcript occupies 199,500, the model has 500 tokens of room left in which to write its entire reply. The window is not a mailbox for your messages; it is the whole desk, and the model needs space on that desk to work.</p>
+      <div class="viz-tiles">
+        <div class="tile"><div class="tile-label">2019 — GPT-2 era</div><div class="tile-value">~1K tokens</div><div class="tile-delta">about one long email</div></div>
+        <div class="tile"><div class="tile-label">2023 — GPT-4 era</div><div class="tile-value">8K–128K</div><div class="tile-delta">a report, then a novella</div></div>
+        <div class="tile"><div class="tile-label">2026 — frontier models</div><div class="tile-value">200K–1M</div><div class="tile-delta">a codebase — still fills up</div></div>
+      </div>
+      <p>Two things go wrong as you approach the wall, and only one of them is polite enough to announce itself. The loud one: exceed the window and the API simply rejects the call with a "prompt is too long" style error — mid-task, your agent falls over. The quiet one: well before the hard limit, models get measurably worse at using what they were given. Facts buried in the middle of a very long context get recalled less reliably than facts near the start or the end — researchers named the effect "lost in the middle". So a transcript at 95% of the window is not a triumph of thrift; it is an agent that is both about to crash <em>and</em> already mildly concussed. Serious harnesses act long before 100%.</p>
+
+      <h2>The words you need</h2>
+      <p>Six terms carry the rest of this chapter and most real-world conversations about "the agent forgot". Flip each until it feels obvious:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">stateless</span><span class="flip-back">The model keeps nothing between calls. Whatever you want it to know must be inside the messages you send, every single time.</span></button>
+        <button class="flip" type="button"><span class="flip-front">context window</span><span class="flip-back">The hard ceiling on tokens per call — input and output combined. The size of the handover sheet.</span></button>
+        <button class="flip" type="button"><span class="flip-front">truncation</span><span class="flip-back">The bluntest fix: when the transcript is too big, chop from the oldest end until it fits. Fast, free, and occasionally catastrophic.</span></button>
+        <button class="flip" type="button"><span class="flip-front">sliding window</span><span class="flip-back">Keep only the most recent N messages, usually with the system prompt and original task pinned so they never slide off.</span></button>
+        <button class="flip" type="button"><span class="flip-front">compaction</span><span class="flip-back">Summarise the old middle of the transcript into a short note and keep the recent messages verbatim. Lossy, like all summaries.</span></button>
+        <button class="flip" type="button"><span class="flip-front">token budget</span><span class="flip-back">A deliberate plan for how the window gets spent — system prompt, tools, history, retrieved documents, and headroom for the reply.</span></button>
+      </div>
+
+      <h2>Three tricks every harness uses</h2>
+      <p>When the transcript outgrows the sheet, there are only three honest moves, and every harness you operate uses some blend of them. Step through what each one does to the same overflowing conversation:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Young conversation">
+          <h3>1. A young conversation — everything fits</h3>
+          <div class="diagram">
+            <div class="d-box">system<small>instructions</small></div>
+            <div class="d-box">task<small>the original brief</small></div>
+            <div class="d-box">turn 1</div>
+            <div class="d-box hot">turn 2<small>newest</small></div>
+            <div class="d-box dim">window<small>20% full</small></div>
+          </div>
+          <p class="step-cap">Early on, the whole transcript fits with room to spare. Nobody thinks about memory at this stage — which is exactly why the problem surprises people later.</p>
+        </div>
+        <div class="step" data-title="The window fills">
+          <h3>2. Forty turns later — the sheet is nearly full</h3>
+          <div class="diagram">
+            <div class="d-box">system</div>
+            <div class="d-box">task</div>
+            <div class="d-box">turns 1–38<small>a wall of text</small></div>
+            <div class="d-box hot">turn 39<small>newest</small></div>
+            <div class="d-box hot">window<small>95% full</small></div>
+          </div>
+          <p class="step-cap">Every tool result, every long file the agent read, every dead end it explored — all still here, re-sent on every call. One more big observation and the API will refuse the call outright.</p>
+        </div>
+        <div class="step" data-title="Trick 1: truncation">
+          <h3>3. Trick 1 — truncation: chop the oldest</h3>
+          <div class="diagram">
+            <div class="d-box dim">system<small>DROPPED</small></div>
+            <div class="d-box dim">task<small>DROPPED</small></div>
+            <div class="d-box">turns 20–38</div>
+            <div class="d-box hot">turn 39</div>
+            <div class="d-box good">window<small>60% full</small></div>
+          </div>
+          <p class="step-cap">Delete from the oldest end until it fits. Free and instant — but done naively it eats the system prompt and the original task first, because they are the oldest things in the list. The agent keeps working, cheerfully, on a task it can no longer see.</p>
+        </div>
+        <div class="step" data-title="Trick 2: sliding window">
+          <h3>4. Trick 2 — sliding window, with pinning</h3>
+          <div class="diagram">
+            <div class="d-box good">system<small>PINNED</small></div>
+            <div class="d-box good">task<small>PINNED</small></div>
+            <div class="d-box dim">turns 1–34<small>slid off</small></div>
+            <div class="d-box">turns 35–38</div>
+            <div class="d-box hot">turn 39</div>
+          </div>
+          <p class="step-cap">Keep the last N messages, and <em>pin</em> the system prompt and original brief so they can never slide off. Much safer — but the middle is gone entirely. A decision made at turn 12 ("client confirmed the blue design") has simply left the world.</p>
+        </div>
+        <div class="step" data-title="Trick 3: compaction">
+          <h3>5. Trick 3 — summarise the middle</h3>
+          <div class="diagram">
+            <div class="d-box good">system<small>PINNED</small></div>
+            <div class="d-box good">task<small>PINNED</small></div>
+            <div class="d-box hot">summary<small>3 lines replace 34 turns</small></div>
+            <div class="d-box">turns 35–39<small>verbatim</small></div>
+          </div>
+          <p class="step-cap">Ask a model to compress the old middle into a short summary, keep the recent turns word for word. This is compaction — the two-lines-at-the-top move from the hospital ward. It preserves the gist at the price of the detail: whatever the summariser judged unimportant is gone for good.</p>
+        </div>
+        <div class="step" data-title="What the model sees">
+          <h3>6. What the next call actually sends</h3>
+          <div class="diagram">
+            <div class="d-box good">system</div>
+            <div class="d-box good">task</div>
+            <div class="d-box good">summary</div>
+            <div class="d-box good">recent turns</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">LLM<small>reads a tidy sheet</small></div>
+          </div>
+          <p class="step-cap">The model receives the rewritten transcript and cannot tell the difference — to a stateless brain, the trimmed world is simply <em>the</em> world. That is both the power of the trick and its danger.</p>
+        </div>
+      </div>
+
+      <div class="tbl"><table>
+        <tr><th>Strategy</th><th>Keeps</th><th>Loses</th><th>Extra cost</th><th>Classic failure</th></tr>
+        <tr><td>Truncation</td><td>Whatever fits, newest first</td><td>The oldest messages, blindly</td><td>None</td><td>The original brief falls off; the agent drifts off-task</td></tr>
+        <tr><td>Sliding window</td><td>Pinned head + last N messages</td><td>The entire middle</td><td>None</td><td>"We agreed this at turn 12" — and turn 12 no longer exists</td></tr>
+        <tr><td>Compaction</td><td>Pinned head + summary + recent verbatim</td><td>Every detail the summary skipped</td><td>One extra LLM call</td><td>Quiet distortion: the summariser's opinion replaces the record</td></tr>
+      </table></div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Compaction failures are the sneakiest, because nothing errors. The agent carries on fluently — minus the one constraint that got summarised away ("keep it under 2,000 rupees", "never email the client directly"). If an agent's behaviour degrades <em>specifically after a long session</em>, suspect the trim before you suspect the model. The next chapter, <a href="ch048-failure-modes.html">How agents fail</a>, files this under its rogues' gallery.</p></div>
+
+      <h2>Watch it happen: growth, then the trim</h2>
+      <p>Time to see the whole drama in twenty lines. Below, a scripted <code>fake_llm</code> chats forever (as models happily will), a toy context window sits at 320 tokens, and a counter tracks two numbers that matter: how much each turn <em>sends</em>, and how much the run has <em>billed</em> in total. First we let the history grow unchecked; then we run the identical conversation with a compaction function. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="History growth vs a trim strategy — run me">
+<textarea class="py-src" spellcheck="false">
+# The context problem, in miniature.
+
+def toks(text):
+    return max(1, len(text) // 4)     # rough rule: ~4 characters per token
+
+def total(msgs):
+    return sum(toks(m["content"]) for m in msgs)
+
+def fake_llm(history):
+    n = sum(1 for m in history if m["role"] == "assistant") + 1
+    return (f"Update {n}: checked the logs, compared the numbers, "
+            "wrote down three observations and two next actions. ") * 3
+
+WINDOW = 320                          # a toy context window
+
+def run(turns, trim=None):
+    h = [{"role": "system", "content": "You are a careful project agent."},
+         {"role": "user",   "content": "Track my website migration."}]
+    billed = 0
+    for t in range(1, turns + 1):
+        sent = total(h)               # the WHOLE history goes out
+        billed += sent
+        mark = "  &lt;-- over the window!" if sent &gt; WINDOW else ""
+        print(f"turn {t}: sends {sent:4d} tokens "
+              f"({len(h):2d} msgs, {billed:5d} billed so far){mark}")
+        h.append({"role": "assistant", "content": fake_llm(h)})
+        h.append({"role": "user", "content": "Thanks, keep going."})
+        if trim:
+            h = trim(h)
+    return billed
+
+def summarize_middle(msgs, budget=WINDOW):
+    """Keep system + task + the 4 newest; squash everything between."""
+    if total(msgs) &lt;= budget:
+        return msgs                   # under budget: touch nothing
+    head, tail = msgs[:2], msgs[-4:]
+    dropped = msgs[2:-4]
+    note = {"role": "user", "content":
+            f"[summary of {len(dropped)} older messages: migration "
+            "on track, logs clean, next action = verify backups]"}
+    return head + [note] + tail
+
+print("=== strategy: none (append forever) ===")
+a = run(8)
+print()
+print("=== strategy: summarize the middle ===")
+b = run(8, trim=summarize_middle)
+print()
+print(f"Total input tokens billed: {a} vs {b}")
+print("Same conversation, same model - only one still fits the window.")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now experiment. Shrink <code>WINDOW</code> to 150 and watch the trim fire earlier. Change <code>msgs[-4:]</code> to <code>msgs[-2:]</code> for a more aggressive trim and see the token counts drop. Then try the classic bug: change <code>msgs[:2]</code> to <code>msgs[:0]</code> so nothing is pinned — the totals still look healthy, but the system prompt and the task are now being thrown away. The numbers stay green while the agent quietly forgets its job. That is exactly what this failure looks like in production, which is why nobody catches it from the dashboard.</p></div>
+
+      <h2>The trim, line by line</h2>
+      <p>The <code>summarize_middle</code> function is the smallest honest compaction there is, and it is worth reading the way a reviewer would — because every harness you operate contains a bigger sibling of it.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">summarize_middle — compaction in seven lines</div>
+        <div class="wl-line"><code>def summarize_middle(msgs, budget=WINDOW):</code>
+          <div class="wl-note">Message list in, smaller message list out. Every harness owns a function of exactly this shape; Claude Code calls its version compaction and runs it automatically when the window gets tight.</div></div>
+        <div class="wl-line"><code>    if total(msgs) &lt;= budget:</code>
+          <div class="wl-note">The cheap check first: under budget, do nothing at all. Trimming a healthy transcript throws away information for no benefit — good harnesses trim as late as safely possible.</div></div>
+        <div class="wl-line"><code>        return msgs</code></div>
+        <div class="wl-line"><code>    head, tail = msgs[:2], msgs[-4:]</code>
+          <div class="wl-note">This is pinning, done with two list slices. The first two messages (system prompt + original task) always survive; the four newest stay verbatim, because "recent" is usually "relevant". Note the design decision hiding in plain sight: <em>who</em> survives is hard-coded here.</div></div>
+        <div class="wl-line"><code>    dropped = msgs[2:-4]</code>
+          <div class="wl-note">The middle — everything that is neither pinned nor recent — is what gets sacrificed. In a long run this slice can be 90% of the transcript.</div></div>
+        <div class="wl-line"><code>    note = {"role": "user", "content": ...}</code>
+          <div class="wl-note">In production, this line is an LLM call: "summarise these messages in a few sentences". Our canned string keeps the demo browser-safe, but the trade is identical — the summary is <em>lossy</em>. Whatever it fails to mention has ceased to exist.</div></div>
+        <div class="wl-line"><code>    return head + [note] + tail</code>
+          <div class="wl-note">The new, shorter world, stitched together with list concatenation. Next turn, the model reads this and cannot tell anything was ever removed. Run the function again later and the old summary itself lands in the middle and gets re-summarised — summaries of summaries, fading like a photocopy of a photocopy.</div></div>
+      </div>
+
+      <h2>Token budgeting: spend the window like money</h2>
+      <p>Once you accept that the window is finite, the professional move is to budget it — deliberately, the way you would a purse. Because the transcript is not the only tenant in there. The system prompt pays rent on every single call. Every tool you registered in <a href="ch046-tools.html">the tools chapter</a> ships its name, description, and schema along too — a fat toolbox can quietly eat thousands of tokens per call before the conversation says a word. If the agent does retrieval (<a href="ch042-rag.html">the RAG pattern</a>), the fetched documents land in the window as well. And you must leave headroom for the model's own reply — the <code>max_tokens</code> you set on the call has to fit inside whatever is left.</p>
+      <div data-bars data-title="Where a 200,000-token window goes (illustrative)" data-unit="tokens"
+           data-note="Round numbers for shape, not gospel. History is the biggest tenant — and the only one that grows by itself every turn.">
+        <div class="bar" data-label="System prompt" data-value="3000"></div>
+        <div class="bar" data-label="Tool definitions" data-value="8000"></div>
+        <div class="bar" data-label="Retrieved documents" data-value="30000"></div>
+        <div class="bar" data-label="Conversation history" data-value="129000"></div>
+        <div class="bar" data-label="Headroom for the reply" data-value="30000"></div>
+      </div>
+      <p>A budgeting harness does three things on every turn. It <em>counts</em> before sending — even the crude four-characters-per-token estimate from the runner above catches most overflows, and providers offer exact token-counting endpoints when you need precision. It <em>trims to budget</em>, not to the hard limit — triggering compaction at, say, 80% of the window, so there is never a turn where the call simply fails. And it <em>reserves output headroom first</em>, because a reply that gets cut off mid-sentence is a failure the user sees, while a slightly shorter history is a failure nobody notices.</p>
+
+      <h2>What trimming cannot do</h2>
+      <p>Be clear-eyed about what you have learned: every trick in this chapter is a way of <em>forgetting gracefully</em>. Truncation forgets bluntly, the sliding window forgets the middle, compaction forgets the details — but they all forget. None of them gives the agent what an operator really wants: memory that survives the end of the session, knowledge shared across conversations, the ability to recall a fact from three weeks ago without carrying three weeks of transcript.</p>
+      <p>That requires a different move entirely: taking information <em>out</em> of the transcript and putting it somewhere durable — a file, a database, a vector store — then pulling back only the relevant slice when it is needed. You have already seen a hint of it: deep-agent frameworks give the model file tools precisely so it can write big findings to a scratch file instead of hauling them around in context, and some offer a persistent memories area that outlives the session. Designing that flow — what goes out, what comes back, and when — is a discipline with its own name, <em>context engineering</em>, and it gets a full treatment in Act X: <a href="ch082-context-engineering.html">context engineering</a> and <a href="ch083-long-term-memory.html">long-term memory</a>. When you get there, remember this chapter — everything in Act X is a response to the wall you just hit.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You have already met every idea in this chapter, wearing production clothes. When Claude Code announces it is compacting the conversation (or you run its compact command yourself), that is summarise-the-middle, live. When a chat UI says "this conversation is too long, please start a new one", that is the window wall with a polite face. LangChain ships a message-trimming helper for exactly the sliding-window move; LangGraph's checkpointers (<code>InMemorySaver</code> and friends) persist a thread's state so it survives a restart — note the distinction: persistence saves the transcript, it does not shrink it. And when a teammate reports "the agent forgot what we agreed an hour ago", you now know the diagnostic question to ask first: what is your trim strategy, and what did it eat?</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. An agent followed an instruction perfectly for an hour, then abruptly stopped honouring it. The most likely mechanical cause?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model's weights degraded during the long session</button>
+            <button data-opt="b">The instruction was trimmed or summarised out of the history</button>
+            <button data-opt="c">The API randomly ignores old instructions after enough calls</button>
+          </div>
+          <p class="q-explain">Models are stateless and their weights never change during use. If behaviour changes after a long session, the messages changed — a trim, a slide, or a compaction removed or blurred the instruction. Check what the transcript actually contained on the failing turn.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Each turn re-sends the whole history. If every turn adds roughly the same number of tokens, the total input tokens billed across a run grow…</p>
+          <div class="q-opts">
+            <button data-opt="a">Linearly — twice the turns, twice the cost</button>
+            <button data-opt="b">Not at all — providers only charge for new tokens</button>
+            <button data-opt="c">Roughly with the square of the number of turns</button>
+          </div>
+          <p class="q-explain">Turn N re-sends everything from turns 1 to N-1, so the per-call cost climbs linearly and the run total is the sum of a growing series — roughly quadratic. Prompt caching discounts the repeats but does not change the shape, and the window limit still arrives on schedule.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. A sliding window keeps only the most recent N messages. What is the classic danger, and the standard fix?</p>
+          <div class="q-opts">
+            <button data-opt="a">The system prompt and original task slide off — so you pin them</button>
+            <button data-opt="b">Recent messages get corrupted — so you checksum them</button>
+            <button data-opt="c">The window slides too fast — so you slow the model down</button>
+          </div>
+          <p class="q-explain">The oldest messages are the first to go, and the system prompt and original brief are the oldest of all. Pinning — always keeping the head of the transcript regardless of age — is why our trim function protected <code>msgs[:2]</code> before anything else.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Why do serious harnesses compact at around 80% of the window instead of waiting until it is completely full?</p>
+          <div class="q-opts">
+            <button data-opt="a">Providers charge a penalty rate above 80%</button>
+            <button data-opt="b">Compaction is only technically possible below 80%</button>
+            <button data-opt="c">The window must also hold the model's reply, and quality degrades near the limit anyway</button>
+          </div>
+          <p class="q-explain">The window covers input and output together — a transcript at 99% leaves the model almost no room to answer, and the call can fail outright mid-task. On top of that, recall of facts buried in very long contexts gets worse ("lost in the middle"), so running at the edge hurts quality before it hurts availability.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Compaction never throws an error, yet it is the sneakiest of the three tricks. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">It doubles the bill without telling you</button>
+            <button data-opt="b">It is lossy — details the summary skipped are gone, and the agent carries on fluently without them</button>
+            <button data-opt="c">It only works on English text</button>
+          </div>
+          <p class="q-explain">A summary is an opinion about what mattered. Anything it omits — a constraint, a number, a "never do X" — ceases to exist for the stateless model, which keeps working confidently on the blurred record. Nothing crashes; the behaviour just quietly bends.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>The model is stateless: its entire world is the message list you send on each call. "Remembering" means "still in the transcript"; "forgetting" means "no longer there".</li>
+          <li>History grows every turn and is re-sent every turn — per-call cost climbs linearly and the run total roughly with the square of the turn count. Caching discounts the repeats; it does not shrink the transcript.</li>
+          <li>The context window is a hard ceiling shared by input <em>and</em> output, and quality sags before you hit it — so harnesses trim early, at a budget threshold, not at the wall.</li>
+          <li>There are three honest trims: truncation (chop oldest), sliding window (keep recent + pinned head), and compaction (summarise the middle). Each forgets differently, and each has a signature failure you can now recognise.</li>
+          <li>Budget the window like money: system prompt, tool schemas, retrieved documents, history, and reserved reply headroom all share the same fixed purse.</li>
+          <li>Every trick here is graceful forgetting. Real memory — surviving across sessions — means moving information out of the transcript into files and stores, which is Act X's whole subject.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

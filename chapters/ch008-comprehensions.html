@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Comprehensions: loops folded flat — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch008">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act I · The Language</div>
+        <h1>Comprehensions: loops folded flat</h1>
+        <p class="ch-tagline">The cryptic one-liners that fill framework code — <code>[x for x in ...]</code> — are ordinary loops, folded like a shirt. Learn the fold, and they read like English sentences.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 8 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A wedding kitchen, half past noon. The head caterer does not have time for paragraphs, so she gives her junior one sentence: <em>"A plate of jalebi for every guest at table four who asked for dessert."</em> Then she is gone, back into the steam.</p>
+        <p>The junior unfolds that sentence in his head without even noticing. Take an empty tray. Walk around table four, guest by guest. For each guest, check: did they ask for dessert? If no, move on. If yes, plate some jalebi and set it on the tray. When the table is done, the tray is done.</p>
+        <p>One instruction, two shapes. The folded shape — a single sentence naming <em>what to collect, from where, on what condition</em> — and the unfolded shape, a step-by-step procedure with a tray, a walk, a check, and an add. They are the same plan. Nobody at the wedding thinks the sentence is "advanced" and the procedure is "basic". They are just the compact and the expanded spelling of one idea.</p>
+        <p>Python has both spellings too. The unfolded one you already know: the for-loop. The folded one is called a <strong>comprehension</strong>, and it is the single most common reason framework code looks cryptic to a newcomer. Today we learn the fold.</p>
+      </section>
+
+      <h2>One pattern, two spellings</h2>
+      <p>Quick recap of where you stand. In <a href="ch006-control-flow.html">the control-flow chapter</a> you met the for-loop — do this once per item. In <a href="ch004-collections.html">the four containers</a> you met lists, dicts, and sets — the trays everything gets collected into. And in <a href="ch007-functions.html">the functions chapter</a> you learned to read any signature without flinching. Put the first two together and you get the most common four lines in all of Python, a shape worth naming: <strong>the collect pattern</strong>.</p>
+
+      <div class="code-title">the collect pattern — unfolded</div>
+      <pre><code class="language-python">plates = []                        # 1. take an empty tray
+for guest in table_four:           # 2. walk the table, guest by guest
+    if guest.wants_dessert:        # 3. check the condition
+        plates.append(make_jalebi(guest))   # 4. add to the tray</code></pre>
+
+      <p>Empty container, loop, optional check, append. You will see this shape hundreds of times: collecting the user turns out of a message history, collecting the file names that end in <code>.yaml</code>, collecting the tools an agent is allowed to call. Python's designers noticed that too, and gave the pattern a folded spelling — one line that says the same four things:</p>
+
+      <div class="code-title">the collect pattern — folded flat</div>
+      <pre><code class="language-python">plates = [make_jalebi(guest) for guest in table_four if guest.wants_dessert]</code></pre>
+
+      <p>That is a <dfn>list comprehension</dfn> — a single expression that builds a whole list by transforming and filtering the items of some source. Nothing new happens inside it. It is the caterer's sentence: <em>a plate of jalebi, for every guest at table four, who asked for dessert</em>. Read it back to yourself with those commas and the syntax dissolves.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The name "comprehension" comes from set-builder notation in mathematics, not from "understanding". Unfortunate, because the first time you see one, understanding is exactly what is missing. It comes fast, though — there are only three slots to learn.</p></div>
+
+      <h2>The grammar: three slots and a bracket</h2>
+      <p>Every list comprehension has the same anatomy, in the same order:</p>
+
+      <div class="code-title">the anatomy</div>
+      <pre><code class="language-python">[ EXPRESSION   for ITEM in SOURCE   if CONDITION ]
+#  what to        where the items      keep only the
+#  collect        come from            ones that pass  (optional)</code></pre>
+
+      <p>The reading trick — and this is the one thing to memorise in this chapter — is that <strong>you do not read it left to right</strong>. You read the middle first, then the end, then the front: <em>"for each ITEM in SOURCE... keeping the ones where CONDITION... collect EXPRESSION."</em> The middle tells you the walk, the end tells you the check, the front tells you what lands on the tray. Watch one execute, item by item:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The machine">
+          <h3>1. The machine is assembled</h3>
+          <div class="diagram">
+            <div class="d-box hot">Source<small>"asha", "rohan", "arjun"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Check<small>starts with "a"?</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Transform<small>.title()</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Result<small>[ ]</small></div>
+          </div>
+          <p class="step-cap">The comprehension <code>[name.title() for name in guests if name.startswith("a")]</code> sets up a tiny conveyor: a source of items, a check, a transform, and an empty result list waiting at the end.</p>
+        </div>
+        <div class="step" data-title="asha passes">
+          <h3>2. "asha" rides the belt</h3>
+          <div class="diagram">
+            <div class="d-box dim">Source<small>"rohan", "arjun" left</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Check<small>"asha" starts with "a" — yes</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Transform<small>"asha" &#8594; "Asha"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Result<small>["Asha"]</small></div>
+          </div>
+          <p class="step-cap">First item in. It passes the check, so the expression at the front runs on it — <code>.title()</code> capitalises it — and the result lands in the list.</p>
+        </div>
+        <div class="step" data-title="rohan rejected">
+          <h3>3. "rohan" is turned away</h3>
+          <div class="diagram">
+            <div class="d-box dim">Source<small>"arjun" left</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Check<small>"rohan" starts with "a" — no</small></div>
+            <span class="d-arrow">&#8595;</span>
+            <div class="d-box dim">discarded<small>never transformed</small></div>
+            <div class="d-box">Result<small>["Asha"]</small></div>
+          </div>
+          <p class="step-cap">"rohan" fails the check and is simply skipped. The transform never runs on it — the <code>if</code> is a gate before the expression, exactly like the <code>if</code> inside the unfolded loop.</p>
+        </div>
+        <div class="step" data-title="arjun passes">
+          <h3>4. "arjun" makes it through</h3>
+          <div class="diagram">
+            <div class="d-box dim">Source<small>empty</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Check<small>yes</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Transform<small>"arjun" &#8594; "Arjun"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Result<small>["Asha", "Arjun"]</small></div>
+          </div>
+          <p class="step-cap">Same ritual for every item: check, transform, append. The source is now empty, so the belt stops.</p>
+        </div>
+        <div class="step" data-title="Sealed">
+          <h3>5. The brackets seal the tray</h3>
+          <div class="diagram">
+            <div class="d-box good">Result<small>["Asha", "Arjun"]</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">handed back<small>a normal list, nothing special</small></div>
+          </div>
+          <p class="step-cap">The finished list is handed back as the value of the whole expression. Whatever is on the left of the <code>=</code> gets a perfectly ordinary list — a comprehension is how it was <em>built</em>, not what it <em>is</em>.</p>
+        </div>
+      </div>
+
+      <h2>Unfold it, fold it back</h2>
+      <p>Here is the mechanical recipe, and it works on every comprehension you will ever meet. To <strong>unfold</strong>: the <code>for</code> part becomes the loop header, the <code>if</code> part becomes an if-statement inside it, and the expression at the front becomes the thing you <code>append</code>. To <strong>fold</strong>: run the recipe backwards. No judgement, no cleverness — pure origami. Prove it to yourself by running both spellings side by side:</p>
+
+      <div class="pyrun" data-title="fold and unfold — run me, then break me">
+<textarea class="py-src" spellcheck="false">
+guests = ["asha", "rohan", "meera", "arjun", "divya", "amit"]
+
+# ---- UNFOLDED: the collect pattern, four lines ----
+shortlist = []
+for name in guests:
+    if name.startswith("a"):
+        shortlist.append(name.title())
+
+# ---- FOLDED: the same plan, one line ----
+folded = [name.title() for name in guests if name.startswith("a")]
+
+print("unfolded:", shortlist)
+print("folded:  ", folded)
+print("identical?", shortlist == folded)
+
+# Try:
+#  - change the check to  len(name) &gt; 4   in BOTH spellings
+#  - change the transform to  name.upper()
+#  - delete the if-part entirely (a comprehension without a
+#    filter keeps everything: one plate per guest, no questions)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>When a comprehension in real code refuses to make sense, unfold it on paper. Write <code>for</code>, copy the middle. Write <code>if</code>, copy the end. Write <code>append</code>, copy the front. Thirty seconds, and the mystery is a four-line loop you have been reading since <a href="ch006-control-flow.html">chapter 6</a>. Fluent readers eventually stop needing the paper — but every fluent reader started with it.</p></div>
+
+      <h2>Two ifs, two different jobs</h2>
+      <p>Here is the one genuine trap in this chapter. There are two places an <code>if</code> can appear in a comprehension, and they do different jobs.</p>
+      <p>The <code>if</code> <strong>at the end</strong> is the one you have met: a <em>filter</em>. It decides which items get processed at all, and it never takes an <code>else</code> — a gate either lets you through or it does not.</p>
+      <p>But an <code>if</code> can also appear <strong>at the front, inside the expression slot</strong>. That one is a <dfn>conditional expression</dfn> — Python's one-line "this if that, otherwise the other", which picks between two values. In the expression slot it is not filtering anything; every item still comes through. It is choosing <em>what to collect</em> for each item, and it <em>must</em> have an <code>else</code>, because an expression has to produce something either way:</p>
+
+      <div class="code-title">filter at the back vs. chooser at the front</div>
+      <pre><code class="language-python">vips = {"asha", "arjun"}
+
+# FILTER — fewer items out than in; no else allowed
+[g for g in guests if g in vips]
+# ['asha', 'arjun']
+
+# CHOOSER — same number of items out; else required
+["VIP" if g in vips else "regular" for g in guests]
+# ['VIP', 'regular', 'regular', 'VIP', 'regular', 'regular']
+
+# BOTH at once — chooser at the front, filter at the back
+["VIP: " + g if g in vips else g for g in guests if len(g) &gt; 4]</code></pre>
+
+      <p>Read the position, and you know the job: back of the line means <em>who gets in</em>, front of the line means <em>what each one becomes</em>. When you hit <code>SyntaxError</code> stories about comprehensions in code review, nine times out of ten someone put an <code>else</code> on a trailing filter, or forgot the <code>else</code> on a front chooser.</p>
+
+      <h2>The whole family: dict, set, and the lazy sibling</h2>
+      <p>Once the fold is in your fingers, Python lets you aim it at every container from <a href="ch004-collections.html">chapter 4</a>. Swap the brackets and you swap the tray:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">[x for x in src]</span><span class="flip-back">List comprehension. Square brackets, builds a list — ordered, allows duplicates. The workhorse; 80% of the comprehensions you will read.</span></button>
+        <button class="flip" type="button"><span class="flip-front">{k: v for ...}</span><span class="flip-back">Dict comprehension. Curly brackets with a colon, builds a dict. The expression slot holds a pair: key colon value. Agent code uses it to index tools by name.</span></button>
+        <button class="flip" type="button"><span class="flip-front">{x for x in src}</span><span class="flip-back">Set comprehension. Curly brackets, no colon, builds a set — duplicates silently collapse. Perfect for "what distinct values appear here?"</span></button>
+        <button class="flip" type="button"><span class="flip-front">(x for x in src)</span><span class="flip-back">Generator expression. Round brackets, builds nothing yet — a lazy conveyor that produces items one at a time, only when asked. Feed it to sum(), any(), join().</span></button>
+        <button class="flip" type="button"><span class="flip-front">... if cond]</span><span class="flip-back">Trailing if = a filter. Decides which items get in at all. Never takes an else — a gate has no third option.</span></button>
+        <button class="flip" type="button"><span class="flip-front">[a if cond else b ...</span><span class="flip-back">Leading if/else = a chooser inside the expression slot. Every item still comes through; this picks what each becomes. The else is mandatory.</span></button>
+      </div>
+
+      <p>The fourth card deserves a story of its own. A list comprehension is the halwai frying a full tray of jalebis in advance — all the memory is spent up front, whether or not anyone eats. A <dfn>generator expression</dfn> is the halwai frying one jalebi <em>as each guest walks up</em> — same recipe, round brackets instead of square, and nothing exists until something asks for the next item. That "something" is usually a function that consumes items one by one: <code>sum()</code>, <code>max()</code>, <code>any()</code>, <code>", ".join()</code>. For a six-guest wedding the difference is invisible; for a six-million-row log file, the square brackets fill your memory and the round ones sip it.</p>
+      <p>Two small courtesies of the syntax: when a generator expression is the only argument to a function, you may drop its own parentheses — <code>sum(len(m) for m in messages)</code> rather than <code>sum((len(m) for m in messages))</code> — which is exactly the form you will see in the wild. And a generator can be consumed only once; it is a conveyor, not a tray. If you need the items twice, you wanted a list.</p>
+      <p>Now run the whole family on data shaped like the systems you operate — a chat history and a tool registry:</p>
+
+      <div class="pyrun" data-title="the whole family, on agent-shaped data">
+<textarea class="py-src" spellcheck="false">
+messages = [
+    {"role": "system",    "content": "You are a helpful assistant."},
+    {"role": "user",      "content": "What is 20% GST on 1500?"},
+    {"role": "assistant", "content": "300 rupees."},
+    {"role": "user",      "content": "And on 2400?"},
+    {"role": "assistant", "content": "480 rupees."},
+]
+
+# LIST comp: pull out just what the user said
+user_turns = [m["content"] for m in messages if m["role"] == "user"]
+print("user turns:", user_turns)
+
+# DICT comp: index tools by name -- every agent loop does this
+tools = [("calculate", "do arithmetic"), ("search", "look things up")]
+tool_menu = {name: desc for name, desc in tools}
+print("tool menu: ", tool_menu)
+
+# SET comp: which distinct roles appear? (duplicates collapse)
+roles = {m["role"] for m in messages}
+print("roles seen:", roles)
+
+# GENERATOR expression: total characters of context, computed
+# one message at a time -- no throwaway list is ever built
+total = sum(len(m["content"]) for m in messages)
+print("context size:", total, "characters")
+
+# Try:
+#  - filter the dict comp:  ... for name, desc in tools if name != "search"
+#  - make roles a LIST comp instead and watch duplicates return
+</textarea>
+      </div>
+
+      <h2>Nesting: the cliff edge of readability</h2>
+      <p>Comprehensions can nest. Two <code>for</code> clauses in one comprehension walk a list of lists, and the reading rule is mechanical: <strong>the clauses run left to right exactly as they would stack top to bottom in the unfolded loop</strong>. Left is the outer loop, right is the inner one:</p>
+
+      <div class="code-title">flattening a grid — folded and unfolded are the same plan</div>
+      <pre><code class="language-python">tables = [["asha", "rohan"], ["meera"], ["arjun", "divya"]]
+
+# folded
+everyone = [guest for table in tables for guest in table]
+
+# unfolded — read the clauses in the SAME order, top to bottom
+everyone = []
+for table in tables:          # first 'for' in the comprehension
+    for guest in table:       # second 'for' in the comprehension
+        everyone.append(guest)
+# ['asha', 'rohan', 'meera', 'arjun', 'divya']</code></pre>
+
+      <p>That flatten-a-nested-list shape is the one nested comprehension worth knowing on sight, because it appears everywhere — flattening batches of results, lists of pages of documents, rows of cells. Beyond it lies the cliff. Add a second condition, or a chooser, or a third <code>for</code>, and the sentence stops being a sentence:</p>
+
+      <div class="code-title">technically legal</div>
+      <pre><code class="language-python">out = [f(x) if p(x) else g(x) for row in grid if row for x in row if x &gt; 0]</code></pre>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The rule good teams actually enforce: one <code>for</code> plus at most one <code>if</code> reads as a sentence — keep it folded. Two <code>for</code>s is acceptable only for the plain flatten. Anything past that, write the loop. A comprehension exists to be <em>easier</em> to read than the loop; the moment it is harder, it has failed at its only job. Reviewers who reject a five-clause comprehension are not being pedantic — they are protecting the person reading it at 2 a.m. during an incident.</p></div>
+
+      <h2>Real framework one-liners, decoded</h2>
+      <p>Time to cash in. Each line below is the kind of one-liner that fills real agent and pipeline code — the sort of thing that used to read as hieroglyphics. Click each line and unfold it:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">five one-liners from the wild</div>
+        <div class="wl-line"><code>tools_by_name = {tool.name: tool for tool in tools}</code>
+          <div class="wl-note">Dict comprehension. "For each tool in the list, file it under its own name." Turns a list of tool objects into a lookup table, so the agent loop can later grab <code>tools_by_name["calculate"]</code> in one step. You will build exactly this dict yourself in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>.</div></div>
+        <div class="wl-line"><code>context = "\n\n".join(doc.page_content for doc in docs)</code>
+          <div class="wl-note">Generator expression feeding <code>join</code> (the string glue from <a href="ch003-strings-and-fstrings.html">chapter 3</a>). "For each retrieved document, take its text, and glue the lot together with blank lines." This is the line that stuffs retrieved documents into a prompt in nearly every retrieval pipeline. Round brackets omitted because it is the only argument.</div></div>
+        <div class="wl-line"><code>messages = [m for m in messages if m["role"] != "system"]</code>
+          <div class="wl-note">Pure filter — the expression slot just passes <code>m</code> through untouched. "Keep every message that is not a system message." Note it builds a <em>new</em> list and re-points the name at it, rather than surgically deleting from the old one.</div></div>
+        <div class="wl-line"><code>names = [t["function"]["name"] for t in response["tool_calls"]]</code>
+          <div class="wl-note">Transform with no filter, digging into nested dicts. "For each tool call the model returned, collect just its function name." Chained square brackets are dict lookups inside dict lookups — chapter 4, twice over.</div></div>
+        <div class="wl-line"><code>flags = {k: v for k, v in config.items() if k.startswith("agent_")}</code>
+          <div class="wl-note">Dict comprehension with a filter. <code>.items()</code> yields key-value pairs; the comprehension keeps only the keys with the right prefix and rebuilds a smaller dict. The standard move for "give me just this component's settings out of a big config".</div></div>
+      </div>
+
+      <p>Notice what just happened: none of those five needed new knowledge. Each was the collect pattern wearing one of the outfits from this chapter — a filter here, a dict there, a generator feeding <code>join</code>. That is the whole trick. There is no sixth secret variant waiting to ambush you.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Once you can read comprehensions, you will find them on nearly every screen of framework source: building message lists before an API call, filtering tool schemas, flattening batch results, prefix-filtering environment variables and config dicts. In merge requests they are a reliable little drama: someone posts a four-clause comprehension, a reviewer comments "please unfold this", and both of them are right — the author that it works, the reviewer that it should not need a whiteboard. And when you see <code>sum(... for ...)</code> or <code>any(... for ...)</code> with round brackets, you now know the author was being deliberately frugal: counting a million items without ever storing them.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What does <code>[m for m in messages if m["role"] == "user"]</code> produce?</p>
+          <div class="q-opts">
+            <button data-opt="a">Each message transformed into the string "user"</button>
+            <button data-opt="b">A new list containing only the user messages, unchanged</button>
+            <button data-opt="c">The first user message it finds</button>
+          </div>
+          <p class="q-explain">The expression slot is just <code>m</code> — items pass through untouched — and the trailing <code>if</code> is a filter. So: same items, fewer of them. A comprehension always walks the whole source and always hands back a whole new collection.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">2. In <code>[cell for row in grid for cell in row]</code>, which <code>for</code> is the outer loop when you unfold it?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>for row in grid</code> — clauses read left to right, outer to inner</button>
+            <button data-opt="b"><code>for cell in row</code> — the last clause always runs first</button>
+            <button data-opt="c">They run in parallel, pairing rows with cells</button>
+          </div>
+          <p class="q-explain">The clauses sit in exactly the order the unfolded loops would stack: <code>for row in grid:</code> on the outside, <code>for cell in row:</code> nested inside. That is also why <code>row</code> is already defined by the time the second clause uses it.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">3. What is the practical difference between <code>[len(d) for d in docs]</code> and <code>(len(d) for d in docs)</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">None — round and square brackets are interchangeable here</button>
+            <button data-opt="b">The round-bracket one is a tuple of the same numbers</button>
+            <button data-opt="c">Square builds the whole list in memory now; round is a lazy generator that yields one value at a time, once</button>
+          </div>
+          <p class="q-explain">Square brackets fry the whole tray up front. Round brackets set up a conveyor that produces each value only when something — like <code>sum()</code> — asks, and it can be consumed only once. Same recipe, very different memory bill on large data.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Why is <code>[g for g in guests if g in vips else "regular"]</code> a syntax error?</p>
+          <div class="q-opts">
+            <button data-opt="a">Comprehensions cannot contain the word <code>else</code> at all</button>
+            <button data-opt="b">A trailing <code>if</code> is a filter and never takes <code>else</code>; the if/else chooser belongs at the front, in the expression slot</button>
+            <button data-opt="c"><code>vips</code> must be a list, not a set</button>
+          </div>
+          <p class="q-explain">Two ifs, two jobs. The back-position <code>if</code> only decides who gets in — no third option, no <code>else</code>. To choose between two values per guest, move the conditional to the front: <code>["VIP" if g in vips else "regular" for g in guests]</code>.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">5. What does <code>{t.name: t for t in tools}</code> build?</p>
+          <div class="q-opts">
+            <button data-opt="a">A dict mapping each tool's name to the tool object itself — a lookup table</button>
+            <button data-opt="b">A set of tool names, duplicates removed</button>
+            <button data-opt="c">A list of name-and-tool pairs</button>
+          </div>
+          <p class="q-explain">Curly brackets plus a colon in the expression slot means dict comprehension: key on the left of the colon, value on the right. It is the one-liner agent frameworks use so the loop can find a tool by the name the model asked for.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A comprehension is the collect pattern — empty container, loop, check, append — folded into one line. Nothing new executes; it is the same plan in a compact spelling.</li>
+          <li>Read the middle first: "for each ITEM in SOURCE, keeping ones where CONDITION, collect EXPRESSION." Unfolding one on paper takes thirty seconds and never lies.</li>
+          <li>Two ifs, two jobs: a trailing <code>if</code> filters items and never takes <code>else</code>; an if/else at the front is a chooser inside the expression and must have <code>else</code>.</li>
+          <li>Brackets pick the tray: <code>[ ]</code> list, <code>{k: v}</code> dict, <code>{ }</code> set, <code>( )</code> a lazy generator that produces items on demand and can be consumed once.</li>
+          <li>One <code>for</code> plus one <code>if</code> reads like a sentence; two <code>for</code>s is fine only for the plain flatten; anything denser deserves to be a loop again.</li>
+          <li>Framework one-liners — tool registries, prompt-stuffing joins, message filters, config slices — are all this one pattern in different outfits. There is no sixth secret variant.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

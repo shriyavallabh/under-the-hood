@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Capstone: build your own mini-harness — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch108">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>Capstone: build your own mini-harness</h1>
+        <p class="ch-tagline">One hundred and seven chapters went into the parts tray. Today you bolt them together — a loop, tools, memory trimming, compaction, a checkpoint file, a permission gate, and a tiny eval — and the engine you assemble with your own hands turns over.</p>
+        <div class="ch-meta"><span>~60 min</span><span>Chapter 109 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>The apprenticeship ends the way all good ones do: with an empty bench. For a year you have lived around engines — you have driven them, listened to them knock, read their manuals, leaned in while other people rebuilt them. Today the master mechanic wheels out a workbench, sets down a parts tray, and walks away without a word.</p>
+        <p>On the tray: a loop, a box of tools, a memory bottle labelled <em>keeps overflowing</em>, a jar of summary paste, a checkpoint tin, a red permission lever, and an exam sheet with three questions on it. There is no engine on the bench. There is you — and parts you have handled, one at a time, a hundred and seven times before.</p>
+        <p>By the end of this chapter you will have bolted every one of them together, turned the key, watched the engine run, crashed it on purpose, resumed it from the checkpoint tin, refused it permission to do something destructive, and graded it like an examiner. The engine you build today is small. It is also, part for part, the real thing.</p>
+      </section>
+
+      <h2>The parts tray: what you are about to assemble</h2>
+      <p>A <dfn>harness</dfn> — the word this whole course is named after — is the machinery wrapped around a language model that turns raw text prediction into a working agent: the loop, the tools, the memory management, the persistence, the safety rails, and the tests. You met the idea properly in <a href="ch081-what-is-a-harness.html">the harness chapter</a>; today you build one. Not a toy diagram of one — an actual runnable one, in six stages, each stage adding one organ to a living body. Every stage below is a runnable Python box. Press Run, read the output, then break it and run it again.</p>
+      <p>Because a browser page cannot call a paid model API, each stage uses the trick you know from <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>: a scripted <code>fake_llm()</code> stands in for the model. Everything else — the loop, the trimming, the compaction, the checkpointing, the gate, the grading — is exactly the code a production harness runs. Swap the fake for one API call and this is real.</p>
+      <p>Here is the build plan. Step through it once before touching any code:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Stage 1: loop + tools">
+          <h3>Stage 1 — the engine block</h3>
+          <div class="diagram">
+            <div class="d-box hot">Loop<small>think, act, observe</small></div>
+            <div class="d-box hot">Tools<small>functions the loop may run</small></div>
+            <div class="d-box dim">Memory cap</div>
+            <div class="d-box dim">Checkpoint</div>
+            <div class="d-box dim">Gate</div>
+            <div class="d-box dim">Evals</div>
+          </div>
+          <p class="step-cap">Everything starts with the fifty-line ReAct loop: the model asks, your code acts, the result flows back. Every later organ bolts onto this block.</p>
+        </div>
+        <div class="step" data-title="Stage 2: trimming">
+          <h3>Stage 2 — a fuel limit on memory</h3>
+          <div class="diagram">
+            <div class="d-box">Loop</div>
+            <div class="d-box">Tools</div>
+            <div class="d-box hot">Memory cap<small>drop the oldest messages</small></div>
+            <div class="d-box dim">Checkpoint</div>
+            <div class="d-box dim">Gate</div>
+            <div class="d-box dim">Evals</div>
+          </div>
+          <p class="step-cap">History grows every turn and every message costs tokens. The crudest fix: keep the task line plus the newest few messages, and throw the rest away.</p>
+        </div>
+        <div class="step" data-title="Stage 3: compaction">
+          <h3>Stage 3 — summary paste, not scissors</h3>
+          <div class="diagram">
+            <div class="d-box">Loop</div>
+            <div class="d-box">Tools</div>
+            <div class="d-box hot">Compactor<small>fold old turns into a summary</small></div>
+            <div class="d-box dim">Checkpoint</div>
+            <div class="d-box dim">Gate</div>
+            <div class="d-box dim">Evals</div>
+          </div>
+          <p class="step-cap">Trimming loses facts. Compaction replaces the old middle of the history with one summary line, so the figures survive in condensed form. This is what a compact command in a coding agent does.</p>
+        </div>
+        <div class="step" data-title="Stage 4: checkpoint">
+          <h3>Stage 4 — the checkpoint tin</h3>
+          <div class="diagram">
+            <div class="d-box">Loop</div>
+            <div class="d-box">Tools</div>
+            <div class="d-box">Compactor</div>
+            <div class="d-box hot">Checkpoint<small>state dict, saved every turn</small></div>
+            <div class="d-box dim">Gate</div>
+            <div class="d-box dim">Evals</div>
+          </div>
+          <p class="step-cap">The agent's whole life is one dictionary: task, history, turn number. Serialize it after every turn and a crash costs nothing but a restart.</p>
+        </div>
+        <div class="step" data-title="Stage 5: permission gate">
+          <h3>Stage 5 — the red lever</h3>
+          <div class="diagram">
+            <div class="d-box">Loop</div>
+            <div class="d-box">Tools</div>
+            <div class="d-box">Checkpoint</div>
+            <div class="d-box hot">Gate<small>dangerous tools need approval</small></div>
+            <div class="d-box dim">Evals</div>
+          </div>
+          <p class="step-cap">One tool can now destroy data. The model may ask for it; only your loop decides whether it runs. This if-statement is where all agent safety actually lives.</p>
+        </div>
+        <div class="step" data-title="Stage 6: evals">
+          <h3>Stage 6 — the exam sheet</h3>
+          <div class="diagram">
+            <div class="d-box good">Loop</div>
+            <div class="d-box good">Tools</div>
+            <div class="d-box good">Compactor</div>
+            <div class="d-box good">Checkpoint</div>
+            <div class="d-box good">Gate</div>
+            <div class="d-box hot">Evals<small>3 tasks, graded, scored</small></div>
+          </div>
+          <p class="step-cap">Finally you wrap the whole harness in an examiner: three tasks with expected answers, a grader, and a scoreboard. Green means ship; red means investigate. This is how agent changes get merged.</p>
+        </div>
+      </div>
+
+      <h2>Stage 1 — the loop and its tools</h2>
+      <p>Quick recap of <a href="ch045-react-loop-by-hand.html">the chapter where you first built this</a>, because it is the block everything else bolts onto. An agent is an LLM run in a loop with tools: the model replies with text that <em>requests</em> an action, your code parses the request, runs the matching Python function, and appends the result to the history as an observation. The model never executes anything itself — it writes wishes, and your loop is the only thing that grants them. The loop ends when the model writes a final-answer marker, or when a turn cap stops a confused model from dithering forever.</p>
+      <p>This version has two tools instead of one, and the model needs three tool calls to finish. Run it, and watch the observations flow back:</p>
+
+      <div class="pyrun" data-title="Stage 1 — the loop with tools">
+<textarea class="py-src" spellcheck="false">
+# ========= STAGE 1: the engine block =========
+NOTES = {"rent": "Rent: 42000/month", "wifi": "WiFi: 1200/month"}
+
+def calculate(expr):
+    allowed = set("0123456789+-*/(). ")
+    if not set(expr) &lt;= allowed:
+        return "ERROR: arithmetic only"
+    return str(eval(expr))
+
+def read_note(name):
+    return NOTES.get(name.strip(), "ERROR: no note called " + name)
+
+TOOLS = {"calculate": calculate, "read_note": read_note}
+
+# The 'model': a scripted stand-in. In production this is one
+# API call; the interface (history in, text out) is identical.
+SCRIPT = [
+    "THOUGHT: I need the rent note first.\nACTION: read_note(rent)",
+    "THOUGHT: Now the wifi note.\nACTION: read_note(wifi)",
+    "THOUGHT: Add the two figures.\nACTION: calculate(42000 + 1200)",
+    "THOUGHT: 43200 total.\nFINAL ANSWER: Rent plus WiFi comes "
+    "to 43,200 rupees a month.",
+]
+
+def fake_llm(history):
+    done = sum(1 for m in history if m.startswith("OBSERVATION"))
+    return SCRIPT[min(done, len(SCRIPT) - 1)]
+
+def run_agent(task, max_turns=8):
+    history = ["TASK: " + task]
+    for turn in range(1, max_turns + 1):
+        reply = fake_llm(history)
+        history.append(reply)
+        print("--- turn " + str(turn) + " ---")
+        print(reply)
+        if "FINAL ANSWER:" in reply:
+            return reply.split("FINAL ANSWER:")[1].strip()
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            name = call.split("(")[0].strip()
+            arg = call[call.index("(") + 1 : call.rindex(")")]
+            obs = "OBSERVATION: " + TOOLS[name](arg)
+            history.append(obs)
+            print(obs)
+    return "Gave up: max turns reached."
+
+print()
+print("AGENT RETURNED:", run_agent("What do rent and wifi cost together?"))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Warm up the way you did in Act V: add a third note to <code>NOTES</code>, extend <code>SCRIPT</code> to read it, and make the total come out right. Two minutes of tinkering here pays off in every stage below, because this exact loop is inside all of them.</p></div>
+
+      <h2>Stage 2 — memory that stops growing</h2>
+      <p>Remember the uncomfortable truth from <a href="ch047-memory-and-context.html">the memory chapter</a>: the history list is the agent's entire mind, it is re-sent to the model on every turn, and it only ever grows. Growth means cost — <a href="ch071-the-token-bill.html">the token bill</a> — and eventually it means overflowing the context window entirely. The crudest cure is <dfn>trimming</dfn>: keeping the task line plus only the newest few messages, and deleting the rest outright.</p>
+      <p>The run below reads four bills, and the history cap is deliberately set too small. Watch the <code>[trim]</code> lines fire, then read the final history the model could see — and spot what went missing:</p>
+
+      <div class="pyrun" data-title="Stage 2 — memory trimming (and its cost)">
+<textarea class="py-src" spellcheck="false">
+# ========= STAGE 2: memory trimming =========
+NOTES = {"rent": "42000", "wifi": "1200", "power": "3800", "water": "600"}
+
+def read_note(name):
+    return NOTES.get(name.strip(), "ERROR: no such note")
+
+def calculate(expr):
+    allowed = set("0123456789+-*/(). ")
+    if not set(expr) &lt;= allowed:
+        return "ERROR: arithmetic only"
+    return str(eval(expr))
+
+TOOLS = {"read_note": read_note, "calculate": calculate}
+
+MAX_MESSAGES = 6
+
+def trim(history):
+    """Keep the TASK line plus only the newest messages."""
+    if len(history) &lt;= MAX_MESSAGES:
+        return history
+    dropped = len(history) - MAX_MESSAGES
+    kept = [history[0]] + history[-(MAX_MESSAGES - 1):]
+    print("   [trim] dropped " + str(dropped) + " old message(s)")
+    return kept
+
+# NOTE: this stand-in follows a fixed script, so trimming cannot
+# confuse it. A REAL model reads only the history -- whatever
+# trim() throws away is gone from its world forever.
+SCRIPT = [
+    "ACTION: read_note(rent)",
+    "ACTION: read_note(wifi)",
+    "ACTION: read_note(power)",
+    "ACTION: read_note(water)",
+    "ACTION: calculate(42000 + 1200 + 3800 + 600)",
+    "FINAL ANSWER: The four bills total 47,600 rupees a month.",
+]
+step = {"n": 0}
+def fake_llm(history):
+    reply = SCRIPT[min(step["n"], len(SCRIPT) - 1)]
+    step["n"] += 1
+    return reply
+
+def run_agent(task, max_turns=8):
+    history = ["TASK: " + task]
+    for turn in range(1, max_turns + 1):
+        history = trim(history)
+        reply = fake_llm(history)
+        history.append(reply)
+        if "FINAL ANSWER:" in reply:
+            print()
+            print("Final history the model could see:")
+            for m in history:
+                print("  |", m.replace("\n", " / "))
+            return reply.split("FINAL ANSWER:")[1].strip()
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            name = call.split("(")[0].strip()
+            arg = call[call.index("(") + 1 : call.rindex(")")]
+            history.append("OBSERVATION: " + TOOLS[name](arg))
+    return "Gave up."
+
+print("AGENT RETURNED:", run_agent("Total all four monthly bills"))
+print()
+print("Spot the problem: the rent observation (42000) got trimmed away.")
+print("Our scripted stand-in did not care. A real model would now")
+print("have to guess the rent -- or silently make it up.")
+</textarea>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Trimming is honest about cost and dishonest about knowledge. When an agent in production suddenly "forgets" an instruction from early in a long session, this is very often the reason: the message that held it was trimmed out of the window. You diagnosed this pattern in <a href="ch048-failure-modes.html">the failure-modes chapter</a>; now you have built the mechanism that causes it.</p></div>
+
+      <h2>Stage 3 — compaction: summarize the old, keep the new</h2>
+      <p>The fix, which you met as a design idea in <a href="ch082-context-engineering.html">context engineering</a>, is <dfn>compaction</dfn>: instead of cutting old messages away, you fold them into a short summary and keep that. The task line stays sacred, the newest messages stay verbatim — because the model needs fine detail about what it is doing <em>right now</em> — and the middle gets condensed. In production the summarizer is <em>another LLM call</em> ("summarize these messages, keep every figure and decision"); here it is a tiny function so you can see the shape of the plumbing.</p>
+
+      <div class="pyrun" data-title="Stage 3 — compaction via summarize-old">
+<textarea class="py-src" spellcheck="false">
+# ========= STAGE 3: compaction =========
+NOTES = {"rent": "42000", "wifi": "1200", "power": "3800", "water": "600"}
+
+def read_note(name):
+    return NOTES.get(name.strip(), "ERROR: no such note")
+
+def calculate(expr):
+    allowed = set("0123456789+-*/(). ")
+    if not set(expr) &lt;= allowed:
+        return "ERROR: arithmetic only"
+    return str(eval(expr))
+
+TOOLS = {"read_note": read_note, "calculate": calculate}
+
+MAX_MESSAGES = 6
+KEEP_RECENT = 2
+
+def fake_summarize(old):
+    """Stand-in for an LLM call: 'summarize these messages'."""
+    facts = [m for m in old if m.startswith(("OBSERVATION", "SUMMARY"))]
+    return "SUMMARY of earlier work: " + " | ".join(facts)
+
+def compact(history):
+    if len(history) &lt;= MAX_MESSAGES:
+        return history
+    head = history[0]
+    old = history[1:-KEEP_RECENT]
+    recent = history[-KEEP_RECENT:]
+    summary = fake_summarize(old)
+    print("   [compact] folded " + str(len(old)) + " messages into 1 summary")
+    return [head, summary] + recent
+
+SCRIPT = [
+    "ACTION: read_note(rent)",
+    "ACTION: read_note(wifi)",
+    "ACTION: read_note(power)",
+    "ACTION: read_note(water)",
+    "ACTION: calculate(42000 + 1200 + 3800 + 600)",
+    "FINAL ANSWER: The four bills total 47,600 rupees a month.",
+]
+step = {"n": 0}
+def fake_llm(history):
+    reply = SCRIPT[min(step["n"], len(SCRIPT) - 1)]
+    step["n"] += 1
+    return reply
+
+def run_agent(task, max_turns=8):
+    history = ["TASK: " + task]
+    for turn in range(1, max_turns + 1):
+        history = compact(history)
+        reply = fake_llm(history)
+        history.append(reply)
+        if "FINAL ANSWER:" in reply:
+            print()
+            print("Final history the model could see:")
+            for m in history:
+                print("  |", m.replace("\n", " / "))
+            return reply.split("FINAL ANSWER:")[1].strip()
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            name = call.split("(")[0].strip()
+            arg = call[call.index("(") + 1 : call.rindex(")")]
+            history.append("OBSERVATION: " + TOOLS[name](arg))
+    return "Gave up."
+
+print("AGENT RETURNED:", run_agent("Total all four monthly bills"))
+print()
+print("Compare with Stage 2: every figure survived, folded into")
+print("one summary line instead of eight raw messages.")
+</textarea>
+      </div>
+
+      <p>Now read the compactor the way a reviewer would. Click the annotated lines until each one is boring to you — boring means fluent:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">mini_harness.py — the compact() function</div>
+        <div class="wl-line"><code>def compact(history):</code>
+          <div class="wl-note">Takes the full message list, returns a smaller one. It runs every turn, just before the model call — cheap when there is nothing to do, decisive when there is.</div></div>
+        <div class="wl-line"><code>    if len(history) &lt;= MAX_MESSAGES:</code>
+          <div class="wl-note">The budget check. Under the cap, the history passes through untouched. Real harnesses measure tokens rather than message count, but the shape of the check is identical.</div></div>
+        <div class="wl-line"><code>        return history</code></div>
+        <div class="wl-line"><code>    head = history[0]</code>
+          <div class="wl-note">The TASK line is sacred — it is never summarized away. Lose the task and the agent drifts: it keeps acting, but no longer towards anything.</div></div>
+        <div class="wl-line"><code>    old = history[1:-KEEP_RECENT]</code>
+          <div class="wl-note">A slice (<a href="ch004-collections.html">ch4</a>) of the middle: everything except the task and the newest messages. This is the material that gets condensed.</div></div>
+        <div class="wl-line"><code>    recent = history[-KEEP_RECENT:]</code>
+          <div class="wl-note">The newest messages stay verbatim. The model needs full detail for the step it is in the middle of — you summarize the past, never the present.</div></div>
+        <div class="wl-line"><code>    summary = fake_summarize(old)</code>
+          <div class="wl-note">In production this line is an LLM call: "summarize these messages, preserve every figure, file path, and decision." When a coding agent compacts a long session, this is the line doing it.</div></div>
+        <div class="wl-line"><code>    return [head, summary] + recent</code>
+          <div class="wl-note">The new history: same shape as before — a list of strings — but far fewer tokens. The loop never notices anything happened. That transparency is the whole trick.</div></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Notice that <code>fake_summarize</code> also keeps lines starting with <code>SUMMARY</code>. That is deliberate: on a very long run, compaction runs repeatedly and must fold the <em>previous</em> summary into the next one, or facts saved by the first compaction would be lost by the second. Summaries of summaries are normal life for long-running agents.</p></div>
+
+      <h2>Stage 4 — the checkpoint tin</h2>
+      <p>You built durability intuition in <a href="ch061-checkpointing.html">the checkpointing chapter</a> and <a href="ch085-durability.html">the durability chapter</a>; here is the whole idea in fifteen lines. The agent's entire life is one dictionary — task, history, turn count. A <dfn>checkpoint</dfn> is that dictionary serialized (turned into a string, here with JSON — <a href="ch005-yaml-and-json.html">ch5</a>) and written somewhere that survives the process dying. Save after every turn, and a crash costs you nothing: a new process loads the dict and carries on as if nothing happened.</p>
+      <p>This run crashes on purpose after turn 2. Then a "brand-new process" starts, finds the checkpoint, and finishes the job:</p>
+
+      <div class="pyrun" data-title="Stage 4 — checkpoint save, crash, restore">
+<textarea class="py-src" spellcheck="false">
+# ========= STAGE 4: the checkpoint file =========
+import json
+
+DISK = {}   # stands in for files on disk (or a database)
+
+def save_checkpoint(run_id, state):
+    DISK[run_id] = json.dumps(state)
+
+def load_checkpoint(run_id):
+    return json.loads(DISK[run_id])
+
+NOTES = {"rent": "42000", "wifi": "1200"}
+def read_note(name):
+    return NOTES.get(name.strip(), "ERROR: no such note")
+def calculate(expr):
+    allowed = set("0123456789+-*/(). ")
+    if not set(expr) &lt;= allowed:
+        return "ERROR: arithmetic only"
+    return str(eval(expr))
+TOOLS = {"read_note": read_note, "calculate": calculate}
+
+SCRIPT = [
+    "ACTION: read_note(rent)",
+    "ACTION: read_note(wifi)",
+    "ACTION: calculate(42000 + 1200)",
+    "FINAL ANSWER: Rent plus WiFi is 43,200 rupees a month.",
+]
+# History-driven, not counter-driven: after a restore, the loaded
+# history tells the 'model' exactly where it left off.
+def fake_llm(history):
+    done = sum(1 for m in history if m.startswith("OBSERVATION"))
+    return SCRIPT[min(done, len(SCRIPT) - 1)]
+
+def run_agent(task, run_id, crash_after=None, max_turns=8):
+    if run_id in DISK:
+        state = load_checkpoint(run_id)
+        print("[resume] " + run_id + " restored at turn " + str(state["turn"]))
+    else:
+        state = {"task": task, "history": ["TASK: " + task], "turn": 0}
+    while state["turn"] &lt; max_turns:
+        state["turn"] += 1
+        reply = fake_llm(state["history"])
+        state["history"].append(reply)
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            name = call.split("(")[0].strip()
+            arg = call[call.index("(") + 1 : call.rindex(")")]
+            state["history"].append("OBSERVATION: " + TOOLS[name](arg))
+        save_checkpoint(run_id, state)
+        print("turn " + str(state["turn"]) + " done, checkpoint saved ("
+              + str(len(DISK[run_id])) + " bytes)")
+        if "FINAL ANSWER:" in reply:
+            return reply.split("FINAL ANSWER:")[1].strip()
+        if crash_after and state["turn"] == crash_after:
+            print("[CRASH] power cut! this process is gone.")
+            return None
+    return "Gave up."
+
+run_agent("Total rent and wifi", run_id="run-42", crash_after=2)
+print()
+print("...later, a brand-new process starts up...")
+print()
+answer = run_agent("Total rent and wifi", run_id="run-42")
+print()
+print("AGENT RETURNED:", answer)
+</textarea>
+      </div>
+
+      <p>Look at one detail before moving on: <code>fake_llm</code> here counts observations in the history instead of keeping its own counter. That is not laziness — it is the point. The model is stateless; the <em>history</em> is the state. Because the checkpoint carries the history, the restored run resumes at exactly the right step with no extra bookkeeping. When LangGraph resumes a thread from its checkpointer, this is precisely why it works.</p>
+
+      <h2>Stage 5 — the red lever: a permission gate</h2>
+      <p>So far every tool has been harmless. Now add one that is not: <code>delete_note</code>. You know from <a href="ch087-guardrails.html">the guardrails chapter</a> and <a href="ch062-human-in-the-loop.html">human-in-the-loop</a> that the only enforceable safety boundary is the line in <em>your code</em> where a tool actually executes — a model can be argued, tricked, or prompt-injected out of an instruction, but it cannot argue with an if-statement. So the loop gets a <dfn>permission gate</dfn>: a check, before execution, that dangerous tools require the operator's approval.</p>
+      <p>A browser page cannot pause for keyboard input, so the operator's decision is a variable at the top. Run it once with <code>POLICY = "deny"</code>, then change it to <code>"allow"</code> and run again — and watch the model take a completely different path both times:</p>
+
+      <div class="pyrun" data-title="Stage 5 — a permission gate on a dangerous tool">
+<textarea class="py-src" spellcheck="false">
+# ========= STAGE 5: the permission gate =========
+POLICY = "deny"     # change to "allow" and run again
+
+NOTES = {"rent": "42000/month", "wifi": "1200/month",
+         "draft": "old scribbles"}
+
+def read_note(name):
+    return NOTES.get(name.strip(), "ERROR: no such note")
+
+def delete_note(name):
+    name = name.strip()
+    if name in NOTES:
+        del NOTES[name]
+        return "deleted '" + name + "'"
+    return "ERROR: no note called " + name
+
+def list_notes(_arg=""):
+    return ", ".join(sorted(NOTES))
+
+TOOLS = {"read_note": read_note, "delete_note": delete_note,
+         "list_notes": list_notes}
+DANGEROUS = {"delete_note"}
+
+# This stand-in reacts to what it sees -- including a refusal.
+def fake_llm(history):
+    last = history[-1]
+    if last.startswith("TASK"):
+        return "THOUGHT: Remove the stale draft.\nACTION: delete_note(draft)"
+    if "DENIED" in last:
+        return ("THOUGHT: The operator said no. Stop and report.\n"
+                "FINAL ANSWER: Permission to delete 'draft' was denied. "
+                "Nothing was changed.")
+    if "deleted" in last:
+        return "THOUGHT: Confirm what remains.\nACTION: list_notes()"
+    return ("FINAL ANSWER: Deleted 'draft'. Remaining notes: "
+            + last.replace("OBSERVATION: ", "") + ".")
+
+def run_agent(task, max_turns=6):
+    history = ["TASK: " + task]
+    for turn in range(1, max_turns + 1):
+        reply = fake_llm(history)
+        history.append(reply)
+        print("--- turn " + str(turn) + " ---")
+        print(reply)
+        if "FINAL ANSWER:" in reply:
+            return reply.split("FINAL ANSWER:")[1].strip()
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            name = call.split("(")[0].strip()
+            arg = call[call.index("(") + 1 : call.rindex(")")]
+            if name in DANGEROUS and POLICY != "allow":
+                obs = "OBSERVATION: PERMISSION DENIED by the operator"
+                print("   [gate] blocked dangerous tool: " + name)
+            else:
+                if name in DANGEROUS:
+                    print("   [gate] operator approved: " + name)
+                obs = "OBSERVATION: " + TOOLS[name](arg)
+            history.append(obs)
+            print(obs)
+    return "Gave up."
+
+print()
+print("AGENT RETURNED:", run_agent("Tidy the notes: delete the old draft"))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>That denied-then-report behaviour is not decoration — it is the polite failure you want. The refusal goes back into the history as an observation, so the model <em>knows</em> it was refused and can plan around it instead of retrying blindly. Every time your coding agent asks "allow this command?", you are standing at this exact gate, holding this exact lever.</p></div>
+
+      <h2>Stage 6 — the exam sheet: a tiny eval harness</h2>
+      <p>The final organ comes straight from this act's theme: shipping alongside data scientists as an equal. Before an agent change merges, someone must answer "did this make the agent better or worse?" — and the answer cannot be a vibe. An <dfn>eval</dfn> is the answer machine: a fixed set of tasks, an expected outcome for each, a <dfn>grader</dfn> — a function that scores the agent's answer, here a simple substring check — and a scoreboard. It is a unit test whose assertion tolerates fuzzy output.</p>
+      <p>This last stage is the full assembly. The loop carries the compactor from stage 3, the checkpoint saves from stage 4, and the gate from stage 5 — and the whole machine is wrapped in an examiner running three tasks. One of them fails on purpose: the scripted model ignores its own observation and misreports a number, which is exactly the kind of regression evals exist to catch. Run it and read the scoreboard:</p>
+
+      <div class="pyrun" data-title="Stage 6 — the full mini-harness, graded">
+<textarea class="py-src" spellcheck="false">
+# ========= STAGE 6: full harness + a tiny eval =========
+import json
+
+NOTES = {"rent": "42000", "wifi": "1200"}
+
+def read_note(name):
+    return NOTES.get(name.strip(), "ERROR: no such note")
+
+def calculate(expr):
+    allowed = set("0123456789+-*/(). ")
+    if not set(expr) &lt;= allowed:
+        return "ERROR: arithmetic only"
+    return str(eval(expr))
+
+def delete_note(name):
+    return "deleted '" + name.strip() + "'"
+
+TOOLS = {"read_note": read_note, "calculate": calculate,
+         "delete_note": delete_note}
+DANGEROUS = {"delete_note"}
+POLICY = "deny"
+
+MAX_MESSAGES = 5
+KEEP_RECENT = 2
+DISK = {}
+
+def compact(history):                      # organ from stage 3
+    if len(history) &lt;= MAX_MESSAGES:
+        return history
+    old = history[1:-KEEP_RECENT]
+    facts = [m for m in old if m.startswith(("OBSERVATION", "SUMMARY"))]
+    summary = "SUMMARY: " + " | ".join(facts)
+    print("   [compact] folded " + str(len(old)) + " old messages")
+    return [history[0], summary] + history[-KEEP_RECENT:]
+
+def make_llm(script):                      # one scripted model per task
+    step = {"n": 0}
+    def llm(history):
+        reply = script[min(step["n"], len(script) - 1)]
+        step["n"] += 1
+        return reply
+    return llm
+
+def run_agent(task, llm, run_id, max_turns=8):
+    state = {"history": ["TASK: " + task], "turn": 0}
+    while state["turn"] &lt; max_turns:
+        state["turn"] += 1
+        state["history"] = compact(state["history"])
+        reply = llm(state["history"])
+        state["history"].append(reply)
+        if "FINAL ANSWER:" in reply:
+            DISK[run_id] = json.dumps(state)   # organ from stage 4
+            return reply.split("FINAL ANSWER:")[1].strip()
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            name = call.split("(")[0].strip()
+            arg = call[call.index("(") + 1 : call.rindex(")")]
+            if name in DANGEROUS and POLICY != "allow":   # stage 5
+                obs = "OBSERVATION: PERMISSION DENIED"
+            else:
+                obs = "OBSERVATION: " + TOOLS[name](arg)
+            state["history"].append(obs)
+        DISK[run_id] = json.dumps(state)
+    return "Gave up."
+
+# ---- the exam: three tasks, each with an expected answer ----
+EVALS = [
+    {"name": "adds the bills correctly",
+     "task": "Total rent and wifi", "expect": "43,200",
+     "script": ["ACTION: read_note(rent)",
+                "ACTION: read_note(wifi)",
+                "ACTION: calculate(42000 + 1200)",
+                "FINAL ANSWER: Rent plus WiFi is 43,200 rupees."]},
+    {"name": "respects the permission gate",
+     "task": "Delete the rent note", "expect": "denied",
+     "script": ["ACTION: delete_note(rent)",
+                "FINAL ANSWER: Permission was denied; nothing deleted."]},
+    {"name": "reads its own observations",
+     "task": "How many hours in a year?", "expect": "8760",
+     "script": ["ACTION: calculate(365 * 24)",
+                "FINAL ANSWER: About 8,860 hours."]},   # slipped!
+]
+
+def grade(answer, expect):
+    a = answer.lower().replace(",", "")
+    e = expect.lower().replace(",", "")
+    return e in a
+
+passed = 0
+for i, case in enumerate(EVALS, 1):
+    answer = run_agent(case["task"], make_llm(case["script"]),
+                       run_id="eval-" + str(i))
+    ok = grade(answer, case["expect"])
+    passed += ok
+    print(("PASS  " if ok else "FAIL  ") + case["name"])
+    print("      agent said: " + answer)
+print()
+print("SCORE: " + str(passed) + "/" + str(len(EVALS)) + " -- " +
+      ("ship it" if passed == len(EVALS)
+       else "do not ship: investigate the failure"))
+print("(" + str(len(DISK)) + " checkpoint files sitting on 'disk')")
+</textarea>
+      </div>
+
+      <p>Sit with that output for a moment. The failing task is the interesting one: the tool returned the right number, the observation went into the history, and the model still wrote the wrong figure in its final answer. No exception was raised. No log line went red. Only the eval caught it — which is why serious teams treat "the eval suite passed" as the definition of done for agent changes, and wire the suite into the merge-request pipeline so a red score blocks the merge.</p>
+
+      <h2>The map: your hundred lines against the big rigs</h2>
+      <p>Here is the part you should keep. Every organ you just built has a direct, named counterpart in the production frameworks you have studied — and now that you have built the small version, the big versions stop being magic and become <em>engineering choices about the same six problems</em>:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Organ you built</th><th>LangGraph</th><th>deepagents</th><th>Claude Code</th></tr>
+        <tr><td>The loop with tools (stage 1)</td><td>A compiled <a href="ch058-stategraph-anatomy.html">StateGraph</a>: a model node, a tool node, and edges that cycle between them</td><td><code>create_deep_agent</code>'s built-in loop, plus planning via <code>write_todos</code></td><td>The session loop you watch every working day</td></tr>
+        <tr><td>Trimming and compaction (stages 2–3)</td><td>Your choice of state-trimming or summarization logic in the graph — the framework hands you the messages, you decide</td><td>The <a href="ch069-virtual-filesystem.html">virtual file system</a>: park long content in files, keep the context lean</td><td>Automatic compaction of long sessions — literally your stage 3, with a better summarizer</td></tr>
+        <tr><td>The checkpoint dict (stage 4)</td><td><code>.compile(checkpointer=...)</code> — <code>InMemorySaver</code>, or Postgres/Redis/SQLite via the <code>langgraph-checkpoint-*</code> packages, one thread per <code>thread_id</code></td><td>Backends: StateBackend by default, FilesystemBackend or StoreBackend for persistence, CompositeBackend to mix them</td><td>Session resume — close the laptop, come back, continue</td></tr>
+        <tr><td>The permission gate (stage 5)</td><td><code>interrupt()</code> pauses the graph mid-run; <code>Command(resume=...)</code> carries the human's decision back in</td><td>Built on LangGraph, so the same interrupt machinery is available underneath</td><td>The permission prompt: "allow this command?" — the red lever, productized</td></tr>
+        <tr><td>The eval harness (stage 6)</td><td colspan="3">Task suites with graders, run in CI on every merge request — the pattern is framework-independent, and it is the one this act has been preparing you to own</td></tr>
+      </table></div>
+
+      <p>Notice what is <em>not</em> in the table: nothing. There is no seventh secret organ that frameworks have and you do not. What they add is depth on each axis — token-aware budgets instead of message counts, databases instead of a dict named <code>DISK</code>, structured tool calls (<a href="ch035-tool-calling.html">ch35</a>) instead of string parsing, typed state instead of a list of strings, and years of edge-case hardening. Depth, not mystery.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet today's six organs by name in real repositories from now on. A file called <code>loop.py</code>, <code>agent.py</code>, or <code>executor.py</code> is stage 1. A merge request titled "summarize old turns when context exceeds budget" is stage 3. A <code>checkpointer=</code> argument in a LangGraph service, or a table called <code>checkpoints</code> in a schema migration, is stage 4. A YAML block listing tools under <code>requires_approval:</code> is stage 5. And an <code>evals/</code> directory plus a pipeline stage that runs it on every merge request — with a data scientist arguing in the comments about whether the grader is too strict — is stage 6, and the argument is yours to join now.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Stage 2 (trimming) and stage 3 (compaction) both keep the history small. Why is compaction usually the safer choice?</p>
+          <div class="q-opts">
+            <button data-opt="a">Compaction is faster because it skips old messages entirely</button>
+            <button data-opt="b">Trimming only works on short tasks</button>
+            <button data-opt="c">Trimming deletes information outright; compaction folds it into a summary, so key facts survive in condensed form</button>
+          </div>
+          <p class="q-explain">You watched it happen: trimming silently discarded the rent figure, while compaction preserved every number in one summary line. The cost of compaction is an extra summarization call; the cost of trimming is amnesia.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. In stage 4, why could the restored run resume at exactly the right step without any extra bookkeeping?</p>
+          <div class="q-opts">
+            <button data-opt="a">Python remembers where the previous process stopped</button>
+            <button data-opt="b">The checkpoint carried the whole history, and the model is stateless — so replaying the saved history puts it exactly where it left off</button>
+            <button data-opt="c">The fake model kept a counter that survived the crash</button>
+          </div>
+          <p class="q-explain">The model has no memory between calls; the history is the state. Save the history and you have saved the agent. That single fact is why checkpointers — LangGraph's included — work at all.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why does the permission gate live in the loop code rather than in the system prompt ("never delete anything without asking")?</p>
+          <div class="q-opts">
+            <button data-opt="a">A model can be persuaded or prompt-injected out of an instruction, but it cannot argue with an if-statement in code it never executes</button>
+            <button data-opt="b">Prompts are too expensive to include safety rules in</button>
+            <button data-opt="c">The gate in code runs faster than the model reading a rule</button>
+          </div>
+          <p class="q-explain">Instructions influence behaviour; code determines it. The only boundary an attacker cannot talk their way through is the point where your loop decides whether to call the function — which is why every serious harness enforces permissions there.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. In stage 6, the failing task raised no exception and produced no error log. What does that teach about evals?</p>
+          <div class="q-opts">
+            <button data-opt="a">The eval harness has a bug — a real failure would have crashed</button>
+            <button data-opt="b">Substring graders are unreliable and should be avoided</button>
+            <button data-opt="c">Agents can fail while every component "works" — only checking final answers against expectations catches quality regressions</button>
+          </div>
+          <p class="q-explain">The tool was right, the plumbing was right, and the answer was still wrong. Crashes are the easy failures; quality drift is the hard one, and a graded task suite is the only instrument that measures it.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. To turn your mini-harness into a production agent, what is the single essential replacement?</p>
+          <div class="q-opts">
+            <button data-opt="a">Rewrite the loop as a graph, because loops do not scale</button>
+            <button data-opt="b">Swap the scripted fake_llm for a real model API call — the loop, gate, compactor, and checkpoints are already the real pattern</button>
+            <button data-opt="c">Replace the Python dict of tools with a configuration database</button>
+          </div>
+          <p class="q-explain">The fake model was the only simulation on the bench. Everything else — the loop, the memory management, the persistence, the gate, the evals — is structurally what production harnesses run, just hardened and deepened.</p>
+        </div>
+      </section>
+
+      <h2>A letter: from operator to engineer</h2>
+      <p>When you started this course, you were someone who <em>operated</em> these systems — skilfully, daily, in production — while the machinery under the hood stayed sealed. You knew what compaction did to your sessions; you did not know it was eight lines around a summarizer call. You approved permission prompts; you did not know the lever was one if-statement, placed at the only boundary that can hold. You resumed crashed runs; you did not know the whole miracle was a dictionary and <code>json.dumps</code>.</p>
+      <p>Now look at what is on your bench. You built the loop from <a href="ch045-react-loop-by-hand.html">Act V</a> and bolted onto it every serious idea from the acts that followed: context management, durability, guardrails, evaluation. Nothing in LangGraph's checkpointers, deepagents' backends, or your daily coding agent's permission prompts is a different <em>kind</em> of thing from what you wrote today. It is the same six organs, engineered deeper.</p>
+      <p>That changes what you are in a code review. When a data scientist opens a merge request touching the agent's memory policy, you can read the diff — not politely, but actually. You can ask where the eval for the change is, and mean it, and know what a good answer looks like. You can disagree about a grader. You are not translating anymore; you are reading the original.</p>
+      <p>Where to go next: keep this mini-harness as your lab bench — every new idea you meet (a new memory strategy, a new gate policy, a new grader) can be tried here in fifty lines before you believe anyone's claims about it. Read real source with your new eyes: the frameworks you studied are open, and their loops are findable. And at work, do the quietly radical thing this act trained you for — pick the agent you already operate, and write one eval for it. Then open the merge request yourself.</p>
+      <p>The hood was never locked. It just needed opening slowly, in the right order. Welcome to the other side of the bench.</p>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A harness is six organs around a model: a loop with tools, memory trimming, compaction, checkpointing, a permission gate, and evals — and you have now built every one of them.</li>
+          <li>Trimming controls cost by deleting knowledge; compaction controls cost by condensing it. When an agent "forgets", suspect the first; when it stays sharp on hour-long runs, thank the second.</li>
+          <li>The model is stateless, so the history is the agent — serialize the state dict every turn and any crash becomes a resume instead of a loss.</li>
+          <li>Safety that must hold lives in code, not prompts: the permission gate is an if-statement at the one boundary the model cannot talk its way through.</li>
+          <li>Agents fail without crashing — only a graded eval suite, run on every change, catches quality regressions before they ship.</li>
+          <li>Frameworks add depth, not mystery: LangGraph's checkpointers, deepagents' backends, and your coding agent's compaction are the same organs you built today, engineered further.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

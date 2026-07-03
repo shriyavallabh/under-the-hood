@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compile, invoke, stream — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch060">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VII · LangGraph</div>
+        <h1>Compile, invoke, stream</h1>
+        <p class="ch-tagline">A blueprint cannot wash a car. Three method calls take your graph from drawing to running machine — and the one you choose decides whether you see only the finished result or every station along the way.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 61 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A brand-new automated car wash, the night before opening day. For weeks it has existed only as a drawing: foam station, brushes, rinse, dry, and one junction near the exit — <em>still dirty? loop back to the brushes</em>. Tonight the commissioning inspector walks the tunnel with the drawing in her hand. Does every conveyor lead somewhere real? Is the junction's lever wired to actual track? Does the entrance connect at all? She washes nothing. She signs the certificate, flips the master switch, and hands over a machine you can finally use.</p>
+        <p>Next morning, two customers. The first drops his keys at the counter, goes for coffee, and collects a gleaming car twenty minutes later — he wants the end result and nothing else. The second stands at the long glass wall beside the tunnel, watching her car change at every station: foam on, foam off, water sheeting away. Same tunnel, same wash — two different ways of consuming it. And stapled to every order is a job ticket carrying the manager's one iron rule: <em>maximum 25 station visits per car</em>, so a hopeless wreck can never circle the brushes forever.</p>
+        <p>The inspection is <code>.compile()</code>. The keys-drop customer is <code>.invoke()</code>. The glass wall is <code>.stream()</code>. The job ticket is the config dict — and the manager's rule is <code>recursion_limit</code>.</p>
+      </section>
+
+      <h2>Two chapters of blueprint, zero actual runs</h2>
+      <p>Quick recap, because this chapter is where the previous two pay off. <a href="ch058-stategraph-anatomy.html">StateGraph anatomy</a> gave you the three parts of a LangGraph app: a state schema (the shared clipboard), nodes (functions that do work and return updates), and edges (the wiring from <code>START</code> to <code>END</code>). <a href="ch059-conditional-edges.html">Conditional edges</a> added junctions — routing functions that read the state and pick the next stop — and rebuilt the <a href="ch045-react-loop-by-hand.html">ReAct loop</a> as a two-node graph with one signal box. But notice what never happened: nothing <em>ran</em>. Every call you made — <code>add_node</code>, <code>add_edge</code>, <code>add_conditional_edges</code> — was a call on the <em>builder</em>, and the builder is a drawing. You cannot hand a drawing a question.</p>
+      <p>That separation is deliberate. LangGraph splits the life of a graph into a <strong>build phase</strong> (declare the stations and the track) and a <strong>run phase</strong> (send actual state through it), with exactly one doorway between them. The doorway is <code>.compile()</code>.</p>
+
+      <h2>.compile(): the commissioning inspection</h2>
+      <p>Despite the heavyweight name, <code>builder.compile()</code> does not translate anything to machine code, and it takes milliseconds. It does two jobs. First, the <strong>inspection</strong>: it walks your wiring and fails loudly, right now, on structural mistakes — an edge pointing at a node you never added, a junction mapping that names a destination that does not exist, no entrypoint from <code>START</code>. These errors surface before a single model is called and before a single rupee is spent, which is exactly where you want them. Second, the <strong>handover</strong>: it returns a new object — a compiled graph — that is <dfn>runnable</dfn>, meaning it speaks the standard run-me interface: <code>.invoke()</code> and <code>.stream()</code>. You met these verbs in <a href="ch052-messages-and-models.html">messages and models</a> — a compiled graph answers to the same interface a chat model does, and LangChain leans on that symmetry everywhere.</p>
+
+      <div class="code-title">the doorway between phases</div>
+      <pre><code class="language-python">graph = builder.compile()   # inspect the wiring, hand over the machine
+
+# The builder was a drawing. `graph` is a machine:
+# it has .invoke(), .stream(), and friends.
+# No node has run yet. No model has been called. Nothing has cost anything.</code></pre>
+
+      <p>Two small things worth knowing about the handover. The compiled graph can draw its own map — <code>graph.get_graph().draw_mermaid()</code> prints diagram text you can paste into any Mermaid viewer, which is how the tidy graph pictures in documentation get made. And <code>compile()</code> takes optional arguments, the most important being <code>checkpointer=</code> — the plug for persistence, which is the entire subject of <a href="ch061-checkpointing.html">the next chapter</a>. Today we compile bare.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Blueprint">
+          <h3>1. The build phase ends with a drawing</h3>
+          <div class="diagram">
+            <div class="d-box hot">builder<small>nodes + edges + junctions</small></div>
+            <div class="d-box dim">compiled graph</div>
+            <div class="d-box dim">a run</div>
+          </div>
+          <p class="step-cap">After ch058 and ch059 you hold a fully wired builder. It is pure description — stations and track on paper. It cannot accept a question any more than a drawing can wash a car.</p>
+        </div>
+        <div class="step" data-title="compile()">
+          <h3>2. compile() inspects, then hands over the machine</h3>
+          <div class="diagram">
+            <div class="d-box">builder</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">.compile()<small>checks every edge leads somewhere real</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">graph<small>runnable</small></div>
+          </div>
+          <p class="step-cap">The inspection walks the wiring: unknown destinations, missing entrypoint — caught here, in milliseconds, at zero token cost. Back comes a runnable object with .invoke() and .stream() on it.</p>
+        </div>
+        <div class="step" data-title="invoke()">
+          <h3>3. .invoke(): keys dropped, final state collected</h3>
+          <div class="diagram">
+            <div class="d-box">state in<small>your question</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">graph.invoke()<small>the whole run happens inside</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">final state out<small>schema-shaped dict</small></div>
+          </div>
+          <p class="step-cap">One blocking call. Agent node, junction, tools node, back around, END — all of it happens inside, invisibly. You get the final state, and nothing before that.</p>
+        </div>
+        <div class="step" data-title="stream()">
+          <h3>4. .stream(): the glass wall</h3>
+          <div class="diagram">
+            <div class="d-box">state in</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">graph.stream()<small>yields a chunk after every step</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">chunk</div>
+            <div class="d-box">chunk</div>
+            <div class="d-box good">chunk<small>last one = the finish</small></div>
+          </div>
+          <p class="step-cap">Same tunnel, same run — but you watch. stream() is a generator that yields after every step: the whole state (values) or just what changed (updates).</p>
+        </div>
+        <div class="step" data-title="config">
+          <h3>5. The job ticket rides along</h3>
+          <div class="diagram">
+            <div class="d-box hot">config<small>recursion_limit · configurable</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">graph.invoke(state, config)</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">whistle past the cap</div>
+          </div>
+          <p class="step-cap">Both verbs take a config dict as their second argument. Today's key: recursion_limit — the cap on steps per run before LangGraph blows the whistle. The default is a modest 25, so any serious run sets its own.</p>
+        </div>
+      </div>
+
+      <h2>.invoke(): drop the keys, collect the car</h2>
+      <p><code>graph.invoke(state)</code> is the keys-drop customer. You hand in an initial state — usually just the fields you care to set, like one user message — and the call blocks while the entire run happens inside: every node, every junction decision, every trip around the cycle. When the graph routes to <code>END</code>, the call returns. What you get back is not "the answer". It is the <strong>final state</strong> — the whole clipboard, shaped exactly like your schema, after every node has finished writing to it:</p>
+
+      <div class="code-title">what .invoke() returns</div>
+      <pre><code class="language-python">final = graph.invoke(
+    {"messages": [{"role": "user", "content": "20% GST on 1500?"}]}
+)
+
+# `final` is the FINAL STATE -- the full schema-shaped dict:
+#
+# {"messages": [
+#     HumanMessage("20% GST on 1500?"),
+#     AIMessage("", tool_calls=[{"name": "calculate", ...}]),
+#     ToolMessage("300.0"),
+#     AIMessage("GST at 20% on 1,500 rupees is 300 rupees."),
+# ]}
+
+print(final["messages"][-1].content)   # pluck the answer yourself</code></pre>
+
+      <p>Read that return value slowly, because it is the run's whole biography: the question, the model's tool call, the tool's result, the final answer — every message the run produced, in order, as real message objects (your plain dict was coerced into a <code>HumanMessage</code> by the <code>add_messages</code> reducer from <a href="ch058-stategraph-anatomy.html">ch058</a>). Any other schema fields — a counter, a list of documents — would be there too, at their final values. The answer your user wants is just the last message's content, and plucking it out is your job, not LangGraph's.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Blocking is the price of convenience. A serious agent run can take thirty seconds of model calls, and <code>.invoke()</code> gives you silence the whole way — nothing to show a waiting user. Fine for a batch job or a test; miserable for a chat interface. That misery is what the second verb fixes.</p></div>
+
+      <h2>.stream(): the glass wall</h2>
+      <p><code>graph.stream(state)</code> runs the very same tunnel but returns a <strong>generator</strong> — remember from <a href="ch038-generators-and-yield.html">generators and yield</a>: a function that hands you values one at a time, pausing in between, instead of one big result at the end. You consume it with a for-loop and receive a chunk after every <dfn>step</dfn> — one step being, in a straight-line graph, one node finishing its work. What each chunk <em>contains</em> is your choice, made with the <code>stream_mode</code> argument. Two modes carry almost all real usage:</p>
+      <p><strong><code>stream_mode="values"</code></strong> gives you the whole car after each station: a full snapshot of the state as it stands after that step. Each chunk looks exactly like <code>.invoke()</code>'s return value, just earlier and still growing.</p>
+      <p><strong><code>stream_mode="updates"</code></strong> gives you the station's work order instead: a small dict of <code>{node_name: what_that_node_returned}</code> — nothing but the delta. This is the mode you reach for when you want to <em>see the graph think</em>: which node ran, in what order, and what each one changed. (It is the default if you pass nothing — but production code names the mode explicitly.)</p>
+
+      <div class="code-title">the same run through both lenses</div>
+      <pre><code class="language-python">inputs = {"messages": [{"role": "user", "content": "20% GST on 1500?"}]}
+
+for chunk in graph.stream(inputs, stream_mode="updates"):
+    print(chunk)
+# {"agent": {"messages": [AIMessage("", tool_calls=[...])]}}
+# {"tools": {"messages": [ToolMessage("300.0")]}}
+# {"agent": {"messages": [AIMessage("GST ... 300 rupees.")]}}
+
+for chunk in graph.stream(inputs, stream_mode="values"):
+    print(len(chunk["messages"]), "messages so far")
+# 1 messages so far    (the input state, before any node runs)
+# 2 messages so far    (after agent: + the tool-call reply)
+# 3 messages so far    (after tools: + the tool result)
+# 4 messages so far    (after agent: + the final answer)</code></pre>
+
+      <p>Two more modes deserve a nod. <code>stream_mode="messages"</code> streams token-by-token output from the LLM calls <em>inside</em> your nodes — the word-at-a-time effect from <a href="ch040-streaming-responses.html">streaming responses</a>, piped out of a whole graph; it is how LangGraph chat UIs type their answers live. Ask for several modes at once by passing a list — <code>stream_mode=["updates", "messages"]</code> — and each chunk arrives as a <code>(mode, data)</code> tuple so you can tell them apart. Both verbs also have async twins, <code>ainvoke</code> and <code>astream</code>, for the <a href="ch039-async-await.html">async world</a>.</p>
+      <p>And here is the punchline that makes the whole API click: <strong><code>.invoke()</code> is not a separate engine</strong>. In LangGraph's own source, invoke simply consumes the values stream and keeps the last chunk. The keys-drop customer's car went through the identical glass-walled tunnel — he just chose not to look. One engine, two ways of watching it.</p>
+
+      <h2>The job ticket: config and recursion_limit</h2>
+      <p>Both verbs accept a second argument: <code>config</code>, a plain dict of settings about <em>this run</em> — as opposed to state, the data <em>inside</em> it. Two compartments matter. <code>"configurable"</code> is a free-form bag of run-scoped values; its star tenant is <code>thread_id</code>, the key that gives a run a durable identity — the doorway to <a href="ch061-checkpointing.html">checkpointing</a>, shut for one more chapter. Today's compartment is <code>"recursion_limit"</code>, sitting at the <em>top level</em> of the dict: the cap on how many steps a run may take. The default is a deliberately modest <strong>25</strong> — a backstop against infinite loops, not a generous budget — tight enough that a genuinely deep agent can bump into it, which is why serious runs raise the cap explicitly rather than leaning on the default.</p>
+
+      <div class="code-title">setting your own cap for an agent run</div>
+      <pre><code class="language-python">config = {"recursion_limit": 50}          # top level, NOT inside configurable
+
+final = graph.invoke(inputs, config)      # config is the second argument
+# or:
+for chunk in graph.stream(inputs, config, stream_mode="updates"):
+    ...</code></pre>
+
+      <p>Why does a graph even need this? Because <a href="ch059-conditional-edges.html">ch059</a> taught you to build cycles on purpose — <code>agent &#8594; tools &#8594; agent</code> — and a cycle plus a router that never picks <code>END</code> equals a machine that runs, and bills you, forever. <code>recursion_limit</code> is <code>max_turns</code> from <a href="ch045-react-loop-by-hand.html">your hand-built loop</a> reborn at the engine level: when a run exceeds the cap, LangGraph raises a <code>GraphRecursionError</code> whose message you will eventually meet in a log — <em>"Recursion limit of 50 reached without hitting a stop condition."</em> Each pass around the ReAct cycle costs two steps (agent, then tools), so a cap of 50 allows roughly two dozen tool rounds before the whistle. Plenty for a healthy agent; a mercy for a stuck one.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The classic mistake: tucking it into the bag, as <code>{"configurable": {"recursion_limit": 100}}</code>. The <code>configurable</code> compartment accepts any key without complaint, so LangGraph will not raise an error — the setting is simply ignored and the default cap still applies. If a changed limit seems to change nothing, check which compartment it landed in.</p></div>
+
+      <h2>The vocabulary of a run</h2>
+      <p>Six terms carry this chapter. Flip until each back feels obvious:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">.compile()</span><span class="flip-back">The commissioning inspection. Validates the wiring (unknown destinations, missing entrypoint) and returns a runnable graph. Milliseconds, no nodes run, no models called.</span></button>
+        <button class="flip" type="button"><span class="flip-front">.invoke(state)</span><span class="flip-back">One blocking call: the whole run happens inside, and you get back the final state — the full schema-shaped dict. The keys-drop customer.</span></button>
+        <button class="flip" type="button"><span class="flip-front">.stream(state)</span><span class="flip-back">A generator over the same run: one chunk after every step. The glass wall. invoke() is literally this stream, drained to its last chunk.</span></button>
+        <button class="flip" type="button"><span class="flip-front">stream_mode="values"</span><span class="flip-back">Each chunk is a full snapshot of the state after that step — the whole car after each station. The mode invoke() drains internally.</span></button>
+        <button class="flip" type="button"><span class="flip-front">stream_mode="updates"</span><span class="flip-back">Each chunk is {node_name: what it returned} — just the delta. The default mode, and the one for watching which node ran and what it changed.</span></button>
+        <button class="flip" type="button"><span class="flip-front">recursion_limit</span><span class="flip-back">Top-level config key capping steps per run (default 25). Exceed it and GraphRecursionError fires — max_turns reborn at the engine level.</span></button>
+      </div>
+
+      <h2>Build all three verbs yourself</h2>
+      <p>The toy graph engine from <a href="ch058-stategraph-anatomy.html">ch058</a> and <a href="ch059-conditional-edges.html">ch059</a> grows up today: its bare <code>run()</code> function becomes a proper <code>compile()</code> that inspects the wiring, and the object it hands back offers real <code>.invoke()</code> and <code>.stream()</code> methods — with <code>stream_mode</code>, a config dict, and a working recursion limit. The graph inside is the same two-node ReAct graph, with the same scripted <code>fake_llm</code> standing in for a paid API. Watch for one method above all: <code>invoke</code> is four lines long, because it is just the stream, drained. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="compile, invoke and stream — a working engine, run me">
+<textarea class="py-src" spellcheck="false">
+START, END = "__start__", "__end__"
+
+class GraphRecursionError(Exception): pass
+
+# ---- build phase: still only a drawing --------------------
+nodes, edges, junctions = {}, {}, {}
+def add_node(name, fn):  nodes[name] = fn
+def add_edge(src, dst):  edges[src] = dst
+def add_conditional_edges(src, router, mapping):
+    junctions[src] = (router, mapping)
+
+# ---- the machine that compile() hands over ----------------
+class CompiledGraph:
+    def stream(self, state, config=None, stream_mode="updates"):
+        limit = (config or {}).get("recursion_limit", 25)
+        current, step = edges[START], 0
+        while current != END:
+            step += 1
+            if step &gt; limit:
+                raise GraphRecursionError(
+                    f"Recursion limit of {limit} reached "
+                    "without hitting a stop condition.")
+            update = nodes[current](state)
+            state = {**state, **update}
+            if stream_mode == "updates":
+                yield {current: update}      # just the delta
+            else:
+                yield dict(state)            # full snapshot
+            if current in junctions:
+                router, mapping = junctions[current]
+                current = mapping[router(state)]
+            else:
+                current = edges[current]
+
+    def invoke(self, state, config=None):
+        final = None
+        for chunk in self.stream(state, config, stream_mode="values"):
+            final = chunk    # invoke IS the values stream, drained
+        return final
+
+def compile_graph():
+    # the inspection: every rail must lead to a real place
+    dests = list(edges.values())
+    for _, mapping in junctions.values():
+        dests += list(mapping.values())
+    for d in dests:
+        if d != END and d not in nodes:
+            raise ValueError(f"edge points at unknown node: {d}")
+    if START not in edges:
+        raise ValueError("no entrypoint: add_edge(START, ...) first")
+    return CompiledGraph()
+
+# ---- the same two-node ReAct graph as ch059 ----------------
+script = [
+    {"content": "", "tool_call": "calculate(1500 * 0.20)"},
+    {"content": "GST at 20% on 1,500 rupees is 300 rupees.",
+     "tool_call": None},
+]
+def fake_llm(state):
+    return script[state["llm_calls"]]
+
+def agent(state):
+    reply = fake_llm(state)
+    return {"messages": state["messages"] + [reply],
+            "llm_calls": state["llm_calls"] + 1}
+
+def tools(state):
+    call = state["messages"][-1]["tool_call"]
+    expr = call[call.index("(") + 1 : call.rindex(")")]
+    obs = {"content": f"OBSERVATION: {eval(expr)}", "tool_call": None}
+    return {"messages": state["messages"] + [obs]}
+
+def should_continue(state):
+    return "act" if state["messages"][-1]["tool_call"] else "done"
+
+add_node("agent", agent)
+add_node("tools", tools)
+add_edge(START, "agent")
+add_conditional_edges("agent", should_continue,
+                      {"act": "tools", "done": END})
+add_edge("tools", "agent")
+
+graph = compile_graph()        # the inspection happens HERE
+
+task = {"content": "TASK: 20% GST on 1500?", "tool_call": None}
+def fresh(): return {"messages": [task], "llm_calls": 0}
+
+print("== .invoke(): keys dropped, final state back ==")
+final = graph.invoke(fresh())
+print("answer:", final["messages"][-1]["content"])
+
+print()
+print("== .stream(stream_mode='updates'): the glass wall ==")
+for chunk in graph.stream(fresh(), stream_mode="updates"):
+    node, update = next(iter(chunk.items()))
+    last = update["messages"][-1]
+    print(f"{node}: {last['tool_call'] or last['content']}")
+
+print()
+print("== recursion_limit: the manager's whistle ==")
+try:
+    graph.invoke(fresh(), {"recursion_limit": 2})
+except GraphRecursionError as e:
+    print("GraphRecursionError:", e)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it three ways. Change the junction mapping's <code>"done"</code> destination to <code>"finish"</code> and re-run — the compile-time inspection catches the unknown destination <em>before</em> anything runs, which is the whole argument for a compile step. Put it back, then switch <code>stream_mode="updates"</code> to <code>"values"</code> in the loop and print <code>len(chunk["messages"])</code> to watch the snapshot grow. Finally, make <code>should_continue</code> always return <code>"act"</code> — an agent that never finishes — and watch the whistle end what would otherwise loop forever.</p></div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Two honest simplifications, in the same spirit as ch059's: real LangGraph's values mode also emits the <em>input</em> state as a first chunk before any node runs (our toy starts at step one), and its step counter counts "super-steps", so nodes running in parallel count as one step together. Neither wrinkle changes the mental model.</p></div>
+
+      <h2>The same three verbs in real LangGraph</h2>
+      <p>Here is the production shape, picking up exactly where <a href="ch059-conditional-edges.html">ch059</a>'s walkthrough stopped — at <code>builder.compile()</code>. Click the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">run_react.py — running the graph from ch059</div>
+        <div class="wl-line"><code># builder wired as in ch059: agent node, tools node, one junction</code></div>
+        <div class="wl-line"><code>graph = builder.compile()</code>
+          <div class="wl-note">The doorway. Wiring is validated, and back comes a runnable compiled graph. This is also where a checkpointer would plug in — <code>compile(checkpointer=...)</code> — but that is <a href="ch061-checkpointing.html">next chapter's</a> story.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>config = {"recursion_limit": 50}</code>
+          <div class="wl-note">The job ticket. <code>recursion_limit</code> lives at the top level; the <code>"configurable"</code> bag (for things like <code>thread_id</code>) would sit beside it, not around it.</div></div>
+        <div class="wl-line"><code>inputs = {"messages": [</code></div>
+        <div class="wl-line"><code>    {"role": "user", "content": "20% GST on 1500?"}]}</code>
+          <div class="wl-note">The initial state — only the fields you want to set. The plain dict message is coerced into a proper HumanMessage by the <code>add_messages</code> reducer.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>final = graph.invoke(inputs, config)</code>
+          <div class="wl-note">Config is the second positional argument. The call blocks while the entire run — every node, every junction decision, every loop — happens inside, then returns the final state.</div></div>
+        <div class="wl-line"><code>print(final["messages"][-1].content)</code>
+          <div class="wl-note">The final state is the whole clipboard; the answer is its last message. Plucking it out is your job.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>for chunk in graph.stream(inputs, config,</code>
+          <div class="wl-note">The same run behind glass. <code>stream()</code> returns a generator — nothing executes until the for-loop starts pulling.</div></div>
+        <div class="wl-line"><code>                          stream_mode="updates"):</code>
+          <div class="wl-note">"updates" mode: one small dict per step, keyed by the node that just ran. Swap in "values" for full snapshots, or "messages" for token-by-token LLM output.</div></div>
+        <div class="wl-line"><code>    for node, update in chunk.items():</code>
+          <div class="wl-note">Each chunk is <code>{node_name: update}</code>. Unpacking it gives you the route (node names, in order) and the work (what each wrote) — the raw material of an execution log.</div></div>
+        <div class="wl-line"><code>        print(f"[{node}] wrote {list(update)}")</code></div>
+      </div>
+
+      <h2>Reading a run like a log file</h2>
+      <p>Here is why the updates mode earns a section of its own: in production you will rarely watch an agent live. You will read, after the fact, what somebody's <code>stream()</code> loop — or a tracing tool wired to the same events — printed into the logs. An updates-mode trace <em>is</em> the graph's execution log, and reading one is a skill. A healthy run of our graph logs like this:</p>
+
+      <div class="code-title">a healthy trace — three steps, clean exit</div>
+      <pre><code class="language-python">{"agent": {"messages": [AIMessage("", tool_calls=[{"name": "calculate", ...}])]}}
+{"tools": {"messages": [ToolMessage("300.0")]}}
+{"agent": {"messages": [AIMessage("GST at 20% on 1,500 rupees is 300 rupees.")]}}</code></pre>
+
+      <p>Read it in two passes. First pass, <strong>keys only</strong>: <code>agent, tools, agent</code> — that is the route the state took, and it should match the drawing in your head (in, around the cycle once, out). Second pass, <strong>values</strong>: what did each node actually write? The agent's first entry carries a tool call, the tools entry carries a result, the agent's last entry carries plain text — which is precisely the condition that made the router choose <code>END</code>. Now compare with a sick run:</p>
+
+      <div class="code-title">a sick trace — the same pair, forever</div>
+      <pre><code class="language-python">{"agent": {"messages": [AIMessage("", tool_calls=[{"name": "search", "args": {"q": "gst rate"}}])]}}
+{"tools": {"messages": [ToolMessage("no results")]}}
+{"agent": {"messages": [AIMessage("", tool_calls=[{"name": "search", "args": {"q": "gst rate"}}])]}}
+{"tools": {"messages": [ToolMessage("no results")]}}
+# ... the identical pair, ten more times ...
+# GraphRecursionError: Recursion limit of 25 reached
+#     without hitting a stop condition.</code></pre>
+
+      <p>The route never varies and the payloads never change: the model asks the same question, gets the same unhelpful answer, and learns nothing that would make the router pick <code>END</code>. The <code>GraphRecursionError</code> at the bottom is the <em>symptom</em>; the repeating pair above it is the <em>disease</em>. Raising the limit to 100 would buy seventy-five more identical steps and a bigger bill. The real fixes live where the loop lives: a tool that returns something more useful than "no results", a prompt that tells the model what to do when a search comes back empty, or a router that counts attempts and bails out. Notice that you diagnosed all of this from node names and deltas alone — which is why experienced reviewers ask for the updates trace before they ask for anything else.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Search any LangGraph service for <code>.compile(</code> and you will find the seam where the app is assembled — usually once, at startup, with the compiled graph reused across requests. Around it: <code>graph.invoke(...)</code> inside API handlers and batch jobs, <code>async for chunk in graph.astream(..., stream_mode="messages")</code> inside anything with a chat window, and updates-mode traces feeding the log pipeline. In merge requests you will meet "bump the recursion limit" (someone's cycle outgrew its cap — sometimes legitimate, sometimes the sick trace above) and "stream this instead of invoking" (a user-facing path that sat silent for thirty seconds). And when an incident channel pastes <em>"Recursion limit of 25 reached without hitting a stop condition"</em>, you now know to scroll <em>up</em> from the error to find the repeating pair that caused it.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. You run <code>graph = builder.compile()</code>. What has happened?</p>
+          <div class="q-opts">
+            <button data-opt="a">Every node executed once as a dry run, to check they work</button>
+            <button data-opt="b">The wiring was validated and a runnable object came back — no node has run, no model has been called</button>
+            <button data-opt="c">The graph was translated to machine code for faster execution</button>
+          </div>
+          <p class="q-explain">compile() is the commissioning inspection plus handover: structural checks (unknown destinations, missing entrypoint) and a runnable compiled graph in return. It costs milliseconds and zero tokens — running anything is what invoke and stream are for.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. What does <code>graph.invoke(inputs)</code> hand back?</p>
+          <div class="q-opts">
+            <button data-opt="a">The final answer as a string</button>
+            <button data-opt="b">A generator you loop over to collect results</button>
+            <button data-opt="c">The final state — the full schema-shaped dict after every node has written to it</button>
+          </div>
+          <p class="q-explain">invoke() blocks until the run routes to END, then returns the whole clipboard — for a messages schema, the entire conversation including tool calls and results. The answer is its last message, and extracting it is your job.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. A log line reads <code>{"tools": {"messages": [ToolMessage("300.0")]}}</code>. Which stream mode produced it, and what does it show?</p>
+          <div class="q-opts">
+            <button data-opt="a">updates — the tools node just ran, and this dict is exactly what it returned</button>
+            <button data-opt="b">values — it is a full snapshot of the state after that step</button>
+            <button data-opt="c">messages — it is one token of the model's streamed reply</button>
+          </div>
+          <p class="q-explain">The {node_name: delta} shape is updates mode's signature. A values chunk would be the whole state (every message so far, all fields); a messages chunk would be token-level LLM output.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. You pass <code>config={"configurable": {"recursion_limit": 100}}</code> to cap a runaway agent, yet the run blows straight past 100 steps. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">The recursion limit cannot be lowered below its default</button>
+            <button data-opt="b">recursion_limit is a top-level config key — inside the configurable bag it is silently ignored, so the default cap still applied</button>
+            <button data-opt="c">Changing the limit requires compiling with a checkpointer</button>
+          </div>
+          <p class="q-explain">configurable accepts any key without complaint, so the misplaced setting raises no error and does nothing. The correct shape is config={"recursion_limit": 100} at the top level, passed as the second argument to invoke or stream.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A trace shows the identical agent-tools pair repeating twelve times, then GraphRecursionError. The right response?</p>
+          <div class="q-opts">
+            <button data-opt="a">Raise recursion_limit to 100 — the agent clearly needed more steps</button>
+            <button data-opt="b">File a LangGraph bug — the engine should have stopped the loop sooner</button>
+            <button data-opt="c">Treat the error as a symptom: the router never got a reason to choose END, so fix the tool result, the prompt, or the router — not the limit</button>
+          </div>
+          <p class="q-explain">Unchanging payloads mean the model learns nothing new each lap, so the exit condition can never trigger. More steps just means more identical laps at higher cost. The engine did its job — the whistle blew; the loop's contents are yours to fix.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A StateGraph builder is a drawing; <code>.compile()</code> is the commissioning inspection that validates the wiring (unknown destinations, missing entrypoint) and hands back a runnable graph — in milliseconds, with no nodes run and no models called.</li>
+          <li><code>.invoke(state)</code> is one blocking call: the whole run happens inside, and you get the final state back — the full schema-shaped dict, from which you pluck the answer yourself.</li>
+          <li><code>.stream(state)</code> is a generator over the same run: <code>stream_mode="values"</code> yields a full state snapshot after each step, <code>"updates"</code> yields just <code>{node: what_it_returned}</code>, and <code>"messages"</code> yields token-level LLM output. invoke() is literally the values stream, drained to its last chunk.</li>
+          <li>The config dict rides along as the second argument: <code>recursion_limit</code> at the top level (default 25 steps — set your own cap; exceed it and <code>GraphRecursionError</code> fires), and the <code>configurable</code> bag for run-scoped values like <code>thread_id</code> — next chapter's key.</li>
+          <li>An updates-mode trace is your execution log: the keys are the route, the values are the work, and an identical repeating pair is a stuck cycle — fix the loop's contents, not the limit.</li>
+          <li><code>ainvoke</code> and <code>astream</code> are the async twins; same behaviour, awaitable — the shape every production chat service actually uses.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

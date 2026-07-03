@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What always-on platforms add — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch092">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XI · The Landscape</div>
+        <h1>What always-on platforms add</h1>
+        <p class="ch-tagline">A framework runs when you call it. A platform decides for itself when to wake up — on a clock, on a message, on a webhook, on a file landing in a folder — and it keeps its agents alive at 3 a.m. while you sleep. This chapter maps that gap, piece by piece, and prices it.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 93 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your friend Arun is the finest cook you know. But eating his food is a project: you drive to his flat, hand him the ingredients, stand in his kitchen while he cooks, and drive home with the biryani on your lap. If you don't show up, nothing gets cooked. Arun does not know you are hungry unless you are physically standing in front of him.</p>
+        <p>Down the road is a restaurant. Same quality of cooking — in fact, Arun moonlights there. But the restaurant has opening hours and a prep schedule that starts at dawn whether or not a single customer has arrived. It has a phone line, a delivery app, and a front door — three ways for hunger to reach the kitchen. It has a manager who notices when a burner dies and relights it, a locked cabinet for the till and the supplier passwords, and a roster that keeps four cooks fed with the right keys and the right recipes.</p>
+        <p>The cook is the agent. Everything else is the platform. This chapter is about everything else.</p>
+      </section>
+
+      <h2>The question that separates them: who calls run()?</h2>
+      <p>Quick recap of where we stand. In <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> you built the loop — the fifty lines that beat inside every agent. In <a href="ch081-what-is-a-harness.html">the harness chapter</a> you learned that a <em>harness</em> is everything wrapped around that loop to make it safe and effective: context engineering, guardrails, sandboxing, observability. And in <a href="ch091-claude-code-dissected.html">the previous chapter</a> you dissected Claude Code, a world-class harness, down to its system prompt and tool set.</p>
+      <p>Every one of those systems shares one quiet assumption: <strong>they run because somebody invoked them.</strong> Claude Code wakes when you type into a terminal. A LangGraph app runs when some code calls <code>invoke()</code>. Close the laptop and the agent simply ceases to exist. That is Arun in his flat — brilliant, and inert until you knock.</p>
+      <p>An <dfn>always-on platform</dfn> flips the default: it is a long-lived, resident service where the agents are already loaded, and <em>time and events call run() instead of you</em>. The intelligence is identical. What changes is who initiates — and that single change drags in a surprising amount of machinery. There are exactly four ways a sleeping platform gets woken, plus one way it wakes itself:</p>
+      <ul>
+        <li><strong>The alarm clock</strong> — a scheduler fires at a planned time.</li>
+        <li><strong>The doorbell</strong> — a human sends a message on some channel.</li>
+        <li><strong>The mail slot</strong> — another <em>system</em> pushes a notification (a webhook).</li>
+        <li><strong>The motion sensor</strong> — something changes on disk or in a data source.</li>
+        <li><strong>The night nurse</strong> — a watchdog wakes on its own rounds to check everyone's pulse.</li>
+      </ul>
+      <p>Watch a full day of this before we take each piece apart.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="02:30 cron">
+          <h3>02:30 — the alarm clock rings</h3>
+          <div class="diagram">
+            <div class="d-box hot">Scheduler<small>02:30 entry fires</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Backup agent<small>snapshots, uploads</small></div>
+            <div class="d-box dim">You<small>asleep</small></div>
+          </div>
+          <p class="step-cap">Nobody asked for this run. A schedule entry — "every day at 02:30, run the backup agent" — fired on the clock. The agent does its work and goes back to being a config entry.</p>
+        </div>
+        <div class="step" data-title="06:10 cron">
+          <h3>06:10 — the morning brief writes itself</h3>
+          <div class="diagram">
+            <div class="d-box hot">Scheduler</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Brief agent<small>gathers, summarises</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Chat channel<small>message waiting at 7:00</small></div>
+          </div>
+          <p class="step-cap">A second scheduled wake-up. Note the output path: the agent does not print to a terminal — there is no terminal. It posts through a channel, so the result is on your phone when you wake.</p>
+        </div>
+        <div class="step" data-title="09:14 webhook">
+          <h3>09:14 — another system knocks</h3>
+          <div class="diagram">
+            <div class="d-box">Payment provider<small>payment.succeeded</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Webhook endpoint<small>verifies, routes</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Invoice agent<small>drafts the receipt</small></div>
+          </div>
+          <p class="step-cap">A customer paid. The payment provider sent an HTTP request to a URL the platform exposes — a webhook. The platform checks its signature, then wakes the right agent with the event as its task.</p>
+        </div>
+        <div class="step" data-title="11:03 message">
+          <h3>11:03 — a human rings the doorbell</h3>
+          <div class="diagram">
+            <div class="d-box">Customer<small>"where is my order?"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Channel adapter<small>chat app protocol</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Helpdesk agent<small>replies in-thread</small></div>
+          </div>
+          <p class="step-cap">A chat message arrives on a messaging app. The channel adapter translates it into the platform's standard envelope, finds the right conversation state, and wakes the helpdesk agent with it.</p>
+        </div>
+        <div class="step" data-title="14:00 watchdog">
+          <h3>14:00 — the night nurse does her rounds</h3>
+          <div class="diagram">
+            <div class="d-box dim">Helpdesk agent<small>wedged since 13:00</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Watchdog<small>no heartbeat for 60 min</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Restarted<small>+ alert to ops channel</small></div>
+          </div>
+          <p class="step-cap">The helpdesk process quietly hung an hour ago. No human noticed. The watchdog noticed the missing heartbeats, restarted the process, and posted a one-line alert — the pattern you met in the watchdogs chapter, now running fleet-wide.</p>
+        </div>
+        <div class="step" data-title="16:40 filedrop">
+          <h3>16:40 — the motion sensor trips</h3>
+          <div class="diagram">
+            <div class="d-box">Inbox folder<small>contract.pdf lands</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">File watcher<small>change detected</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Invoice agent<small>files and summarises it</small></div>
+          </div>
+          <p class="step-cap">Someone dropped a PDF into a watched folder. The file watcher fired, the agent processed it. Midnight arrives: four agents worked a full shift, one got resuscitated, and you never touched a keyboard.</p>
+        </div>
+      </div>
+
+      <h2>The vocabulary of the gap</h2>
+      <p>Eight words carry the rest of this chapter. Flip until they feel obvious:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">scheduler</span><span class="flip-back">The platform's alarm clock: a table of "at this time, run this agent" entries, checked continuously by a resident process.</span></button>
+        <button class="flip" type="button"><span class="flip-front">cron expression</span><span class="flip-back">The five-field mini-language for schedules: minute, hour, day-of-month, month, weekday. "10 6 * * *" means 06:10 every day.</span></button>
+        <button class="flip" type="button"><span class="flip-front">webhook</span><span class="flip-back">An HTTP request another system sends TO you the moment something happens — push, not poll. Your platform exposes a URL; the world knocks on it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">channel adapter</span><span class="flip-back">A translator between one outside medium (a chat app, email, voice) and the platform's one internal message format.</span></button>
+        <button class="flip" type="button"><span class="flip-front">heartbeat</span><span class="flip-back">A tiny periodic "still alive" signal an agent process emits. Silence is the symptom watchdogs act on.</span></button>
+        <button class="flip" type="button"><span class="flip-front">watchdog</span><span class="flip-back">A supervisor that checks heartbeats and symptoms, restarts wedged processes, and escalates to a human when restarting is not enough.</span></button>
+        <button class="flip" type="button"><span class="flip-front">fleet</span><span class="flip-back">All the agents a platform operates — each with its own config, version, channels, and credentials — managed as one herd, not one pet.</span></button>
+        <button class="flip" type="button"><span class="flip-front">secret vault</span><span class="flip-back">One locked place for API keys and tokens, injected into agents by NAME at runtime — never pasted into prompts, code, or git.</span></button>
+      </div>
+
+      <h2>Waking on time: schedulers and cron</h2>
+      <p>The oldest piece of the gap is also the simplest. A <dfn>scheduler</dfn> is a resident process that holds a table of "when → what" entries and fires them on the clock. Unix has shipped one since the 1970s — <code>cron</code> — and its five-field <dfn>cron expression</dfn> syntax is still how most of the world writes schedules: <code>10 6 * * *</code> reads as "minute 10, hour 6, any day, any month, any weekday". The asterisk means "every".</p>
+      <p>Simple to write; surprisingly easy to get wrong in operation. Three gotchas account for most scheduler pain in the wild:</p>
+      <ul>
+        <li><strong>Timezones.</strong> The server's clock and your wall clock are rarely the same thing. A "6 a.m. brief" scheduled in UTC arrives at lunchtime in India. Daylight-saving shifts silently move runs twice a year in some regions.</li>
+        <li><strong>Overlap.</strong> If the 02:30 run is still going at 03:30 when the next entry fires, you now have two backup agents fighting over the same files. Real schedulers take a lock or skip the run.</li>
+        <li><strong>Missed runs.</strong> If the machine was asleep at 02:30, does the job run at wake-up or wait for tomorrow? That is a policy choice — "catch up" versus "skip" — and the wrong default means backups silently stop on a laptop that sleeps at night.</li>
+      </ul>
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Schedulers also have an economics failure mode: it is tempting to schedule an agent to "check things" every few minutes. Each check is an LLM call, and hundreds of heartbeat wake-ups a day is a real bill for zero new information. The fix is the next section — wake on <em>events</em>, not on a nervous timer. The <a href="ch071-the-token-bill.html">token-bill chapter</a> applies to platforms double.</p></div>
+
+      <h2>Waking on events: doorbell, mail slot, motion sensor</h2>
+      <p>Time-based waking is blind — the clock fires whether or not anything happened. Event-based waking is the opposite: the platform sleeps at zero cost until the world pushes something at it. Three families cover nearly everything:</p>
+      <p><strong>Messages.</strong> A human writes to the agent on some channel. Chat platforms deliver these by pushing to your endpoint or by letting your process hold a long-lived connection; either way, the arrival of the message is the wake-up.</p>
+      <p><strong>Webhooks.</strong> A <dfn>webhook</dfn> is an HTTP request that another <em>system</em> sends to a URL you expose, at the moment something happens — a payment settles, a merge request opens, a form is submitted. It is the inverse of polling: instead of your agent asking "anything new?" every minute, the other system tells you exactly once, exactly when. Two disciplines come with the mail slot. First, <em>verify the sender</em> — real webhook providers sign their requests, and your endpoint must check the signature — a public URL will absolutely receive junk and forgeries. Second, expect <em>duplicate delivery</em>: providers retry when your response is slow, so the same event can arrive twice. Your handler must be <dfn>idempotent</dfn> — safe to run twice with the same outcome, usually by remembering event IDs it has already processed. "The agent sent the customer two receipts" is almost always a missing idempotency check, not a confused model.</p>
+      <p><strong>File and data changes.</strong> Operating systems can notify a process the instant a folder changes, and a <dfn>file watcher</dfn> subscribes to exactly that: a PDF lands in an inbox directory, the watcher fires, an agent wakes with the path as its task. The classic gotcha here is the <em>storm</em> — saving one file can emit half a dozen change events in a burst, so watchers debounce: they wait a beat for the burst to finish, then fire once.</p>
+
+      <h2>Being everywhere: multi-channel presence</h2>
+      <p>Arun's restaurant has a phone line, a delivery app, and a front door — and one kitchen. A platform does the same trick with a <dfn>channel adapter</dfn> per medium: a small translator that speaks one outside protocol (a chat app's API, an email inbox, a voice line) and converts every incoming thing into one standard internal envelope — roughly <em>who said it, on which channel, in which conversation, saying what, with which attachments</em>. The agent never learns chat-app APIs; it reads envelopes. Replies flow back out through the same adapter.</p>
+      <p>Two details make channels genuinely hard rather than just tedious:</p>
+      <ul>
+        <li><strong>Session routing.</strong> A platform is talking to many people in many threads at once, so every conversation needs its own durable state. This is exactly the <code>thread_id</code> idea from <a href="ch061-checkpointing.html">the checkpointing chapter</a>: the adapter maps each outside conversation to one thread of agent memory, so your reply lands in <em>your</em> conversation and not someone else's.</li>
+        <li><strong>Media shape.</strong> Email is slow-motion chat with attachments and quoting. Voice is chat wearing headphones — speech-to-text on the way in, text-to-speech on the way out, with latency budgets tight enough that streaming (<a href="ch040-streaming-responses.html">remember streaming?</a>) stops being a nicety and becomes mandatory. Under the envelope, though, they are all the same conversation loop.</li>
+      </ul>
+      <p>Adapters are the single biggest slice of the platform gap by volume, because every channel is its own quirky protocol with its own auth, rate limits, formatting rules, and failure modes — and none of that code makes your agent any smarter. Hold that thought for the economics section.</p>
+
+      <h2>Staying alive: watchdogs, fleets, and the key cabinet</h2>
+      <p>Recall the core of <a href="ch089-watchdogs-self-healing.html">the watchdogs chapter</a>: long-running agents fail in undramatic ways — a hung network call, a full disk, an expired token — and the cure is a supervisor that watches <em>symptoms</em> (missed heartbeats, error signatures in logs, stale outputs), applies the smallest fix that works (usually a restart), and escalates to a human only when self-healing fails. On a single agent that is a nice safety net. On a platform it is load-bearing: an always-on system with no watchdog is really an "always-on-until-Tuesday" system, because with nobody invoking the agent by hand, nobody is there to notice it died.</p>
+      <p>The platform versions of the pattern add two ideas on top:</p>
+      <ul>
+        <li><strong>Fleet management.</strong> A <dfn>fleet</dfn> is the whole herd of agents the platform runs — each with its own prompt version, tool set, channels, model tier, and schedule. Fleet management is the registry and controls for the herd: see every agent's health on one screen (this is <a href="ch088-observability.html">observability</a> grown up), roll a new prompt out to one agent before all of them, pause an agent that is misbehaving, and know exactly which version was live when something went wrong.</li>
+        <li><strong>Secret management.</strong> Every channel and tool needs a credential — bot tokens, API keys, database passwords. Multiply by a fleet and you have dozens of secrets, which is why platforms centralise them in a <dfn>secret vault</dfn>: one encrypted store, where agents receive credentials <em>by name</em> at runtime ("give me PAYMENT_API_KEY") and each agent can reach only the names it was granted. Rotation — replacing a leaked or expired key — becomes a one-place change instead of a hunt through twelve config files. And, echoing <a href="ch079-mcp-security.html">the MCP security chapter</a>: secret values never go into prompts, code, or version control. A model's context is not a safe.</li>
+      </ul>
+
+      <p>Here is what all of this looks like as configuration. This is a representative platform config file — click the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">platform.yaml — one file, the whole gap</div>
+        <div class="wl-line"><code>agents:</code>
+          <div class="wl-note">The fleet registry. Every agent the platform operates is declared here — this file IS the answer to "what is running on this box?"</div></div>
+        <div class="wl-line"><code>  morning-brief:</code></div>
+        <div class="wl-line"><code>    schedule: "10 6 * * *"</code>
+          <div class="wl-note">A cron expression: minute 10, hour 6, every day. The scheduler reads this table and calls run() on the clock — no human in the loop.</div></div>
+        <div class="wl-line"><code>    channel: chat</code>
+          <div class="wl-note">Where output goes. There is no terminal to print to, so the result rides a channel adapter out to a chat app.</div></div>
+        <div class="wl-line"><code>  invoice-bot:</code></div>
+        <div class="wl-line"><code>    wake_on:</code>
+          <div class="wl-note">Event wake-ups instead of a timer: this agent sleeps at zero cost until one of the triggers below fires.</div></div>
+        <div class="wl-line"><code>      - webhook: /hooks/payments</code>
+          <div class="wl-note">The mail slot: the platform exposes this URL, verifies each request's signature, and wakes invoice-bot with the event payload as its task.</div></div>
+        <div class="wl-line"><code>      - filedrop: inbox/contracts</code>
+          <div class="wl-note">The motion sensor: a file watcher on this folder, debounced so one saved file fires one wake-up, not six.</div></div>
+        <div class="wl-line"><code>    secrets: [PAYMENT_API_KEY]</code>
+          <div class="wl-note">Least privilege from the vault: invoice-bot can request this one credential by name at runtime. It cannot see the chat bot's token, and the value appears nowhere in this file.</div></div>
+        <div class="wl-line"><code>watchdog:</code>
+          <div class="wl-note">The night nurse's standing orders — platform-wide, covering every agent above.</div></div>
+        <div class="wl-line"><code>  heartbeat_every: 30m</code>
+          <div class="wl-note">Healthy agent processes emit a tiny "still alive" signal on this rhythm.</div></div>
+        <div class="wl-line"><code>  restart_after_silence: 45m</code>
+          <div class="wl-note">Silence past this threshold means wedged, not idle — restart it. The smallest fix that works, applied automatically.</div></div>
+        <div class="wl-line"><code>  alert: chat:ops-room</code>
+          <div class="wl-note">Every intervention gets reported to a human channel. Self-healing that hides its work is a future outage with no paper trail.</div></div>
+      </div>
+
+      <h2>Run a whole day of platform, right now</h2>
+      <p>Everything above compresses into one loop you can run. The clock is fake — minutes since midnight, so a full day finishes in well under a second — but the mechanisms are the real thing: a cron table, an event queue, heartbeats, and a watchdog that catches a wedged agent. The "model" is a scripted <code>fake_llm()</code>, as always. Press <strong>Run</strong>, then read the day's log like an ops report.</p>
+
+      <div class="pyrun" data-title="A tiny always-on platform — one simulated day">
+<textarea class="py-src" spellcheck="false">
+# One simulated day on an always-on platform.
+# Fake clock = minutes since midnight; mechanisms = real.
+
+def hhmm(m):
+    return f"{m//60:02d}:{m%60:02d}"
+
+def fake_llm(agent, reason):          # scripted stand-in for the model
+    canned = {
+        "backup-runner": "Snapshot taken, upload verified.",
+        "morning-brief": "Brief written, posted to the chat channel.",
+        "invoice-bot":   "Event handled, receipt drafted for review.",
+        "helpdesk":      "Customer answered in their thread.",
+    }
+    return canned.get(agent, "Done.")
+
+last_beat = {"helpdesk": 0}           # heartbeat ledger
+helpdesk_alive = True
+
+def wake(agent, reason, now):
+    print(f"{hhmm(now)}  WAKE {agent:&lt;14} ({reason})")
+    print(f"       agent: {fake_llm(agent, reason)}")
+
+# 1. SCHEDULER -- the alarm clock (cron-style entries)
+SCHEDULE = [(2*60+30, "backup-runner"), (6*60+10, "morning-brief")]
+
+# 2. EVENTS -- the world knocking (webhook, message, filedrop)
+EVENTS = {
+    9*60+14:  ("webhook: payment.succeeded", "invoice-bot"),
+    11*60+3:  ("message: 'where is my order?'", "helpdesk"),
+    16*60+40: ("filedrop: contract.pdf", "invoice-bot"),
+}
+
+for now in range(24 * 60):            # tick through the day
+    if helpdesk_alive and now % 30 == 0:
+        last_beat["helpdesk"] = now   # healthy heartbeat
+
+    if now == 13*60:                  # simulate a silent hang
+        helpdesk_alive = False
+        print(f"{hhmm(now)}  (helpdesk quietly wedges -- no error, no log)")
+
+    # 3. WATCHDOG -- rounds every 15 min, acts on silence
+    if now % 15 == 0 and now - last_beat["helpdesk"] &gt; 45:
+        print(f"{hhmm(now)}  WATCHDOG: helpdesk silent "
+              f"{now - last_beat['helpdesk']} min -- restarting, alerting ops")
+        helpdesk_alive = True
+        last_beat["helpdesk"] = now   # reset the clock, or it re-fires
+
+    for minute, agent in SCHEDULE:
+        if minute == now:
+            wake(agent, "cron", now)
+    if now in EVENTS:
+        reason, agent = EVENTS[now]
+        wake(agent, reason, now)
+
+print()
+print("00:00  Midnight again. Four agents worked, one was")
+print("       resuscitated, and no human touched a keyboard.")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it the way platforms break. Set <code>heartbeat_every</code> faster or slower by changing <code>now % 30</code>, and watch the watchdog get jumpy or sleepy. Add a second entry to <code>SCHEDULE</code> at the same minute as an event and see two wake-ups collide in the log. Delete the watchdog block entirely and notice the most important thing of all: the day still <em>looks</em> fine — helpdesk just silently answers nobody from 13:00 onward. That silence is what always-on operations is really about.</p></div>
+
+      <h2>The economics: build the gap, or adopt it?</h2>
+      <p>Now the honest scorecard — the method this whole act runs on. The loop at the heart of an agent is a weekend of work; you built it yourself in one chapter. The platform gap is a different animal. Rough, illustrative shape of the effort (round numbers, deliberately not precise):</p>
+
+      <div data-bars data-title="Illustrative effort to build each layer yourself" data-unit="engineer-days"
+           data-note="Round illustrative numbers. The agent loop is the smallest bar on the chart — the plumbing dwarfs it, and channel adapters dwarf everything.">
+        <div class="bar" data-label="Agent loop" data-value="2"></div>
+        <div class="bar" data-label="Scheduler + cron" data-value="8"></div>
+        <div class="bar" data-label="Event wake-ups (webhooks, watchers)" data-value="15"></div>
+        <div class="bar" data-label="Watchdog + ops alerts" data-value="15"></div>
+        <div class="bar" data-label="Fleet + secret management" data-value="20"></div>
+        <div class="bar" data-label="Channel adapters (chat, email, voice)" data-value="40"></div>
+      </div>
+
+      <p>The chart carries the whole argument. Almost none of the gap is differentiating: your scheduler will behave like everyone's scheduler, your chat adapter like everyone's chat adapter. This is classic <em>undifferentiated plumbing</em> — necessary, hard to get right, and worth zero competitive advantage once it works. What actually makes your system yours lives in the smallest bar: the agent's tools, prompts, skills, and judgement.</p>
+      <p>So the scorecard for build-versus-adopt looks like this:</p>
+      <div class="tbl"><table>
+        <tr><th>Lean towards adopting a platform when…</th><th>Lean towards building the gap when…</th></tr>
+        <tr><td>You need several channels soon and the team is small</td><td>You need one channel, or none (pure scheduled jobs)</td></tr>
+        <tr><td>The agents must survive nights and weekends unattended</td><td>A human is present whenever the agent runs</td></tr>
+        <tr><td>Plumbing is not your product</td><td>The plumbing IS the product, or compliance forbids third-party gateways</td></tr>
+        <tr><td>You can live with the platform's upgrade churn and conventions</td><td>You need total control over every wake-up and credential path</td></tr>
+      </table></div>
+      <p>Adopting has real costs too — be honest about them on the scorecard. A platform is a large, privileged, always-running codebase you did not write: it holds your secrets, listens on public URLs, and changes under you with every upgrade. Its security surface is exactly as wide as its feature list. And migration away is painful once your agents are woven into its conventions. The pragmatic answer for most teams is hybrid: <strong>adopt the plumbing, build the agents</strong> — which is precisely why frameworks and platforms are converging. The managed platform around LangGraph, for instance, adds scheduled runs and webhook endpoints on top of the framework; the next chapter weighs that whole ecosystem on this same scorecard.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You already live next to this gap. <code>crontab -l</code> on any Linux box lists the scheduler entries; macOS uses launchd property lists and Kubernetes has a literal <code>CronJob</code> resource. A <code>restart: always</code> line in a docker-compose file, or a liveness probe in a Kubernetes manifest, is a watchdog in five words. The "Webhooks" settings page in GitHub, GitLab, or a payment dashboard is the mail slot being wired up. And when a colleague says "the bot didn't fire this morning" they are debugging a scheduler; "we got the webhook twice and it double-posted" is a missing idempotency check; "the token expired and nobody noticed for three days" is the argument for a vault plus a watchdog, in one sentence.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. What is the single defining difference between an agent framework and an always-on platform?</p>
+          <div class="q-opts">
+            <button data-opt="a">Platforms use bigger, smarter models</button>
+            <button data-opt="b">Frameworks cannot use tools; platforms can</button>
+            <button data-opt="c">Who initiates a run: a framework runs when invoked, a platform wakes itself on time and events</button>
+          </div>
+          <p class="q-explain">The intelligence is identical — the same loop, often the same framework, sits inside both. The gap is everything that lets time, messages, webhooks, and file changes call run() with no human present.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. A payment provider delivers the same webhook twice (it retried after a slow response), and the agent emails the customer two receipts. What was missing?</p>
+          <div class="q-opts">
+            <button data-opt="a">A bigger model that would notice the duplicate</button>
+            <button data-opt="b">An idempotent handler that remembers already-processed event IDs</button>
+            <button data-opt="c">A faster scheduler</button>
+          </div>
+          <p class="q-explain">Duplicate delivery is normal, documented webhook behaviour — providers retry on slow responses. The handler, not the model, must be idempotent: safe to run twice with one outcome, usually by recording event IDs it has seen.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why does an always-on platform treat a watchdog as load-bearing rather than a nice-to-have?</p>
+          <div class="q-opts">
+            <button data-opt="a">With nobody invoking agents by hand, nobody is there to notice a silent failure — the watchdog is the only observer at 3 a.m.</button>
+            <button data-opt="b">Watchdogs make the model's answers more accurate</button>
+            <button data-opt="c">Regulations require watchdogs on all AI systems</button>
+          </div>
+          <p class="q-explain">In an invoked system, the human at the keyboard is the failure detector. Remove the human and long-running processes fail undramatically — a hang, an expired token — with no one watching. Heartbeats plus a supervisor replace the missing pair of eyes.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. What job does a channel adapter do?</p>
+          <div class="q-opts">
+            <button data-opt="a">It makes the agent reply faster by caching answers</button>
+            <button data-opt="b">It stores the platform's secrets for each channel</button>
+            <button data-opt="c">It translates one outside medium's protocol into the platform's single internal message format, and routes replies back out</button>
+          </div>
+          <p class="q-explain">One adapter per medium — chat app, email, voice — each converting its quirky protocol into a standard envelope and mapping conversations to durable per-thread state. The agent reads envelopes and never learns a chat API.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Your three-person team needs one agent reachable on two chat apps and email, running unattended overnight. The scorecard says…?</p>
+          <div class="q-opts">
+            <button data-opt="a">Build everything — plumbing this important must be in-house</button>
+            <button data-opt="b">Adopt a platform for the plumbing and spend the team on the agent itself</button>
+            <button data-opt="c">Skip the platform and have someone invoke the agent manually each morning</button>
+          </div>
+          <p class="q-explain">Three channels plus unattended uptime is the expensive, undifferentiated end of the gap — the big bars on the chart — while a three-person team's advantage lives in the agent's tools and prompts. Adopt the plumbing, build the agent, and stay honest about the platform's own costs (secrets custody, upgrade churn, security surface).</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>The framework-versus-platform gap is one question: who calls run()? Frameworks run when invoked; platforms wake themselves — on schedules, messages, webhooks, and file changes — with no human present.</li>
+          <li>Schedulers are cron tables with three classic traps: timezones, overlapping runs, and missed-run policy. Prefer event wake-ups over nervous every-few-minutes timers — every needless wake-up is a paid LLM call.</li>
+          <li>Webhooks are push, not poll: verify signatures, and make handlers idempotent because duplicate delivery is normal. File watchers need debouncing for the same reason.</li>
+          <li>Channels are the biggest slice of the gap by volume: one adapter per medium, one internal envelope, and per-conversation state routing (the thread_id idea from checkpointing, at platform scale).</li>
+          <li>Unattended operation makes watchdogs load-bearing, not optional — heartbeats, restarts, and alerts replace the human who is no longer at the keyboard — and fleets need a registry plus a secret vault with name-based, least-privilege credential injection.</li>
+          <li>Economically, almost the whole gap is undifferentiated plumbing. The honest scorecard usually lands on hybrid: adopt the platform, build the agents — while pricing in the platform's own security surface and lock-in.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

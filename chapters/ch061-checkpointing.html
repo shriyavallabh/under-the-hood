@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkpointing and persistence — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch061">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VII · LangGraph</div>
+        <h1>Checkpointing and persistence</h1>
+        <p class="ch-tagline">Right now, your graph's entire memory lives inside a process that can die at any second. One argument to compile() — a checkpointer — turns that fragile run into something that survives crashes, restarts, and deploys. This chapter shows you exactly how, database and all.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 62 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A tailor is stitching a wedding outfit — a job far too big for one sitting. She has a habit her whole shop runs on: after <em>every single seam</em>, she pins a small card to the garment. The card says what is done, which thread she used, and what comes next. Then the garment goes back on the rack, on a hanger tagged with the customer's order number.</p>
+        <p>One Tuesday the power cuts out mid-stitch and everyone goes home. On Wednesday the tailor is ill, so her sister opens the shop instead. The sister has never seen this outfit. She pulls the hanger by its order number, reads the last pinned card — <em>"sleeves done, collar next"</em> — and picks up exactly where the work stopped. No seam is re-stitched. No customer is asked to explain their order again.</p>
+        <p>The pinned card is a <strong>checkpoint</strong>. The habit of writing one after every seam is a <strong>checkpointer</strong>. The order number on the hanger is a <strong>thread_id</strong>. And the rack — the sturdy thing that holds the work while people and power come and go — is a <strong>database</strong>. This chapter is that shop, in Python.</p>
+      </section>
+
+      <h2>A five-minute detour: what even is a database?</h2>
+      <p>Before the LangGraph part makes sense, you need one piece of background that most programming courses assume and never explain. It takes five minutes, and it starts with your own laptop.</p>
+      <p>A computer keeps information in two very different places. <dfn>Memory</dfn> (RAM) is the whiteboard — blazing fast to read and write, but wiped clean the instant the power goes or the program ends. <dfn>Disk</dfn> is the notebook — slower, but what you write there is still there tomorrow. Every variable in every Python program you have run in this course lived on the whiteboard. Close the program, and it is gone. That is why your terminal agents forget things when a session ends: nobody wrote to the notebook.</p>
+      <p>A <dfn>database</dfn> is a program whose only job is to be a very good notebook: it takes data from other programs, writes it safely to disk, and hands it back on request — even to a <em>different</em> program, on a <em>different</em> day, after a crash. Two databases matter for this chapter, and they sit at opposite ends of the whiteboard-notebook spectrum.</p>
+      <p><dfn>PostgreSQL</dfn> (everyone says "Postgres") is the filing cabinet with a meticulous librarian. Data goes into labelled tables — think spreadsheet-like grids of rows — and you talk to the librarian in a small English-like language called <dfn>SQL</dfn>: <code>SELECT * FROM checkpoints WHERE thread_id = 'invoice-42'</code> reads almost like the sentence it means. Postgres's obsession is <em>never losing anything</em>: it confirms a write only once the data is truly safe on disk. It has run banks, airlines, and half the internet for three decades.</p>
+      <p><dfn>Redis</dfn> is the pad of sticky notes on the side of the monitor. It keeps everything in memory — the whiteboard — which makes it absurdly fast, roughly the difference between glancing at a sticky note and walking to the filing cabinet. The trade-off is the whiteboard's trade-off: memory is volatile, so Redis periodically copies its notes to disk as insurance rather than filing every one instantly. You choose Redis when speed matters most; you choose Postgres when losing a single row would be unacceptable.</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>Postgres</th><th>Redis</th></tr>
+        <tr><td>Mental picture</td><td>Filing cabinet with a librarian who speaks SQL</td><td>Sticky notes kept in memory</td></tr>
+        <tr><td>Data lives</td><td>On disk, always</td><td>In memory, with periodic disk snapshots</td></tr>
+        <tr><td>Speed</td><td>Fast</td><td>Very fast</td></tr>
+        <tr><td>Superpower</td><td>Never loses a confirmed write</td><td>Answers in a fraction of a millisecond</td></tr>
+        <tr><td>Typical agent job</td><td>The permanent record of every conversation</td><td>Hot, high-traffic conversation state</td></tr>
+      </table></div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>You will not administer these databases in this course, and you do not need to. You use them the way you use a web API: a server runs somewhere (your laptop via Docker, or a managed cloud service), and your Python code connects to it with one line — a connection string like <code>postgresql://user:password@localhost:5432/agent_memory</code>. That string is just an address plus credentials, and it almost always arrives via an environment variable such as <code>DATABASE_URL</code>.</p></div>
+
+      <h2>The amnesia problem your graph has</h2>
+      <p>Back to LangGraph. In <a href="ch060-compile-invoke-stream.html">the previous chapter</a> you compiled a graph and invoked it: state flowed in, nodes transformed it, state flowed out. Here is the uncomfortable question: <em>where was that state, physically?</em> In a Python object. On the whiteboard. Inside one running process.</p>
+      <p>So when the process ends — the script finishes, the server redeploys, the pod restarts, someone trips over a cable — every conversation your graph was holding evaporates. The user who spent ten minutes explaining their problem to your support agent is now talking to a goldfish. You met this theme in <a href="ch047-memory-and-context.html">the memory chapter</a>: an LLM remembers nothing between calls, so memory must be engineered around it. Checkpointing is where that engineering stops being a list and becomes infrastructure.</p>
+      <p>The fix is a pattern the industry calls <dfn>durable execution</dfn>: record your progress in a durable place after every step, so that any crash, restart, or handover can resume from the last record instead of starting over. The tailor's pinned cards. Video games invented the friendly name for it decades ago — the save point. LangGraph implements it with two ideas, and only two:</p>
+      <p>A <dfn>checkpoint</dfn> is a snapshot of the graph's entire state at one moment — every channel of your state object, plus bookkeeping about which node runs next. A <dfn>checkpointer</dfn> is the component that writes one of those snapshots to storage after <em>every step</em> of the graph, automatically. You never call it yourself. You hand it to <code>.compile()</code> once, and from then on every node that finishes gets its seam pinned.</p>
+
+      <h2>Threads: giving a conversation a name</h2>
+      <p>One graph serves many users at once, so the saved snapshots need labels — otherwise whose conversation would you be resuming? That label is the <dfn>thread_id</dfn>: a string you choose that names one independent conversation, the way the order number on the hanger names one outfit. It is the dry-cleaner's ticket of agent engineering: present the same ticket, get the same garment back, exactly as you left it.</p>
+      <p>You pass it at invoke time, in a small config dictionary:</p>
+
+      <div class="code-title">the thread ticket</div>
+      <pre><code class="language-python">config = {"configurable": {"thread_id": "customer-8841"}}
+graph.invoke({"messages": [("user", "Where is my order?")]}, config)</code></pre>
+
+      <p>Same <code>thread_id</code> tomorrow? The checkpointer loads that thread's latest checkpoint and the conversation continues with full history. A different <code>thread_id</code>? A blank slate. This is precisely why every chat product on Earth has that sidebar of past conversations — each entry is a thread id over a store of checkpoints, and clicking one just means "invoke with this ticket".</p>
+      <p>Watch the whole machine work through one crashy afternoon:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Invoke arrives">
+          <h3>1. An invoke arrives, wearing a ticket</h3>
+          <div class="diagram">
+            <div class="d-box hot">invoke<small>thread_id: "invoice-42"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">graph<small>draft, review, send</small></div>
+            <div class="d-box dim">Postgres<small>no rows for invoice-42 yet</small></div>
+          </div>
+          <p class="step-cap">The checkpointer checks the database for thread "invoice-42". Nothing there — so this is a brand-new conversation, starting from your input state.</p>
+        </div>
+        <div class="step" data-title="Step, then save">
+          <h3>2. A node runs — and its result is filed immediately</h3>
+          <div class="diagram">
+            <div class="d-box hot">draft<small>writes the email text</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Postgres<small>checkpoint 1 written</small></div>
+            <div class="d-box dim">review</div>
+          </div>
+          <p class="step-cap">The draft node finishes and the checkpointer snapshots the whole state to Postgres before anything else happens. Seam stitched, card pinned.</p>
+        </div>
+        <div class="step" data-title="Another step">
+          <h3>3. Next node, next checkpoint</h3>
+          <div class="diagram">
+            <div class="d-box dim">draft</div>
+            <div class="d-box hot">review<small>approves the draft</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Postgres<small>checkpoint 2 written</small></div>
+          </div>
+          <p class="step-cap">Review runs; checkpoint 2 lands in the database. Note that checkpoints accumulate — the thread now holds its whole history, not just the latest state.</p>
+        </div>
+        <div class="step" data-title="Crash">
+          <h3>4. The process dies mid-run</h3>
+          <div class="diagram">
+            <div class="d-box hot">process<small>killed: deploy / crash / power cut</small></div>
+            <div class="d-box dim">send<small>never ran</small></div>
+            <div class="d-box good">Postgres<small>checkpoint 2 is safe on disk</small></div>
+          </div>
+          <p class="step-cap">The whiteboard is wiped: every Python object is gone, including the graph and its in-flight state. The filing cabinet does not care. Checkpoint 2 sits there, patient.</p>
+        </div>
+        <div class="step" data-title="Resume">
+          <h3>5. A new process presents the same ticket</h3>
+          <div class="diagram">
+            <div class="d-box">new process<small>same graph, recompiled</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Postgres<small>loads checkpoint 2 for invoice-42</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">graph<small>next node: send</small></div>
+          </div>
+          <p class="step-cap">A fresh process — the sister opening the shop — compiles the same graph, connects the same checkpointer, and invokes with thread "invoice-42". The checkpointer restores the state, and execution continues from where it stopped.</p>
+        </div>
+        <div class="step" data-title="Done">
+          <h3>6. Only the unfinished work runs</h3>
+          <div class="diagram">
+            <div class="d-box dim">draft<small>not repeated</small></div>
+            <div class="d-box dim">review<small>not repeated</small></div>
+            <div class="d-box good">send<small>runs now</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Postgres<small>final checkpoint</small></div>
+          </div>
+          <p class="step-cap">Draft and review are not re-executed — their results were already filed. Only send runs. That is durable execution: no lost work, no repeated work, no re-asking the user.</p>
+        </div>
+      </div>
+
+      <h2>The real thing, five lines at a time</h2>
+      <p>Here is a complete persistent chat graph in current LangGraph. Almost all of it you already know from <a href="ch060-compile-invoke-stream.html">compile, invoke, stream</a> — the new material is three lines. Click through the annotations.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">persistent_chat.py</div>
+        <div class="wl-line"><code>from langgraph.graph import StateGraph, START, END</code></div>
+        <div class="wl-line"><code>from langgraph.graph.message import add_messages</code>
+          <div class="wl-note">A reducer that appends new messages to the existing list instead of overwriting it — so each turn's messages pile up into a conversation. Reducers were the "how state updates merge" idea from the state chapter.</div></div>
+        <div class="wl-line"><code>from langgraph.checkpoint.memory import InMemorySaver</code>
+          <div class="wl-note">New line one: the simplest checkpointer. It keeps checkpoints in a Python dict — the whiteboard. Perfect for development and tests; useless against a restart, as we will see.</div></div>
+        <div class="wl-line"><code>from typing import Annotated, TypedDict</code></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>class State(TypedDict):</code>
+          <div class="wl-note">The state schema — a <a href="ch016-type-hints-and-pydantic.html">typed dict</a> declaring what flows through the graph. A checkpoint is a snapshot of exactly this, plus bookkeeping about what runs next.</div></div>
+        <div class="wl-line"><code>    messages: Annotated[list, add_messages]</code></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>def chat(state: State):</code></div>
+        <div class="wl-line"><code>    reply = model.invoke(state["messages"])</code>
+          <div class="wl-note">The one line that talks to an LLM, exactly as in <a href="ch045-react-loop-by-hand.html">your hand-built loop</a>. Thanks to the checkpointer, <code>state["messages"]</code> already contains every earlier turn of this thread — loaded from storage, not from luck.</div></div>
+        <div class="wl-line"><code>    return {"messages": [reply]}</code></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>builder = StateGraph(State)</code></div>
+        <div class="wl-line"><code>builder.add_node("chat", chat)</code></div>
+        <div class="wl-line"><code>builder.add_edge(START, "chat")</code></div>
+        <div class="wl-line"><code>builder.add_edge("chat", END)</code></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>graph = builder.compile(checkpointer=InMemorySaver())</code>
+          <div class="wl-note">New line two, and the heart of the chapter. Handing a checkpointer to <code>.compile()</code> switches on persistence for the whole graph: after every step, the state is saved; before every invoke, the thread's history is restored. No other code changes.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>config = {"configurable": {"thread_id": "ravi-support"}}</code>
+          <div class="wl-note">New line three: the ticket. Any string works — user ids, order numbers, UUIDs. Everything invoked with this config belongs to one continuing conversation.</div></div>
+        <div class="wl-line"><code>graph.invoke({"messages": [("user", "My name is Ravi.")]}, config)</code></div>
+        <div class="wl-line"><code>graph.invoke({"messages": [("user", "What is my name?")]}, config)</code>
+          <div class="wl-note">Same ticket, so the checkpointer loads the previous turn first and <code>add_messages</code> appends the new question. The model sees both turns and answers "Ravi". Invoke with a different thread_id and it would have no idea.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>snapshot = graph.get_state(config)</code>
+          <div class="wl-note">You can inspect a thread whenever you like: <code>get_state(config)</code> returns the latest checkpoint — the state values plus what would run next. Its sibling <code>get_state_history(config)</code> lists every checkpoint ever taken for the thread, newest first. Debugging gold.</div></div>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Read <code>graph.compile(checkpointer=...)</code> the way you would read "hire the scribe". Ordinary functions do not get automatic save points; your graph does, because a component you attached once now files every step. If that move — behaviour bolted on from outside, code unchanged — feels familiar, it should: it is the same shape as <a href="ch017-decorators.html">decorators</a>.</p></div>
+
+      <h2>Build the mechanism yourself</h2>
+      <p>The fastest way to trust checkpointing is to write one. Below is a three-node "graph" — draft an email, review it, send it — with a checkpointer and a database played by a humble dict. The run crashes halfway on purpose. Then a "new process" presents the same ticket and finishes the job without repeating a single completed step. Press <strong>Run</strong>, and read the output slowly.</p>
+
+      <div class="pyrun" data-title="A crash-proof graph in 40 lines — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- The 'database': a dict standing in for Postgres ------
+# Real code connects to a server; the shape is identical:
+# checkpoints keyed by thread_id, living OUTSIDE the run.
+DATABASE = {}
+
+# ---- A scripted stand-in for a real LLM -------------------
+def fake_llm(job):
+    canned = {
+        "draft":  "Dear Asha, your invoice for 1,500 rupees is attached.",
+        "review": "Polite, correct, approved.",
+    }
+    return canned[job]
+
+# ---- Three graph nodes: state in, updated state out -------
+def draft(state):
+    state["text"] = fake_llm("draft");   return state
+
+def review(state):
+    state["review"] = fake_llm("review"); return state
+
+def send(state):
+    state["sent"] = True;                return state
+
+NODES = [("draft", draft), ("review", review), ("send", send)]
+
+# ---- The runner: a graph WITH a checkpointer --------------
+def run(thread_id, state=None, crash_after=None):
+    saved = DATABASE.get(thread_id)      # any checkpoint on file?
+    start = 0
+    if saved:
+        start, state = saved["next"], dict(saved["state"])
+        print(f"[resume] '{thread_id}' from checkpoint; "
+              f"skipping {start} finished step(s)")
+    for i in range(start, len(NODES)):
+        name, node = NODES[i]
+        state = node(state)
+        DATABASE[thread_id] = {"next": i + 1, "state": dict(state)}
+        print(f"[checkpoint] saved after '{name}'")
+        if name == crash_after:
+            raise RuntimeError("power cut mid-run!")
+    return state
+
+# ---- Run 1: the process dies halfway through --------------
+try:
+    run("invoice-42", {"customer": "Asha"}, crash_after="review")
+except RuntimeError as boom:
+    print(f"CRASH: {boom}")
+
+print()
+print("...a brand-new process starts. Its memory is empty,")
+print("but the DATABASE is not...")
+print()
+
+# ---- Run 2: same ticket, no repeated work -----------------
+final = run("invoice-42")
+print()
+print("FINAL STATE:", final)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now experiment. Change the second run's ticket to <code>"invoice-99"</code> and watch it crash with a <code>TypeError</code> — no checkpoint, no state, a genuinely fresh thread that was given nothing to work with. Move <code>crash_after</code> to <code>"draft"</code> and confirm the resume skips only one step. Then comment out the <code>DATABASE[thread_id] = ...</code> line: congratulations, you have rebuilt the amnesiac graph from the start of the chapter.</p></div>
+
+      <h2>Choosing a backend: from dev to production</h2>
+      <p>Everything above used one checkpointer. LangGraph ships several, all interchangeable behind the same <code>.compile(checkpointer=...)</code> slot — you pick where the filing happens, and nothing else about your code changes.</p>
+      <p><code>InMemorySaver</code> is for development: zero setup, instant, and wiped with the process — a checkpointer made of whiteboard. The production savers live in small add-on packages named <code>langgraph-checkpoint-postgres</code>, <code>langgraph-checkpoint-redis</code>, and <code>langgraph-checkpoint-sqlite</code>, and they file checkpoints into exactly the databases you met in the primer:</p>
+
+      <div class="code-title">production: checkpoints in Postgres</div>
+      <pre><code class="language-python"># pip install langgraph-checkpoint-postgres
+from langgraph.checkpoint.postgres import PostgresSaver
+
+DB_URI = "postgresql://agent:secret@localhost:5432/agent_memory"
+
+with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
+    checkpointer.setup()      # one-time: creates the checkpoint tables
+    graph = builder.compile(checkpointer=checkpointer)
+    graph.invoke(user_input, config)</code></pre>
+
+      <p>Three things worth noticing. The connection string is the only Postgres knowledge required. The <code>with</code> block is a <a href="ch018-context-managers.html">context manager</a> making sure the connection closes cleanly. And <code>checkpointer.setup()</code> runs once to create the tables — after that, the librarian handles the filing. The Redis saver follows the same pattern from <code>langgraph.checkpoint.redis</code>; check the current docs for its exact setup call, as the add-on packages evolve faster than the core.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Saver</th><th>Backed by</th><th>Reach for it when</th></tr>
+        <tr><td><code>InMemorySaver</code></td><td>A Python dict (whiteboard)</td><td>Development, tests, notebooks</td></tr>
+        <tr><td>SQLite saver</td><td>A single file on disk</td><td>Local tools, demos, one-machine apps</td></tr>
+        <tr><td><code>PostgresSaver</code></td><td>Postgres (filing cabinet)</td><td>Production — the boring, correct default</td></tr>
+        <tr><td>Redis saver</td><td>Redis (sticky notes)</td><td>High-traffic state where speed dominates</td></tr>
+      </table></div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The classic mistake: shipping <code>InMemorySaver</code> to production because it worked beautifully in development. It will keep working beautifully — until the first deploy, when every live conversation silently vanishes and your support inbox explains the word "volatile" to you. If conversations must survive a restart, the checkpointer must write to a real database. No exceptions.</p></div>
+
+      <p>Persistence also unlocks the doors you walk through next. The coming chapter's human-in-the-loop interrupts only work because a graph can pause, checkpoint, wait a day for a human's approval, and resume — a pause is just a checkpoint nobody has resumed yet. Time travel (rewinding a thread to an earlier checkpoint and re-running from there) and forking conversations are the same trick read backwards. Checkpointing is not a feature among features; it is the floor the other features stand on.</p>
+
+      <h2>The vocabulary you need</h2>
+      <p>Six cards. Flip until each back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">checkpoint</span><span class="flip-back">A snapshot of the graph's full state at one step, plus what runs next. The tailor's pinned card; the video game save point.</span></button>
+        <button class="flip" type="button"><span class="flip-front">checkpointer</span><span class="flip-back">The component that writes a checkpoint after every step, automatically. Attached once via .compile(checkpointer=...), never called by hand.</span></button>
+        <button class="flip" type="button"><span class="flip-front">thread_id</span><span class="flip-back">A string naming one conversation. Same id = resume that conversation with full history; new id = blank slate. The dry-cleaner's ticket.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Postgres</span><span class="flip-back">The filing-cabinet database: tables on disk, queried in SQL, obsessed with never losing a confirmed write. Production default for checkpoints.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Redis</span><span class="flip-back">The sticky-notes database: data held in memory for extreme speed, snapshotted to disk as insurance. For hot, high-traffic state.</span></button>
+        <button class="flip" type="button"><span class="flip-front">durable execution</span><span class="flip-back">Progress recorded in durable storage after every step, so any crash or restart resumes from the last record instead of starting over.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will spot this chapter everywhere once you know its shape. A <code>docker-compose.yml</code> with a <code>postgres:</code> service next to an agent service — that database probably exists mostly to hold checkpoints. A <code>DATABASE_URL</code> or <code>REDIS_URL</code> environment variable in an agent repo's deployment config. A merge request titled "swap InMemorySaver for Postgres checkpointer" — someone graduating from demo to production. A migration script calling <code>checkpointer.setup()</code>. And in every support-bot codebase, some line mapping a user or session id to a <code>thread_id</code> — that single line is why the bot remembers Tuesday's complaint on Wednesday. When an on-call engineer says "the pod restarted but the threads were fine", this machinery is what they are thanking.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. What exactly does a checkpointer do once you pass it to <code>.compile()</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">Backs up the graph's Python source code so you can restore old versions</button>
+            <button data-opt="b">Saves the final answer of each run so it can be served from cache</button>
+            <button data-opt="c">Automatically saves a snapshot of the graph's state after every step, and restores it on the next invoke of that thread</button>
+          </div>
+          <p class="q-explain">A checkpointer files the state — not the code, and not just the final result — after every single step. That per-step granularity is what makes mid-run crash recovery possible.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Two users chat with the same compiled graph. What keeps their conversations from bleeding into each other?</p>
+          <div class="q-opts">
+            <button data-opt="a">Each user gets their own copy of the compiled graph object</button>
+            <button data-opt="b">Each invoke carries a different thread_id, so checkpoints are stored and loaded under separate labels</button>
+            <button data-opt="c">The LLM recognises the users by writing style and keeps them apart</button>
+          </div>
+          <p class="q-explain">One graph serves everyone; the thread_id in the invoke config is the only thing separating conversations. Same ticket, same garment — different ticket, different garment.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. Your agent works perfectly with InMemorySaver in development. Why must it not ship to production that way?</p>
+          <div class="q-opts">
+            <button data-opt="a">InMemorySaver is too slow for production traffic</button>
+            <button data-opt="b">Its checkpoints live in the process's memory, so every restart or deploy erases every live conversation</button>
+            <button data-opt="c">It only supports one thread_id at a time</button>
+          </div>
+          <p class="q-explain">InMemorySaver is fast and handles many threads fine — its flaw is volatility. It is a checkpointer made of whiteboard: the first deploy wipes it. Production checkpoints belong in a real database.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. In the filing-cabinet versus sticky-notes picture, what is the core trade-off between Postgres and Redis?</p>
+          <div class="q-opts">
+            <button data-opt="a">Postgres guarantees confirmed writes are safe on disk; Redis keeps data in memory for speed and snapshots to disk as insurance</button>
+            <button data-opt="b">Postgres is for text data and Redis is for numbers</button>
+            <button data-opt="c">Redis is the modern replacement for Postgres, which is deprecated</button>
+          </div>
+          <p class="q-explain">They are both excellent and both current — they just sit at opposite ends of the memory-versus-disk spectrum. Durability-first is Postgres; speed-first is Redis. Neither handles text versus numbers differently.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A graph with a Postgres checkpointer crashes after node 2 of 3. What happens when a new process invokes with the same thread_id?</p>
+          <div class="q-opts">
+            <button data-opt="a">The run starts over from node 1, repeating the finished work</button>
+            <button data-opt="b">Nothing — a crashed thread is marked corrupt and must be deleted</button>
+            <button data-opt="c">The checkpointer loads the snapshot taken after node 2, and execution continues with node 3</button>
+          </div>
+          <p class="q-explain">This is durable execution: the last checkpoint survives the crash on disk, so the new process resumes exactly there — no lost work, no repeated work, no re-asking the user.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A database is a program whose job is remembering: Postgres is the filing cabinet on disk with a librarian who speaks SQL; Redis is the sticky notes held in memory for speed. You use both through one connection string.</li>
+          <li>Without a checkpointer, a graph's state lives on the whiteboard — inside one process — and every restart wipes every conversation.</li>
+          <li>A checkpointer, attached once via <code>.compile(checkpointer=...)</code>, snapshots the full state after every step, automatically. That per-step habit is the whole mechanism.</li>
+          <li>The thread_id in <code>config={"configurable": {"thread_id": ...}}</code> is a conversation's identity: same id resumes with full history, new id starts clean.</li>
+          <li><code>InMemorySaver</code> is for development; Postgres, Redis, or SQLite savers from the <code>langgraph-checkpoint-*</code> packages are for anything that must survive a deploy.</li>
+          <li>Durable execution — resume from the last checkpoint after any crash — is also the foundation for what comes next: human-in-the-loop pauses are just checkpoints waiting for a person.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

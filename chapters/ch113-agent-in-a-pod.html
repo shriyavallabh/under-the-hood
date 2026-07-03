@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>An agent in a pod — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch113">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XIII · The Deployment Platform</div>
+        <h1>An agent in a pod</h1>
+        <p class="ch-tagline">The loop, the skills, the MCP servers, the A2A endpoint — everything snaps together here, into one pod: the agent's body, drawn end to end.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 114 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>The consultant from the hotel room — the one you built a walkie-talkie loop with in <a href="ch045-react-loop-by-hand.html">chapter 45</a> — finally got hired. On her first morning, facilities walks her to a cabin that is astonishingly complete. On the desk, a laminated card from the front office: working hours, daily budget, useful extensions. In the wall, a safe she cannot open herself — she taps her badge and the building's vault, three floors down, releases exactly the credential she needs, for exactly as long as she needs it. A trolley of procedure manuals was wheeled in overnight. In the corner sits a junior assistant who handles one specific chore; she just turns and speaks to him. For everything else, a phone with two buttons: one rings the shared research desk every team uses, the other reaches any colleague by name. And on her door: a nameplate and extension, listed in the company directory, so colleagues can call <em>her</em>.</p>
+        <p>Here is the trick: facilities can demolish this cabin tonight and rebuild an identical one on another floor by 9 a.m. Nothing inside is irreplaceable, because everything was <em>delivered by the building</em>. That cabin is a pod. This chapter furnishes it, item by item.</p>
+      </section>
+
+      <h2>The body plan</h2>
+      <p>Earlier in this act you built the shell: an image in a registry, a cluster, the Deployment (the blueprint that keeps N copies of a pod alive), the Service (the stable name in front of them), the ConfigMap and the Secret. What you have not yet done is put a <em>real agent</em> inside — skills, MCP connections, A2A doorplate and all. That is this chapter's whole job.</p>
+      <p>Recall the shape of a pod: the smallest thing Kubernetes schedules — one or more containers that live and die together, sharing one network identity. If a container is a process in a box, the pod is a <em>body</em>, and the harness container is its heart: the very loop you hand-built in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, unchanged. What changes is everything <em>around</em> it — how settings, credentials, skills, and connections reach it. Here is the full anatomy; the rest of the chapter walks through it organ by organ:</p>
+
+      <div class="diagram">
+        <div class="d-col">
+          <div class="d-box">ConfigMap<small>settings, injected as env vars</small></div>
+          <div class="d-box">Azure Key Vault<small>secrets, delivered at run time</small></div>
+          <div class="d-box">Skills volume<small>SKILL.md folders, mounted</small></div>
+        </div>
+        <span class="d-arrow">&#8594;</span>
+        <div class="d-col">
+          <div class="d-box hot">harness container<small>the agent loop, ports: 8000</small></div>
+          <div class="d-box">docs-mcp sidecar<small>same pod, shares localhost</small></div>
+        </div>
+        <span class="d-arrow">&#8594;</span>
+        <div class="d-col">
+          <div class="d-box">Service<small>stable DNS name, A2A endpoint</small></div>
+          <div class="d-box">shared MCP Service<small>streamable HTTP, other pods</small></div>
+          <div class="d-box">other agents<small>discover via agent card</small></div>
+        </div>
+      </div>
+
+      <p>Read it in three columns: <strong>what the platform injects</strong> (the agent never fetches its own config, secrets, or skills — they are simply <em>there</em> when it wakes, like the furnished cabin), <strong>the pod itself</strong> (two containers, one body), and <strong>the network around it</strong>. Keep these six words handy as we go:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">pod</span><span class="flip-back">The smallest unit Kubernetes runs: containers sharing a network identity and a fate. The agent's body.</span></button>
+        <button class="flip" type="button"><span class="flip-front">sidecar</span><span class="flip-back">A second container in the same pod, doing a supporting job — sharing localhost, living and dying with the main one.</span></button>
+        <button class="flip" type="button"><span class="flip-front">ConfigMap</span><span class="flip-back">A named bag of non-secret settings, injected into containers as environment variables or files.</span></button>
+        <button class="flip" type="button"><span class="flip-front">CSI driver</span><span class="flip-back">A plugin that mounts external storage into pods — the Secrets Store one mounts Key Vault secrets as read-only files.</span></button>
+        <button class="flip" type="button"><span class="flip-front">workload identity</span><span class="flip-back">The pod proves who it is with a federated token instead of carrying a key — no secret exists to leak.</span></button>
+        <button class="flip" type="button"><span class="flip-front">agent card</span><span class="flip-back">The JSON self-description at /.well-known/agent-card.json telling other agents what this one does and how to call it.</span></button>
+      </div>
+
+      <h2>Configuration: the laminated card on the desk</h2>
+      <p>Back in <a href="ch019-logging-config-env.html">chapter 19</a> you learned that good programs read settings from environment variables rather than hard-coding them. Kubernetes industrialises that rule: write the settings once, as a <strong>ConfigMap</strong>, and the platform injects them into every replica at container start.</p>
+
+      <div class="code-title">research-agent-config.yaml</div>
+      <pre><code class="language-yaml">apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: research-agent-config
+data:
+  MODEL_NAME: "big-frontier-model"
+  MAX_TURNS: "12"
+  LOG_LEVEL: "INFO"
+  KB_MCP_URL: "http://kb-mcp.agents.svc.cluster.local/mcp"</code></pre>
+
+      <p>Four settings, each earning its keep. <code>MODEL_NAME</code> and <code>MAX_TURNS</code> tune the loop — the chapter-45 <code>max_turns</code> guard, now operator-adjustable without touching code. Every value is a string, even the number: ConfigMaps carry text, your harness parses it. And look at <code>KB_MCP_URL</code> — the address of a <em>shared MCP server</em> is itself just configuration; rewiring to a different knowledge base is a one-line change, not a rebuild. In the Deployment, one <code>envFrom</code> stanza pours all four keys in as env vars.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Env vars are injected when the container <em>starts</em>. Edit the ConfigMap and running pods keep the old values — a classic on-call surprise. <code>kubectl rollout restart deployment/research-agent</code> replaces them with containers that wake up on the new settings.</p></div>
+
+      <h2>Secrets: the safe the agent cannot open</h2>
+      <p>Now the part where careers are made or ended. The agent needs an LLM API key, and the one place it must <em>never</em> live is inside the container image. An image is a stack of copyable layers — pulled to every node, cached, exported — and anyone with pull access can unpack it and read whatever you baked in. Baking a key into an image is photocopying your house key and stapling it to every job advert.</p>
+      <p>Kubernetes offers a built-in <code>Secret</code> object, and earlier in this act you learned its uncomfortable truth: it stores values <strong>base64-encoded, not encrypted</strong> — an envelope, not a safe. Fine for dev; not where a bank keeps an API key. Production on Azure does one of two better things:</p>
+      <p><strong>Option one: Key Vault through the CSI driver.</strong> A <dfn>CSI driver</dfn> — container storage interface, a plugin that mounts external storage into pods — fetches secrets from Azure Key Vault and presents them as read-only files under a path like <code>/mnt/secrets/</code>. The AKS add-on is enabled with <code>az aks enable-addons --addons azure-keyvault-secrets-provider</code>, and a small <code>SecretProviderClass</code> manifest names which vault, which secrets. The key never touches the image, the YAML, or git.</p>
+      <p><strong>Option two: workload identity — no key at all.</strong> With Microsoft Entra <dfn>workload identity</dfn>, the pod's service account is federated with an Entra identity: the pod presents a short-lived signed token saying "I am the research agent", and Azure grants access to the vault or model endpoint directly. Nothing long-lived exists to rotate, leak, or bake. When the security review asks "where is the key stored?", the best answer is "there isn't one".</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The hierarchy: image &lt; plain Kubernetes Secret &lt; Key Vault via CSI &lt; workload identity. Each step right removes a place a credential can leak from. An <code>ENV OPENAI_API_KEY=sk-...</code> line in a Dockerfile is not a style nit — that key is in every copy of the image, forever. Flag it.</p></div>
+
+      <h2>Skills: the bookshelf wheeled in overnight</h2>
+      <p>In <a href="ch084-agent-skills.html">chapter 84</a> you met Agent Skills: folders of <code>SKILL.md</code> files the harness discovers by name and description, loading the full procedure only when a task matches — progressive disclosure. On your laptop those folders sit next to the code. In a pod, they arrive by one of two roads:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Road</th><th>How</th><th>Behaviour</th></tr>
+        <tr><td><strong>Baked into the image</strong></td><td><code>COPY skills/ /app/skills/</code> in the Dockerfile at build time</td><td>Versioned with the image tag — immutable, reviewable. Changing a skill means rolling a new image.</td></tr>
+        <tr><td><strong>Mounted as a volume</strong></td><td>A ConfigMap volume per skill folder, or an Azure Files share at <code>/app/skills/</code></td><td>Updates without a rebuild — faster iteration, but behaviour can drift from the image tag.</td></tr>
+      </table></div>
+
+      <p>Both are legitimate. Teams that treat skills as code — reviewed, versioned — bake them in, so image tag <code>1.4.2</code> means <em>exactly</em> one behaviour. Teams iterating on prompts daily mount them, trading drift risk for speed. One quirk on the mounted road: a ConfigMap's keys become flat files, so a skill folder maps naturally to <em>one ConfigMap per skill</em>, each mounted at its own subfolder. A library of fifty skills outgrows that — use a file share or bake them in.</p>
+
+      <h2>MCP, wired both ways</h2>
+      <p>From <a href="ch075-mcp-architecture.html">chapter 75</a>, recall the two MCP transports: <strong>stdio</strong> for a server running locally as a child of the harness, <strong>streamable HTTP</strong> for a server across the network. Both survive the move into the cluster — they just take different seats.</p>
+      <p><strong>The local server becomes a sidecar.</strong> On your laptop, the harness spawned your little docs server from <a href="ch077-build-an-mcp-server.html">chapter 77</a> as a subprocess and spoke stdio to it. In the cluster, that same private server ships as a <dfn>sidecar</dfn> — a second container declared in the same pod. Containers in a pod share one network namespace — the technical way of saying <em>they are the same "localhost"</em> — so the harness reaches it at <code>127.0.0.1</code>: the assistant in the corner of the cabin, private to this agent, started and stopped as one body. (Some harnesses keep the stdio server as a true subprocess inside the harness container instead — also fine; the point is it stays <em>inside the body</em>.)</p>
+      <p><strong>The shared server becomes a Service.</strong> The team knowledge-base MCP server that ten agents query is the opposite case: a private copy in every pod would mean ten copies to patch. Instead it gets its own Deployment and Service, speaks streamable HTTP, and every agent reaches it at one stable URL — the <code>KB_MCP_URL</code> from the ConfigMap. If the knowledge base becomes the bottleneck, you scale <em>it</em>, not every agent.</p>
+
+      <div class="tbl"><table>
+        <tr><th>MCP server</th><th>Where it lives</th><th>Reached at</th><th>Use when</th></tr>
+        <tr><td>Private / single-agent</td><td>Sidecar container, same pod</td><td><code>127.0.0.1</code> (shared localhost)</td><td>The tool belongs to this agent alone, sharing its lifecycle</td></tr>
+        <tr><td>Shared / team</td><td>Own Deployment + Service</td><td><code>http://kb-mcp.agents.svc.cluster.local/mcp</code></td><td>Many agents need it; it scales on its own cadence</td></tr>
+      </table></div>
+
+      <h2>The A2A doorplate</h2>
+      <p>So far, everything has flowed <em>into</em> the agent. The last organ faces outward. From <a href="ch080-a2a-protocol.html">chapter 80</a>: an agent publishes an <dfn>agent card</dfn> — a JSON self-description at <code>/.well-known/agent-card.json</code> listing its name, abilities, and how to send it tasks — and other agents call it over HTTP. Inside the harness container that endpoint is just a web server on port 8000. But a pod's IP is disposable — pods die and return with new addresses. Nobody may ever hold a pod's number.</p>
+      <p>The fix is the one Kubernetes always offers: a <strong>Service</strong> in front, giving the agent a stable DNS name — <code>research-agent.agents.svc.cluster.local</code> — and forwarding traffic to whichever healthy pod currently carries the label. The nameplate on the door, outliving every individual cabin.</p>
+      <p>Now zoom out, because the multi-agent picture snaps into focus here. <strong>Each agent in the fleet is its own Deployment plus its own Service.</strong> Planner, research, summariser — three Deployments, three Services, three agent cards. When the planner wants research done, it resolves the research agent's Service name over cluster DNS, fetches the agent card, and posts the task — A2A over the flat cluster network:</p>
+
+      <div class="diagram">
+        <div class="d-box hot">planner agent<small>Deployment + Service</small></div>
+        <span class="d-arrow">&#8594;</span>
+        <div class="d-box">research agent<small>GET /.well-known/agent-card.json</small></div>
+        <span class="d-arrow">&#8594;</span>
+        <div class="d-box">summariser agent<small>A2A task handoff</small></div>
+      </div>
+
+      <p>Inside one cluster, Services are all you need. The moment an agent must be reachable from <em>outside</em> — another cluster, a partner's fleet — you add an ingress (the cluster's front door for external HTTP) in front of its Service. Same body, bigger directory.</p>
+
+      <h2>The whole body, in YAML</h2>
+      <p>Now the entire anatomy as Kubernetes receives it: one Deployment manifest. Read it like a reviewer — click the annotated lines. Every organ from the diagram is here.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">research-agent.yaml — the agent's body as a manifest</div>
+        <div class="wl-line"><code>apiVersion: apps/v1</code></div>
+        <div class="wl-line"><code>kind: Deployment</code>
+          <div class="wl-note">A Deployment, not a bare pod — the blueprint that rebuilds the body whenever it dies. You never ship pets; you ship blueprints.</div></div>
+        <div class="wl-line"><code>metadata:</code></div>
+        <div class="wl-line"><code>  name: research-agent</code></div>
+        <div class="wl-line"><code>spec:</code></div>
+        <div class="wl-line"><code>  replicas: 1</code>
+          <div class="wl-note">One copy for now. Raise it (or attach a HorizontalPodAutoscaler) and the Service spreads tasks across identical bodies.</div></div>
+        <div class="wl-line"><code>  selector:</code></div>
+        <div class="wl-line"><code>    matchLabels:</code></div>
+        <div class="wl-line"><code>      app: research-agent</code>
+          <div class="wl-note">The label the Deployment (and the Service) uses to find its pods. Must match the template labels below — the classic typo that leaves a Deployment managing zero pods.</div></div>
+        <div class="wl-line"><code>  template:</code></div>
+        <div class="wl-line"><code>    metadata:</code></div>
+        <div class="wl-line"><code>      labels:</code></div>
+        <div class="wl-line"><code>        app: research-agent</code></div>
+        <div class="wl-line"><code>    spec:</code></div>
+        <div class="wl-line"><code>      serviceAccountName: research-agent</code>
+          <div class="wl-note">The pod's identity. With workload identity, this service account is federated with Microsoft Entra — <em>who the pod is</em> when it talks to Azure.</div></div>
+        <div class="wl-line"><code>      containers:</code>
+          <div class="wl-note">Plural — the body cavity. Everything under it shares the pod's localhost and lifecycle.</div></div>
+        <div class="wl-line"><code>      - name: harness</code>
+          <div class="wl-note">The heart: your agent loop in a container, the image you pushed to the registry earlier in this act.</div></div>
+        <div class="wl-line"><code>        image: acragents.azurecr.io/research-agent:1.4.2</code>
+          <div class="wl-note">A pinned tag, never <code>latest</code>. With skills baked in, this tag names one exact, reviewable behaviour.</div></div>
+        <div class="wl-line"><code>        ports:</code></div>
+        <div class="wl-line"><code>        - containerPort: 8000</code>
+          <div class="wl-note">Where the harness serves its A2A endpoint and agent card; the Service points here.</div></div>
+        <div class="wl-line"><code>        envFrom:</code></div>
+        <div class="wl-line"><code>        - configMapRef:</code></div>
+        <div class="wl-line"><code>            name: research-agent-config</code>
+          <div class="wl-note">The laminated card: every ConfigMap key becomes an environment variable at container start. All injected, none hard-coded.</div></div>
+        <div class="wl-line"><code>        volumeMounts:</code></div>
+        <div class="wl-line"><code>        - name: skills</code></div>
+        <div class="wl-line"><code>          mountPath: /app/skills/market-brief</code>
+          <div class="wl-note">The bookshelf: this skill folder appears at the path the harness scans for SKILL.md files. One ConfigMap per skill, one subfolder each.</div></div>
+        <div class="wl-line"><code>          readOnly: true</code>
+          <div class="wl-note">The agent can read its procedures, never rewrite them. Free hardening — take it everywhere.</div></div>
+        <div class="wl-line"><code>        - name: kv-secrets</code></div>
+        <div class="wl-line"><code>          mountPath: /mnt/secrets</code>
+          <div class="wl-note">The safe: Key Vault secrets appear as read-only files here at run time. Nothing secret is in this YAML — only <em>where</em> secrets will materialise.</div></div>
+        <div class="wl-line"><code>          readOnly: true</code></div>
+        <div class="wl-line"><code>      - name: docs-mcp</code>
+          <div class="wl-note">The sidecar — the assistant in the corner, running the private MCP server. The harness reaches it at 127.0.0.1; nothing outside the pod can.</div></div>
+        <div class="wl-line"><code>        image: acragents.azurecr.io/docs-mcp:0.9.1</code>
+          <div class="wl-note">Its own image and version — upgraded independently, but always deployed and dying with the harness.</div></div>
+        <div class="wl-line"><code>      volumes:</code>
+          <div class="wl-note">Mounts said <em>where</em> things appear; this section says <em>what</em> they are and where they come from.</div></div>
+        <div class="wl-line"><code>      - name: skills</code></div>
+        <div class="wl-line"><code>        configMap:</code></div>
+        <div class="wl-line"><code>          name: skill-market-brief</code>
+          <div class="wl-note">The skill folder's files live in this ConfigMap. Swap for an Azure Files share when the library grows, or drop the volume if you bake skills into the image.</div></div>
+        <div class="wl-line"><code>      - name: kv-secrets</code></div>
+        <div class="wl-line"><code>        csi:</code></div>
+        <div class="wl-line"><code>          driver: secrets-store.csi.k8s.io</code>
+          <div class="wl-note">The Secrets Store CSI driver — the courier between Key Vault and the mount path.</div></div>
+        <div class="wl-line"><code>          readOnly: true</code></div>
+        <div class="wl-line"><code>          volumeAttributes:</code></div>
+        <div class="wl-line"><code>            secretProviderClass: research-agent-kv</code>
+          <div class="wl-note">Points at the companion manifest naming which vault and which secrets to fetch — all declared there, none here.</div></div>
+      </div>
+
+      <p>And the doorplate — the Service that gives this body its permanent name:</p>
+
+      <div class="code-title">research-agent-service.yaml</div>
+      <pre><code class="language-yaml">apiVersion: v1
+kind: Service
+metadata:
+  name: research-agent
+  namespace: agents
+spec:
+  selector:
+    app: research-agent
+  ports:
+  - port: 80
+    targetPort: 8000</code></pre>
+
+      <p>Default type, ClusterIP — reachable inside the cluster only, exactly right for fleet-internal A2A. The <code>selector</code> finds every pod labelled <code>app: research-agent</code>; <code>port: 80</code> is the number colleagues dial; <code>targetPort: 8000</code> is where the harness listens. From this moment, <code>http://research-agent.agents.svc.cluster.local/</code> works for every agent in the cluster, however many times the pod behind it is rebuilt.</p>
+
+      <p>Ship it and look inside:</p>
+
+      <div class="code-title">deploy and inspect</div>
+      <pre><code class="language-bash">kubectl apply -f research-agent.yaml -f research-agent-service.yaml
+kubectl get pods -l app=research-agent
+kubectl describe pod research-agent-7d4f9b6c8-x2p4v
+kubectl logs research-agent-7d4f9b6c8-x2p4v -c harness
+kubectl logs research-agent-7d4f9b6c8-x2p4v -c docs-mcp</code></pre>
+
+      <p>Line by line. <strong>Line 1</strong>: <code>kubectl apply</code> hands both manifests to the cluster to reconcile — create what is missing, update what changed. <strong>Line 2</strong>: <code>get pods</code> shows the body being born; READY reads <code>2/2</code>, and that first 2 is not replicas — it is <em>containers in the pod</em>, harness and sidecar both up. <strong>Line 3</strong>: <code>describe</code> is the physical exam — volumes attaching, events rolling from <code>Scheduled</code> to <code>Started</code>; when a pod sticks in <code>Pending</code> or <code>ImagePullBackOff</code>, the reason is written here. <strong>Lines 4 and 5</strong>: with two containers, <code>kubectl logs</code> needs <code>-c</code> to name which story you want — harness for reasoning, sidecar for MCP traffic.</p>
+
+      <div class="code-title">prove the doorplate works</div>
+      <pre><code class="language-bash">kubectl port-forward svc/research-agent 8080:80
+curl http://localhost:8080/.well-known/agent-card.json</code></pre>
+
+      <p><strong>Line 1</strong>: <code>port-forward</code> tunnels your laptop's port 8080 to the Service's port 80 — a private debugging peephole, no ingress required. <strong>Line 2</strong>: fetch the agent card exactly as a fellow agent would. If JSON describing your agent's skills comes back, the body is alive, named, and discoverable — the chapter-80 handshake, now answered by a pod.</p>
+
+      <h2>One request walks through the body</h2>
+      <p>You have seen the organs one at a time; now watch them work as one body. A planner agent elsewhere in the cluster needs a market brief — step through what happens:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Task arrives">
+          <h3>1. A task knocks at the doorplate</h3>
+          <div class="diagram">
+            <div class="d-box">planner agent<small>another pod entirely</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Service<small>research-agent.agents.svc.cluster.local</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">pod<small>harness :8000</small></div>
+          </div>
+          <p class="step-cap">The planner resolved the Service name over cluster DNS, checked the agent card earlier, and posts an A2A task. The Service forwards it to whichever healthy pod currently exists — the planner never learns a pod IP.</p>
+        </div>
+        <div class="step" data-title="Config is already there">
+          <h3>2. The harness wakes with its settings in its bloodstream</h3>
+          <div class="diagram">
+            <div class="d-box">ConfigMap</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">env vars<small>MODEL_NAME, MAX_TURNS, KB_MCP_URL</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">harness<small>loop starts</small></div>
+          </div>
+          <p class="step-cap">No fetching, no config files off a share — the env vars were injected at container start. The loop reads its model name and turn budget the way any well-behaved program reads settings.</p>
+        </div>
+        <div class="step" data-title="Secret, on demand">
+          <h3>3. It signs in without owning a password</h3>
+          <div class="diagram">
+            <div class="d-box">Azure Key Vault</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">/mnt/secrets/llm-api-key<small>read-only file, mounted by CSI</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">model API</div>
+          </div>
+          <p class="step-cap">The first model call needs the key. The harness reads the file the CSI driver delivered — or, with workload identity, presents a federated token and never touches a key at all. Nothing baked, nothing in git.</p>
+        </div>
+        <div class="step" data-title="Skill lookup">
+          <h3>4. It takes the right manual off the shelf</h3>
+          <div class="diagram">
+            <div class="d-box hot">/app/skills/market-brief<small>SKILL.md matched</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">harness<small>loads full procedure</small></div>
+          </div>
+          <p class="step-cap">Progressive disclosure, exactly as in chapter 84: names and descriptions were scanned at startup; only now, with a matching task, does the full market-brief procedure enter context. The shelf was mounted; the choosing is the agent's.</p>
+        </div>
+        <div class="step" data-title="Sidecar call">
+          <h3>5. A word to the assistant in the corner</h3>
+          <div class="diagram">
+            <div class="d-box">harness</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">docs-mcp sidecar<small>127.0.0.1 — same pod</small></div>
+          </div>
+          <p class="step-cap">The skill needs internal document search — the private MCP server. The call goes to localhost: same pod, shared network namespace, never crosses a wire. The pod-shaped version of your laptop's stdio subprocess.</p>
+        </div>
+        <div class="step" data-title="Shared MCP call">
+          <h3>6. A phone call to the shared research desk</h3>
+          <div class="diagram">
+            <div class="d-box">harness</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">kb-mcp Service<small>streamable HTTP, another pod</small></div>
+            <div class="d-box dim">used by 10 other agents too</div>
+          </div>
+          <p class="step-cap">Now the team knowledge base — a shared MCP server behind its own Service, at the URL the ConfigMap supplied in step 2. One server, patched once, serving the whole fleet over streamable HTTP.</p>
+        </div>
+        <div class="step" data-title="A2A delegation">
+          <h3>7. A colleague, reached by name</h3>
+          <div class="diagram">
+            <div class="d-box">harness</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">summariser agent<small>its own Deployment + Service</small></div>
+          </div>
+          <p class="step-cap">Condensing is another agent's specialty. The harness fetches the summariser's agent card from its Service and hands off the subtask over A2A. Fleet topology in one sentence: every agent is a Deployment plus a Service, all speaking A2A across the cluster network.</p>
+        </div>
+        <div class="step" data-title="Answer returns">
+          <h3>8. The answer walks back out the same door</h3>
+          <div class="diagram">
+            <div class="d-box good">harness<small>loop complete</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Service</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">planner agent<small>brief delivered</small></div>
+          </div>
+          <p class="step-cap">The loop finishes and the response returns through the Service. Every organ played: config fed the loop, the vault signed it in, the shelf supplied the procedure, both MCP roads carried tools, A2A connected the fleet. Delete this pod now — the Deployment rebuilds an identical body, and nobody notices.</p>
+        </div>
+      </div>
+
+      <h2>Hold the body in your hands</h2>
+      <p>Everything Kubernetes injects, your harness experiences as ordinary Python: environment variables, files on disk, URLs that answer. So the whole anatomy fits in a few lines you can run and break. Press Run — then delete the secret entry and see exactly what a pod with a misconfigured <code>SecretProviderClass</code> would log.</p>
+
+      <div class="pyrun" data-title="the pod from the inside — run me">
+<textarea class="py-src" spellcheck="false">
+# What the harness process actually sees inside the pod.
+
+ENV = {                       # injected from the ConfigMap at start
+    "MODEL_NAME": "big-frontier-model",
+    "MAX_TURNS": "12",
+    "KB_MCP_URL": "http://kb-mcp.agents.svc.cluster.local/mcp",
+}
+
+MOUNTED_FILES = {             # volumes: Key Vault CSI + skills
+    "/mnt/secrets/llm-api-key": "sk-****  (delivered by Key Vault)",
+    "/app/skills/market-brief/SKILL.md":
+        "name: market-brief | desc: research + condense a market",
+}
+
+def sidecar_docs_mcp(tool, arg):        # same pod: 127.0.0.1
+    return f"[docs-mcp sidecar] {tool}({arg}) = 3 internal snippets"
+
+def shared_kb_mcp(url, tool, arg):      # another pod, via Service
+    return f"[kb-mcp via {url.split('/')[2]}] {tool}({arg}) = 12 hits"
+
+def a2a(service, task):                 # another AGENT, via A2A
+    card = f"http://{service}/.well-known/agent-card.json"
+    return f"[{service.split('.')[0]}] card ok ({card}), did: {task}"
+
+def handle_a2a_task(task):
+    print(f"A2A task in : {task}")
+    print(f"1 config    : model={ENV['MODEL_NAME']},"
+          f" max_turns={ENV['MAX_TURNS']}")
+    key = MOUNTED_FILES["/mnt/secrets/llm-api-key"]
+    print(f"2 secret    : read /mnt/secrets/llm-api-key = {key}")
+    skill = MOUNTED_FILES["/app/skills/market-brief/SKILL.md"]
+    print(f"3 skill     : matched market-brief ({skill.split('|')[0].strip()})")
+    print(f"4 sidecar   : {sidecar_docs_mcp('search_docs', 'pricing')}")
+    print(f"5 shared    : {shared_kb_mcp(ENV['KB_MCP_URL'], 'query', 'Q3')}")
+    print(f"6 delegate  : {a2a('summariser.agents.svc.cluster.local',"
+          f" 'condense findings')}")
+    return "market brief: 2 pages, 5 cited sources"
+
+print("ANSWER      :", handle_a2a_task("research the Q3 market"))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Run the failure drills. Remove the <code>llm-api-key</code> entry: the <code>KeyError</code> is the Python twin of a pod failing because its secret volume would not mount. Point <code>KB_MCP_URL</code> at a wrong Service name: that is a ConfigMap typo as production would log it. The bugs you cause here are the tickets you will triage later.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any agent platform's deploy folder and this chapter stares back: a <code>deployment.yaml</code> with a suspiciously long <code>containers:</code> list (sidecars), an <code>envFrom</code> block, a <code>secretProviderClass</code> name, a Service per agent. In merge requests you will read "moved the API key into Key Vault", "bumped the skills ConfigMap", or "split the docs MCP into its own Service — three teams want it now". A favourite production trick: a readiness probe pointed at <code>/.well-known/agent-card.json</code>, so a pod only receives traffic once its agent card answers.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Why must the LLM API key never be baked into the container image?</p>
+          <div class="q-opts">
+            <button data-opt="a">Keys make images too large to pull quickly</button>
+            <button data-opt="b">Images are copyable layers — anyone who can pull or inspect the image can extract the key</button>
+            <button data-opt="c">Kubernetes refuses to run images that contain credentials</button>
+          </div>
+          <p class="q-explain">An image is pulled, cached, and copied everywhere; whatever is baked in travels with every copy, forever. So secrets arrive at run time — Key Vault via the CSI driver, or no key at all via workload identity.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Your agent uses a small private docs MCP server, and the whole team shares a knowledge-base MCP server. Where does each one run?</p>
+          <div class="q-opts">
+            <button data-opt="a">Both as sidecars in the agent's pod, so everything shares localhost</button>
+            <button data-opt="b">Both as separate Services, since MCP always uses the network</button>
+            <button data-opt="c">The private one as a sidecar in the same pod; the shared one as its own Deployment + Service over streamable HTTP</button>
+          </div>
+          <p class="q-explain">Private servers belong inside the body — a sidecar sharing the pod's localhost and lifecycle. Shared servers get their own Deployment and Service, so ten agents hit one URL that scales independently.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. How does the planner agent find and call your research agent?</p>
+          <div class="q-opts">
+            <button data-opt="a">It resolves the Service's stable DNS name, fetches /.well-known/agent-card.json, then posts the A2A task</button>
+            <button data-opt="b">It looks up the pod's IP address and connects to it directly</button>
+            <button data-opt="c">It broadcasts the task to every pod in the cluster and waits for a volunteer</button>
+          </div>
+          <p class="q-explain">Pod IPs are disposable. The Service provides the permanent name; the agent card at the well-known path describes what the agent can do. Discovery plus stable addressing is the whole multi-agent wiring.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. You edit MAX_TURNS in the ConfigMap, but the running agent keeps using the old value. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">ConfigMap changes take 24 hours to propagate through the cluster</button>
+            <button data-opt="b">Environment variables are injected at container start — the pods must be restarted (rolled) to pick up the change</button>
+            <button data-opt="c">ConfigMaps are immutable and the edit silently failed</button>
+          </div>
+          <p class="q-explain">Env vars were poured in at container start; editing the ConfigMap does not reach into running processes. A <code>kubectl rollout restart</code> replaces the pods with containers that wake up on the new values.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. <code>kubectl get pods</code> shows your agent pod as READY <code>2/2</code>. What does that mean for reading logs?</p>
+          <div class="q-opts">
+            <button data-opt="a">Two replicas are running, so logs must be fetched from both pods</button>
+            <button data-opt="b">The pod holds two containers (harness + sidecar), so <code>kubectl logs</code> needs <code>-c</code> to name which one</button>
+            <button data-opt="c">Both the liveness and readiness probes are passing, so logs are guaranteed clean</button>
+          </div>
+          <p class="q-explain">The READY fraction counts containers inside one pod. <code>-c harness</code> gives the agent's reasoning; <code>-c docs-mcp</code> gives the tool server's traffic — two organs, two log streams.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>The pod is the agent's body: the harness container (your chapter-45 loop, containerised) at its heart, everything else injected or attached by the platform.</li>
+          <li>Configuration flows in as env vars from a ConfigMap — injected at container start, so config changes need a rollout to take effect.</li>
+          <li>Secrets never ride in the image: Key Vault delivers them at run time via the Secrets Store CSI driver, or workload identity removes the stored key entirely.</li>
+          <li>Skills arrive by two roads — baked into the image (versioned, immutable) or mounted as a volume (hot-swappable, drift-prone); the harness discovers SKILL.md folders as it did on your laptop.</li>
+          <li>MCP is wired both ways: private servers ride as sidecars on the pod's localhost; shared servers sit behind their own Services speaking streamable HTTP.</li>
+          <li>The A2A endpoint hides behind a Service, so other agents find the agent card at a stable DNS name — a fleet is one Deployment plus one Service per agent, talking A2A across the cluster network.</li>
+          <li>Because everything is delivered by the platform, the body is disposable: kill the pod and the Deployment rebuilds it identically — that disposability is the point.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

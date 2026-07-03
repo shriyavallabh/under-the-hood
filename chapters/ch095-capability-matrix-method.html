@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The capability-matrix method — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch095">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XI · The Landscape</div>
+        <h1>The capability-matrix method</h1>
+        <p class="ch-tagline">A demo persuades; a matrix decides. This chapter gives you the repeatable method for comparing any two harnesses — areas, sub-rows, evidence, colour — and for steering a room full of strong opinions to one logged decision.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 96 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your family is choosing between two flats, and the discussion is going nowhere. Your cousin loves flat A because the balcony "feels right". Your uncle loves flat B because the broker was convincing. Every Sunday the same argument, louder each week.</p>
+        <p>So you show up to the next viewing with a printed checklist. Down the left side: the areas that actually matter — plumbing, wiring, natural light, society paperwork, commute. Under each area, specific checks: <em>turn every tap on and time the pressure. Plug a charger into every socket. Ask for the occupancy certificate and read it.</em> Next to each check, three stickers: green, amber, red — and a rule: no green sticker unless someone in the family personally tested it. "The broker said so" earns amber at best.</p>
+        <p>Then the family meeting changes shape. Ten minutes per area. Curtain colours go on a "later" list. Anyone who wants to flip a sticker has to bring proof, not volume. And the final choice gets written on the back page, with reasons — so when your uncle asks in six months "why did we pick B?", nobody has to remember. The page does.</p>
+        <p>That checklist has a name in engineering: a capability matrix. This chapter teaches you to build one and to run the meeting.</p>
+      </section>
+
+      <h2>Why smart rooms make bad harness decisions</h2>
+      <p>In <a href="ch094-bank-grade-requirements.html">the previous chapter</a> you built the demand side: the non-negotiable requirements a serious enterprise puts on any agent platform — durability, auditability, security, identity. And in <a href="ch090-the-contenders.html">the contenders</a> you met the supply side: the harnesses competing to run your agents. This chapter is the bridge between the two — the method for holding supply up against demand without fooling yourself.</p>
+      <p>Left to themselves, harness comparisons fail in three predictable ways. First, <strong>demo capture</strong>: whichever framework gave the slickest twenty-minute demo wins, even though a demo exercises maybe five per cent of what production needs. Second, <strong>the loudest-voice problem</strong>: the most senior or most persistent engineer's favourite wins, and everyone else quietly disengages. Third, <strong>vibes scoring</strong>: "I heard it doesn't scale", "their docs look great", "someone on a forum said the checkpointing is flaky" — claims nobody verified, steering a decision that will bind the team for years.</p>
+      <p>The <dfn>capability matrix</dfn> — a structured table with capabilities as rows, candidate harnesses as columns, and an evidence-backed colour in every cell — exists to defeat all three. It is not paperwork. It is the difference between choosing a platform and being sold one.</p>
+
+      <h2>Step one: define the areas</h2>
+      <p>An <dfn>area</dfn> is a major territory of capability — a chapter heading for your rows. You have met every one of these territories earlier in the course, which is exactly why you are ready for this chapter now. A well-tested starting set has nine:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Area</th><th>What it covers</th><th>One sub-row you might write</th></tr>
+        <tr><td>Agent patterns</td><td>Which shapes of agent it supports — the <a href="ch045-react-loop-by-hand.html">plain ReAct loop</a>, subagents, planner-executor, custom graphs</td><td>"Can a subagent run with a smaller model than its parent?"</td></tr>
+        <tr><td>Tools</td><td>How tools are defined, discovered and executed — including <a href="ch035-tool-calling.html">native tool calling</a> and MCP support</td><td>"Can we attach a remote MCP server over streamable HTTP?"</td></tr>
+        <tr><td>State</td><td>What survives a crash — <a href="ch061-checkpointing.html">checkpointing</a>, resume, replay</td><td>"Kill the process mid-run; does the run resume from the last step?"</td></tr>
+        <tr><td>Security</td><td>Blast-radius control — <a href="ch086-sandboxing.html">sandboxing</a>, tool allow-lists, guardrails on inputs and outputs</td><td>"Can a tool be restricted to read-only for one agent but not another?"</td></tr>
+        <tr><td>Identity and audit</td><td>Who ran what, as whom — per-user credentials, permission propagation, tamper-evident audit trail</td><td>"Does the audit log record the human on whose behalf the agent acted?"</td></tr>
+        <tr><td>Observability</td><td>Seeing inside a run — <a href="ch088-observability.html">traces</a>, tool inputs/outputs, token and cost accounting</td><td>"Can we see the exact prompt sent on turn 7 of a failed run?"</td></tr>
+        <tr><td>Serving</td><td>Running it for real users — streaming, concurrency, horizontal scale-out, deployment story</td><td>"What happens to in-flight runs during a rolling deploy?"</td></tr>
+        <tr><td>Memory</td><td>Knowledge across sessions — <a href="ch083-long-term-memory.html">long-term memory</a>, stores, retrieval</td><td>"Can memory be scoped per user rather than global?"</td></tr>
+        <tr><td>Evals</td><td>Proving behaviour — <a href="ch104-agent-evals.html">agent evals</a>, regression suites, trace-based scoring</td><td>"Can we replay a recorded trace against a new prompt version?"</td></tr>
+      </table></div>
+
+      <p>Nine areas is a default, not a law. A team building read-only research agents might shrink Security to three rows; a team handling payments will expand Identity and audit into a dozen. The point of naming areas first is coverage: without them, the matrix silently becomes a list of whatever features the loudest advocate already likes.</p>
+
+      <h2>The vocabulary of the method</h2>
+      <p>Six terms carry the rest of this chapter. Flip each card until it feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">capability matrix</span><span class="flip-back">A table: capabilities as rows, candidate harnesses as columns, an evidence-backed colour in every cell. The single artefact the decision hangs on.</span></button>
+        <button class="flip" type="button"><span class="flip-front">area</span><span class="flip-back">A major territory of capability — agent patterns, state, security, evals. Areas guarantee coverage; rows live inside them.</span></button>
+        <button class="flip" type="button"><span class="flip-front">sub-row</span><span class="flip-back">One atomic, testable question inside an area. Written so that a single spike can answer it green, amber or red.</span></button>
+        <button class="flip" type="button"><span class="flip-front">evidence ladder</span><span class="flip-back">Vibes &#8594; docs &#8594; tested. A cell's colour can never be stronger than its evidence. "Someone said" is not a rung.</span></button>
+        <button class="flip" type="button"><span class="flip-front">parking lot</span><span class="flip-back">The visible list where rabbit holes go to wait. Interesting, off-topic, and not allowed to eat the meeting.</span></button>
+        <button class="flip" type="button"><span class="flip-front">decision log</span><span class="flip-back">The written record: what was decided, the scores, who dissented and why, and the triggers that would reopen it.</span></button>
+      </div>
+
+      <h2>Step two: break areas into sub-rows — seeded from reality</h2>
+      <p>A <dfn>sub-row</dfn> is one atomic, testable question. "Good state management" is not a sub-row — it is a mood. "Kill the process mid-run and the run resumes from the last completed step" is a sub-row: specific enough that a one-day spike can answer it, and specific enough that two engineers cannot both be right while disagreeing.</p>
+      <p>Where do sub-rows come from? This is the step most teams get wrong, so here is the rule: <strong>seed the rows from what your production users actually use — not from the candidates' feature pages.</strong> If you write rows by reading marketing sites, you end up scoring each harness on the features it chose to brag about, which is like judging the two flats on the photos each broker chose to send.</p>
+      <p>Instead, mine reality:</p>
+      <ul>
+        <li><strong>Real transcripts and traces.</strong> Pull a month of runs from the agents your teams already operate. Which capabilities actually fired? If every production agent uses <a href="ch062-human-in-the-loop.html">human-in-the-loop interrupts</a> daily, that is a heavyweight row. If nobody has ever launched a ten-agent swarm, that gets one polite row, not a section.</li>
+        <li><strong>Support tickets and incident reports.</strong> Every past outage is a sub-row: "recovers when the model API times out mid-tool-call" earns its place because it once cost you a weekend. Chapter <a href="ch048-failure-modes.html">48's failure modes</a> are a ready-made quarry.</li>
+        <li><strong>The requirements sheet.</strong> Every non-negotiable from <a href="ch094-bank-grade-requirements.html">bank-grade requirements</a> becomes at least one row, usually several.</li>
+      </ul>
+      <p>A healthy matrix for a serious platform decision lands between forty and eighty sub-rows. Fewer, and you are probably still at the mood level; many more, and you are cataloguing rather than deciding.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Write every sub-row as a question a spike could answer, and put the verb early: "Resumes after a process kill?", "Restricts a tool per-agent?", "Replays a recorded trace?". If you cannot imagine the test, the row is not finished.</p></div>
+
+      <h2>Step three: score with evidence, not vibes</h2>
+      <p>Every cell gets a colour, and the colour is capped by the evidence behind it. The <dfn>evidence ladder</dfn> has three rungs — and the bottom rung does not count:</p>
+      <ul>
+        <li><strong>Vibes</strong> — a blog post, a conference chat, a memory of a tweet. Worth writing down as a lead to investigate. Worth zero as a score.</li>
+        <li><strong>Docs</strong> — the capability is explicitly documented by the maintainers, with an API you can point at. This earns <em>amber at best</em>: documented is a claim, not a fact. Docs drift, and "supported" sometimes means "there is an open issue about it".</li>
+        <li><strong>Tested</strong> — someone on your team ran it, in a spike repo, and the artefact (script, trace, screenshot of the failure) is linked from the cell. Only tested evidence can turn a cell green — or, just as valuably, red.</li>
+      </ul>
+      <p>The <dfn>colour states</dfn> then read at a glance: <strong>green</strong> means tested and it works; <strong>amber</strong> means partial, docs-only, or works-with-a-workaround; <strong>red</strong> means tested and it fails, or the capability simply does not exist; <strong>grey</strong> means not yet assessed — and grey is an honest colour, far better than a guessed green. A matrix with some grey cells and a plan is rigorous; a matrix that is all green after one afternoon is fiction.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The most dangerous cell in any matrix is a green that came from documentation. It looks identical to a real green, and it fails in month three of the build, when switching costs are at their peak. Enforce the rule mechanically: no repro artefact linked, no green.</p></div>
+
+      <p>Here is the whole method as a flow. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Define areas">
+          <h3>1. Define the areas</h3>
+          <div class="diagram">
+            <div class="d-box hot">Areas<small>patterns · tools · state · security · identity · observability · serving · memory · evals</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Sub-rows</div>
+            <div class="d-box dim">Evidence</div>
+          </div>
+          <p class="step-cap">Nine territories, agreed before anyone names a favourite harness. Areas first, candidates second — this ordering is what keeps the matrix from being reverse-engineered around a preferred answer.</p>
+        </div>
+        <div class="step" data-title="Seed sub-rows">
+          <h3>2. Seed sub-rows from production reality</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Real traces<small>what agents actually did</small></div>
+              <div class="d-box">Incidents<small>what actually broke</small></div>
+              <div class="d-box">Requirements<small>what the business demands</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">40-80 sub-rows<small>each one testable</small></div>
+          </div>
+          <p class="step-cap">Rows come from what production users actually use and what has actually failed — never from the candidates' marketing pages.</p>
+        </div>
+        <div class="step" data-title="Docs pass">
+          <h3>3. The docs pass</h3>
+          <div class="diagram">
+            <div class="d-box">Sub-rows</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Read the docs<small>cite section per cell</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Amber / red / grey<small>no greens yet</small></div>
+          </div>
+          <p class="step-cap">Fast and cheap: a day or two of reading fills most cells with amber (documented), red (absent), or grey (unclear). Every amber cites the doc section, so it can be challenged later.</p>
+        </div>
+        <div class="step" data-title="Test pass">
+          <h3>4. The test pass</h3>
+          <div class="diagram">
+            <div class="d-box">Amber cells<small>ranked by weight</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Spikes<small>small repro repos</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Green<small>artefact linked</small></div>
+            <div class="d-box">Red<small>also an artefact</small></div>
+          </div>
+          <p class="step-cap">Spend spike effort where weight times uncertainty is highest — usually state, security and identity. Each spike upgrades a cell to green or red and leaves behind a linkable artefact.</p>
+        </div>
+        <div class="step" data-title="The room">
+          <h3>5. The room</h3>
+          <div class="diagram">
+            <div class="d-box hot">Review meeting<small>timeboxed per area</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">Challenges<small>evidence only</small></div>
+              <div class="d-box dim">Parking lot<small>rabbit holes wait here</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The matrix is circulated before the meeting; the meeting walks it area by area on a clock. A colour changes only when someone shows evidence. Everything fascinating-but-off-topic goes to the parking lot, visibly.</p>
+        </div>
+        <div class="step" data-title="Decide and log">
+          <h3>6. Decide and log</h3>
+          <div class="diagram">
+            <div class="d-box">Weighted scores</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Decision<small>one named decider</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Decision log<small>reasons, dissent, revisit triggers</small></div>
+          </div>
+          <p class="step-cap">The decision is written down with its justification, the dissent it overrode, and the concrete triggers that would reopen it. Six months later, nobody has to argue from memory.</p>
+        </div>
+      </div>
+
+      <h2>A worked example: Aviary vs Foundry</h2>
+      <p>Let us run the method on two <em>fictional</em> harnesses, sized down so the whole thing fits on one screen. <strong>Aviary</strong> is batteries-included and opinionated: an agent running in ten minutes, lovely tracing, strong tool allow-lists — but young around persistence. <strong>Foundry</strong> is a build-your-own graph kit in the spirit of <a href="ch057-why-graphs.html">graph-based frameworks</a>: more assembly required, but checkpointing, interrupts and scale-out are load-bearing features its production users hammer daily.</p>
+      <p>The evaluating team runs payment-adjacent workloads, so the room has already agreed on weights: State and Security count triple, Serving counts single. Below is their (miniature) matrix as data, plus the scoring rules — including the one that rejects vibes. <strong>Press Run</strong>, then try the experiments underneath.</p>
+
+      <div class="pyrun" data-title="A capability matrix as forty lines of Python — run me">
+<textarea class="py-src" spellcheck="false">
+# Two FICTIONAL harnesses under evaluation:
+#   Aviary  - batteries-included, fast to start, young persistence story
+#   Foundry - graph-based kit, heavier assembly, battle-tested state
+#
+# Each sub-row: (question, {harness: (score, evidence)})
+#   score:    2 = works   1 = partial   0 = missing/failed
+#   evidence: "tested" | "docs" | "vibes"
+
+MATRIX = {
+  "Agent patterns": [
+    ("ReAct loop out of the box",    {"Aviary": (2, "tested"), "Foundry": (2, "tested")}),
+    ("Subagent delegation",          {"Aviary": (1, "docs"),   "Foundry": (2, "tested")}),
+    ("Human-in-the-loop interrupt",  {"Aviary": (0, "tested"), "Foundry": (2, "tested")}),
+  ],
+  "State": [
+    ("Resumes after process kill",   {"Aviary": (1, "docs"),   "Foundry": (2, "tested")}),
+    ("Durable checkpoint backend",   {"Aviary": (0, "docs"),   "Foundry": (2, "tested")}),
+  ],
+  "Security": [
+    ("Per-agent tool allow-lists",   {"Aviary": (2, "tested"), "Foundry": (1, "docs")}),
+    ("Sandboxed code execution",     {"Aviary": (0, "tested"), "Foundry": (1, "docs")}),
+  ],
+  "Observability": [
+    ("Full trace with tool I/O",     {"Aviary": (2, "tested"), "Foundry": (2, "tested")}),
+    ("Token cost per run",           {"Aviary": (2, "tested"), "Foundry": (1, "docs")}),
+  ],
+  "Serving": [
+    ("Streams tokens to the client", {"Aviary": (2, "tested"), "Foundry": (2, "tested")}),
+    ("Horizontal scale-out",         {"Aviary": (1, "vibes"),  "Foundry": (2, "tested")}),
+  ],
+}
+# (A real matrix covers all nine areas -- tools, identity/audit,
+#  memory, evals too -- and runs 40-80 sub-rows. Same machinery.)
+
+WEIGHTS = {"Agent patterns": 2, "State": 3, "Security": 3,
+           "Observability": 2, "Serving": 1}
+COLOUR = {2: "GREEN", 1: "amber", 0: "RED  "}
+
+totals = {"Aviary": 0, "Foundry": 0}
+max_total = 0
+rejected = []
+
+for area, rows in MATRIX.items():
+    w = WEIGHTS[area]
+    print(f"\n[{area}]  (weight x{w})")
+    for question, cells in rows:
+        max_total += 2 * w
+        line = f"  {question:31}"
+        for harness in ("Aviary", "Foundry"):
+            pts, evidence = cells[harness]
+            if evidence == "vibes":
+                rejected.append(f"{harness} / {question}")
+                pts = 0                     # vibes is not evidence
+            totals[harness] += pts * w
+            line += f"  {COLOUR[pts]:5} ({evidence:6})"
+        print(line)
+
+print("\n--- weighted totals (max", max_total, "per harness) ---")
+for harness, score in totals.items():
+    print(f"  {harness:8} {score}")
+if rejected:
+    print("\nScores voided pending real evidence:")
+    for r in rejected:
+        print("  -", r)
+
+winner = max(totals, key=totals.get)
+print(f"\nDECISION LOG: adopt {winner} for the regulated workload.")
+print("Justification: wins both triple-weighted areas (State and")
+print("Security). Dissent noted: Aviary's time-to-first-agent is")
+print("superior; revisit when Aviary ships durable checkpoints (#212).")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now do what the room would do. Change the Serving weight to 5 and watch whether the winner flips — that is a sensitivity check, and a decision that survives reasonable re-weighting is a safe one. Upgrade Aviary's "Resumes after process kill" to <code>(2, "tested")</code> and see how much one spike is worth. Then change that same cell's evidence to <code>"vibes"</code> and watch the scorer void it — the ladder is enforced by code, not by good intentions.</p></div>
+
+      <p>Two things are worth noticing in the output. First, Aviary's "horizontal scale-out" cell scored zero <em>not</em> because Aviary cannot scale, but because the only evidence anyone had was a conference-corridor conversation. The method does not punish the harness; it punishes the unverified claim, and it prints exactly which cells need a spike before the score can be trusted. Second, the totals are close enough in unweighted terms that the weights — which the room agreed on <em>before</em> scoring — are what make the decision. That ordering matters: weights chosen after the scores are visible are just vibes wearing a spreadsheet.</p>
+
+      <div data-bars data-title="Weighted totals, Aviary vs Foundry (illustrative)" data-unit="points (max 48)"
+           data-note="Foundry wins on the triple-weighted areas — State and Security — which is exactly where this team's workload lives.">
+        <div class="bar" data-label="Aviary" data-value="25"></div>
+        <div class="bar" data-label="Foundry" data-value="40"></div>
+      </div>
+
+      <h2>Driving the room to a decision</h2>
+      <p>A perfect matrix can still die in a bad meeting. Facilitation is part of the method, not an afterthought, and it rests on five habits:</p>
+      <ul>
+        <li><strong>Circulate first, meet second.</strong> The matrix goes out days before the meeting. The meeting is for challenges and the decision, not for reading a fifty-row table aloud.</li>
+        <li><strong>Timebox per area.</strong> Ten minutes for Agent patterns, ten for State, and a visible clock. Timeboxes are not rudeness; they are fairness — without them, the first two areas get an hour and Identity and audit gets ninety seconds at the door.</li>
+        <li><strong>Park the rabbit holes.</strong> When the room discovers a genuinely interesting tangent — "wait, could we write our own checkpointer?" — it goes to the <dfn>parking lot</dfn>, a visible list of deferred questions, each with an owner. Parked is not dismissed: the list is reviewed at the end, and items either become spikes or get consciously dropped.</li>
+        <li><strong>Only evidence moves a colour.</strong> The single most powerful sentence in the room: <em>"happy to change it — show me the repro."</em> This one rule converts seniority contests into engineering. A challenge without evidence becomes a parked spike; a challenge with evidence changes the cell on the spot, gratefully.</li>
+        <li><strong>One named decider, one written log.</strong> Consensus is lovely and rare. Agree up front who decides if the room splits — then record the outcome in a <dfn>decision log</dfn>: the choice, the scores it rested on, the dissent it overrode, and the concrete triggers that would reopen it.</li>
+      </ul>
+
+      <p>A decision-log entry is short — that is what makes people actually write it:</p>
+
+      <div class="code-title">decisions/2026-07-adopt-foundry.yaml</div>
+      <pre><code class="language-yaml">decision: Adopt Foundry for the payments-agent programme
+date: 2026-07-02
+options_considered: [Aviary, Foundry]
+weighted_scores: {Aviary: 25, Foundry: 40}   # max 48; matrix v1.3 attached
+decisive_evidence:
+  - "Spike S-114: killed Foundry mid-run, resumed from step 9 (trace linked)"
+  - "Spike S-117: Aviary run lost after process kill; no durable backend"
+dissent:
+  - "Aviary's time-to-first-agent (2 days vs 9) is real; prefer it for
+     low-risk internal tools"
+revisit_when:
+  - "Aviary ships durable checkpoints (their issue #212)"
+  - "Six months elapse, whichever comes first"</code></pre>
+
+      <p>The log is what turns a decision into an asset. Without it, the argument reopens every time a new engineer joins or a vendor ships a shiny release, and it reopens from zero. With it, the conversation starts at "has a revisit trigger fired?" — a five-minute check instead of a five-week relitigation.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The matrix is a snapshot, so date it and version it. Harnesses move fast: a red cell in January may be green by June. That is not a flaw in the method — it is the reason the decision log carries revisit triggers instead of pretending the answer is permanent.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this artefact under many names: "evaluation matrix", "framework bake-off", "scorecard", "trade study", or an architecture decision record (ADR) with a comparison table inside. In a repository it usually lives as a spreadsheet link plus a <code>decisions/</code> folder of markdown or YAML files; in a merge request you will see spikes named after cells — "spike: prove checkpoint resume on candidate B". When a big engineering blog announces "why we chose X", the credible ones publish the matrix and the spike repos; the less credible ones publish adjectives. And when an enterprise harness team asks you to review their comparison, your first question now writes itself: <em>which of these greens were tested, and where are the artefacts?</em></p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. A cell in the matrix says a harness supports durable checkpointing, citing the official documentation. Under the evidence ladder, what is the strongest colour that cell can hold?</p>
+          <div class="q-opts">
+            <button data-opt="a">Green — official docs are authoritative</button>
+            <button data-opt="b">Red — docs count for nothing</button>
+            <button data-opt="c">Amber — documented is a claim; only a run your team performed can turn it green</button>
+          </div>
+          <p class="q-explain">Docs earn amber at best. Documentation drifts, and "supported" can hide caveats that only surface when you run it. Green requires a tested repro with a linkable artefact — and a docs-born green is the most dangerous cell in the matrix because it fails in month three, when switching is most expensive.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Why does the method insist on seeding sub-rows from production traces, incidents and requirements — rather than from the candidate harnesses' feature pages?</p>
+          <div class="q-opts">
+            <button data-opt="a">Feature pages are usually out of date</button>
+            <button data-opt="b">Otherwise you score each candidate on what it chose to brag about, instead of on what your workload actually needs</button>
+            <button data-opt="c">Production traces are cheaper to read than documentation</button>
+          </div>
+          <p class="q-explain">Rows written from marketing pages tilt the whole comparison toward the vendors' strengths — like judging two flats on the photos each broker chose to send. Seeding from real usage, real failures and real requirements makes the matrix measure your demand, not their supply.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. In the review meeting, a senior engineer says a red cell is "definitely wrong — I'm sure it supports that". What does the method say happens next?</p>
+          <div class="q-opts">
+            <button data-opt="a">The cell stays red; the challenge becomes a parked spike unless evidence is shown on the spot</button>
+            <button data-opt="b">The cell flips to amber as a compromise between the two views</button>
+            <button data-opt="c">The cell flips to green, since seniority implies deeper knowledge</button>
+          </div>
+          <p class="q-explain">Only evidence moves a colour — "happy to change it, show me the repro." Confidence without evidence becomes a parking-lot spike with an owner. This single rule is what converts a seniority contest into engineering, and it protects the senior engineer too: if they are right, the spike proves it permanently.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Six months after adopting a harness, a new team member argues the choice was wrong. What does the decision log change about that conversation?</p>
+          <div class="q-opts">
+            <button data-opt="a">It ends the conversation — logged decisions are final</button>
+            <button data-opt="b">It starts the conversation at "has a revisit trigger fired?" instead of relitigating from zero</button>
+            <button data-opt="c">It shifts blame to whoever was the named decider</button>
+          </div>
+          <p class="q-explain">The log records the scores, the dissent and the concrete conditions that would reopen the decision. If a trigger has fired — say, the losing harness shipped the missing capability — the question reopens legitimately and quickly. If not, the reasoning is right there to read. Either way, nobody argues from memory.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. In the Aviary-vs-Foundry example, why did Aviary score zero on horizontal scale-out even though nobody proved it cannot scale?</p>
+          <div class="q-opts">
+            <button data-opt="a">Because Foundry's advocates outvoted Aviary's in the meeting</button>
+            <button data-opt="b">Because the scoring script contains a bug the chapter asks you to find</button>
+            <button data-opt="c">Because the only evidence was "vibes", and the method voids unverified claims until someone runs a spike</button>
+          </div>
+          <p class="q-explain">The zero punishes the unverified claim, not the harness. The scorer prints exactly which cells were voided, turning each one into a to-do: run the spike, attach the artefact, and the points come back — as a green or an honest red.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A capability matrix is areas &#8594; sub-rows &#8594; evidence-backed colours: nine areas (agent patterns, tools, state, security, identity/audit, observability, serving, memory, evals) broken into forty to eighty atomic, testable questions.</li>
+          <li>Seed the sub-rows from what production users actually use — real traces, real incidents, real requirements — never from the candidates' feature pages.</li>
+          <li>The evidence ladder caps every colour: vibes score zero, docs earn amber at best, and only a tested repro with a linkable artefact turns a cell green or red. Grey ("not yet assessed") is an honest colour.</li>
+          <li>Agree the area weights before scoring, then sensitivity-check the winner by nudging them — a decision that flips under reasonable re-weighting is not a decision yet.</li>
+          <li>Facilitate deliberately: circulate the matrix first, timebox each area, park rabbit holes visibly with owners, and let only evidence change a colour.</li>
+          <li>End with one named decider and a written decision log — choice, scores, dissent, revisit triggers — so the decision compounds instead of reopening from zero every quarter.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

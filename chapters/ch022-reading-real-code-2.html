@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading real code: a full package tour — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch022">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act II · The Engineering Layer</div>
+        <h1>Reading real code: a full package tour</h1>
+        <p class="ch-tagline">One small, realistic Python package — five files, fully shown, nothing hidden. By the end you will walk it the way a seasoned reviewer does, and every Act II idea will snap into one picture.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 22 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You have been asked to assess a small, busy restaurant before investing in it. You have never set foot inside. The owner gives you the tour. The <em>menu in the window</em> tells you, in one glance, what this place offers the world — not how anything is cooked, just what you can order. In the kitchen, the <em>pantry</em> is a wall of labelled jars: salt, chilli, rice, each with a sensible amount, refilled from outside the kitchen. The <em>head chef's station</em> is where orders actually become food — the chef reaches into the pantry for settings and into a <em>drawer of small sharp tools</em> for the fiddly jobs: peeling, chopping, portioning. And taped inside the back door you find the best document in the building: the <em>inspection log</em>. "The dal must arrive warm. The bill must add up. An empty order is politely refused." Each promise has a tick against it, dated yesterday.</p>
+        <p>You never watched a single dish being cooked, yet you now understand the restaurant. A Python package is this building. This chapter is that tour.</p>
+      </section>
+
+      <h2>From one page to a whole building</h2>
+      <p>In <a href="ch010-reading-real-code-1.html">the first reading-real-code chapter</a> you learned to read a single Python file like a page: imports at the top declaring what it borrows, constants next, then function and class definitions, and any actual "do something now" code at the bottom. That skill still applies — but real projects are almost never one file. And in the previous chapter you picked up just enough git to clone a repository and wander around inside it. So today we stop practising on pages and read a whole building.</p>
+      <p>A <dfn>package</dfn> is simply a folder of Python files that Python treats as one unit, marked by a special file called <code>__init__.py</code>. Each file inside it is a <dfn>module</dfn> — a single <code>.py</code> file, exactly the kind you already know how to read (that vocabulary comes from <a href="ch011-imports-and-modules.html">the imports chapter</a>). Nothing new is happening at the level of Python itself. What is new is <em>layout</em>: the code has been split across files, and each file has a job. Learn the jobs and an unfamiliar repo stops being a wall of filenames and becomes a floor plan.</p>
+      <p>Here is the package we will tour — a tiny library called <code>digest</code> that turns long text into short summaries by calling a language model. Five files. You will see every line of all five.</p>
+
+      <div class="code-title">the digest/ folder</div>
+      <pre><code class="language-markup">digest/
+├── __init__.py          the front door: what the package offers
+├── config.py            the pantry: settings read from the environment
+├── client.py            the head chef: the main class
+├── tools.py             the drawer: small, sharp helper functions
+└── tests/
+    └── test_client.py   the inspection log: promises, executable</code></pre>
+
+      <p>Before we open any file, take the guided walk. Watch which file depends on which — that arrow structure is the real floor plan.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The shape">
+          <h3>1. First glance: the shape of the folder</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">digest/<small>the package folder</small></div>
+              <div class="d-box">__init__.py<small>front door</small></div>
+              <div class="d-box">config.py<small>settings</small></div>
+              <div class="d-box">client.py<small>main class</small></div>
+              <div class="d-box">tools.py<small>helpers</small></div>
+              <div class="d-box">tests/test_client.py<small>promises</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Five files, each with one job. This split — public face, config, core logic, helpers, tests — repeats in thousands of real repositories. Learn it once, recognise it everywhere.</p>
+        </div>
+        <div class="step" data-title="__init__.py">
+          <h3>2. The front door: __init__.py</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">__init__.py<small>"from digest import DigestClient"</small></div>
+              <div class="d-box dim">config.py</div>
+              <div class="d-box">client.py<small>re-exported from here</small></div>
+              <div class="d-box">tools.py<small>re-exported from here</small></div>
+              <div class="d-box dim">tests/test_client.py</div>
+            </div>
+          </div>
+          <p class="step-cap">The menu in the window. It imports the best things from the inner files and re-exports them, so users write one clean import line without knowing the internal layout.</p>
+        </div>
+        <div class="step" data-title="config.py">
+          <h3>3. The pantry: config.py</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">environment<small>DIGEST_MODEL, DIGEST_API_KEY...</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">config.py<small>reads env once, holds the knobs</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Every tunable value lives here, read from environment variables with sensible defaults — except the secret, which deliberately has no default. One file to check when you wonder "where do I change the model?"</p>
+        </div>
+        <div class="step" data-title="tools.py">
+          <h3>4. The drawer: tools.py</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">tools.py<small>clean(), chunk()</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">pure functions<small>text in, text out, no surprises</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Small, self-contained functions with no API calls and no stored state. Files like this are the easiest to read and the easiest to test — which is exactly why good engineers carve them out.</p>
+        </div>
+        <div class="step" data-title="client.py">
+          <h3>5. The head chef: client.py</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">client.py<small>class DigestClient</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">config.py<small>for the model name and chunk size</small></div>
+              <div class="d-box">tools.py<small>for clean() and chunk()</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The main class. Notice the direction of the arrows: the chef reaches into the pantry and the drawer, never the other way round. Dependencies flow from the complex file towards the simple ones.</p>
+        </div>
+        <div class="step" data-title="tests">
+          <h3>6. The inspection log: tests/</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">tests/test_client.py<small>imports through the front door</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box good">__init__.py<small>used exactly like a real user would</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The tests live outside the package and import it the way any user would. Each test states one promise and proves it. This is the file that tells you what the package is <em>supposed</em> to do — signed and dated.</p>
+        </div>
+      </div>
+
+      <h2>Stop 1: __init__.py — the front door</h2>
+      <p>Open an unfamiliar package here first, always. It is usually short, and it answers the most valuable question you can ask about a stranger's code: <em>what does this thing want to be used for?</em></p>
+
+      <div class="code-title">digest/__init__.py</div>
+      <pre><code class="language-python">"""digest -- turn long text into short summaries via a language model."""
+
+from .client import DigestClient
+from .tools import chunk, clean
+
+__all__ = ["DigestClient", "chunk", "clean"]</code></pre>
+
+      <p>Three things to notice. First, the docstring at the top is the package's one-line pitch — the sign in the window. Second, those imports start with a dot: <code>from .client import ...</code> is a <dfn>relative import</dfn>, meaning "from the module named <code>client</code> <em>inside this same package</em>". The dot is a location, like saying "the kitchen down our own corridor" rather than a street address. Third, <code>__all__</code> is the package's declared <dfn>public API</dfn> — the short list of names it promises to outsiders. Everything else inside the folder is wiring, free to change without warning.</p>
+      <p>This file is why users get to write <code>from digest import DigestClient</code> instead of the clunkier <code>from digest.client import DigestClient</code>. The front door <em>re-exports</em> the good stuff so nobody has to memorise the floor plan. When you read any library's import line in production code, this is the machinery behind it.</p>
+
+      <h2>Stop 2: config.py — the pantry</h2>
+      <p>Recall from <a href="ch019-logging-config-env.html">the logging and config chapter</a>: well-behaved code never hard-codes the values an operator might want to change, and it never, ever hard-codes secrets. This file is that principle given a room of its own.</p>
+
+      <div class="code-title">digest/config.py</div>
+      <pre><code class="language-python">"""All the knobs, read once from the environment."""
+
+import os
+
+MODEL = os.getenv("DIGEST_MODEL", "small-fast-1")
+MAX_CHUNK = int(os.getenv("DIGEST_MAX_CHUNK", "1000"))
+API_KEY = os.getenv("DIGEST_API_KEY")   # a secret gets NO default
+
+
+def require_api_key() -&gt; str:
+    """Fail early and loudly if the key is missing."""
+    if not API_KEY:
+        raise RuntimeError(
+            "DIGEST_API_KEY is not set -- export it before using "
+            "the real transport."
+        )
+    return API_KEY</code></pre>
+
+      <p>Read the three constants like pantry labels. <code>MODEL</code> and <code>MAX_CHUNK</code> come with sensible defaults, so the package works out of the box; an operator overrides them by exporting an environment variable, no code edit required. <code>API_KEY</code> pointedly has no default — a baked-in fallback secret would sooner or later be committed to git and leaked. And <code>require_api_key()</code> converts a vague failure later ("401 Unauthorized, somewhere") into a loud, plain-English failure now. When a production incident ends with "the env var wasn't set on the new machine", this file is the scene of the crime.</p>
+
+      <h2>Stop 3: tools.py — the drawer of small sharp things</h2>
+
+      <div class="code-title">digest/tools.py</div>
+      <pre><code class="language-python">"""Small, pure text helpers. No API calls, no stored state."""
+
+
+def clean(text: str) -&gt; str:
+    """Collapse runs of whitespace into single spaces."""
+    return " ".join(text.split())
+
+
+def chunk(text: str, size: int) -&gt; list[str]:
+    """Split text into pieces of at most `size` characters."""
+    if size &lt; 1:
+        raise ValueError("size must be at least 1")
+    return [text[i:i + size] for i in range(0, len(text), size)]</code></pre>
+
+      <p>Both are <dfn>pure functions</dfn> — same input, same output, touching nothing outside themselves (the shape you met in <a href="ch007-functions.html">the functions chapter</a>). The type hints (<a href="ch016-type-hints-and-pydantic.html">chapter 16</a>) state the contract at a glance, and the <a href="ch008-comprehensions.html">comprehension</a> in <code>chunk</code> is the compact way to say "take a slice every <code>size</code> characters". Files like this are deliberately boring, and that is a compliment: no moving parts means reviewers trust them and tests nail them down in one line.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>You have now read three of five files and none contained the "real work". That is normal: most files in a healthy package are front doors, settings, and small helpers. Read them first, and the one genuinely complex file arrives with everything it leans on already familiar.</p></div>
+
+      <h2>Stop 4: client.py — the head chef</h2>
+      <p>Now the main event. This file holds a class — the pattern from <a href="ch013-classes-and-oop.html">the classes chapter</a>: data and behaviour bundled together, with <code>__init__</code> stashing what each instance needs onto <code>self</code>. Click through the annotated lines; the goal is for every one of them to feel boring by the end.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">digest/client.py</div>
+        <div class="wl-line"><code>"""The main class: turns long text into a short summary."""</code>
+          <div class="wl-note">A module docstring — the file introduces itself before you read a line of logic. In a well-kept repo, these one-liners let you tour the whole package from the top of each file.</div></div>
+        <div class="wl-line"><code>import logging</code></div>
+        <div class="wl-line"><code>from . import config</code>
+          <div class="wl-note">A relative import of a whole sibling module. The code below says <code>config.MODEL</code> — the prefix makes it obvious mid-file that a value comes from the pantry, not a local variable.</div></div>
+        <div class="wl-line"><code>from .tools import clean, chunk</code>
+          <div class="wl-note">And here just two names from the drawer. One rule of taste: import the module when the prefix adds clarity, import the names when they are used often. Both run on the machinery from <a href="ch011-imports-and-modules.html">chapter 11</a>.</div></div>
+        <div class="wl-line"><code>log = logging.getLogger(__name__)</code>
+          <div class="wl-note">The standard first line of grown-up code, from <a href="ch019-logging-config-env.html">chapter 19</a>: a logger named after the module, so log lines in production say exactly which file spoke.</div></div>
+        <div class="wl-line"><code>class DigestClient:</code>
+          <div class="wl-note">The head chef. One class, one clear responsibility: coordinate the settings, the helpers, and the model into a summary.</div></div>
+        <div class="wl-line"><code>    """Summarise long text through a pluggable transport."""</code></div>
+        <div class="wl-line"><code>    def __init__(self, transport, model: str | None = None):</code>
+          <div class="wl-note">The constructor takes a <em>transport</em> — the object that actually talks to the LLM API — from outside, instead of building one itself. Hold that thought: it is the package's most important design decision, and the tests are about to cash it in.</div></div>
+        <div class="wl-line"><code>        self.transport = transport</code></div>
+        <div class="wl-line"><code>        self.model = model or config.MODEL</code>
+          <div class="wl-note">Caller's choice wins; otherwise fall back to the pantry. This one line is the whole configuration philosophy: explicit argument, then environment, then default.</div></div>
+        <div class="wl-line"><code>    def summarise(self, text: str) -&gt; str:</code>
+          <div class="wl-note">The only public method — the one dish on the menu. The hints promise: string in, string out.</div></div>
+        <div class="wl-line"><code>        text = clean(text)</code>
+          <div class="wl-note">First move: normalise the input using the drawer. Complex files should read like this — a sequence of calls to simpler files.</div></div>
+        <div class="wl-line"><code>        if not text:</code>
+          <div class="wl-note">An empty string is falsy (<a href="ch006-control-flow.html">chapter 6</a>), so this catches both <code>""</code> and whitespace-only input that <code>clean</code> reduced to nothing.</div></div>
+        <div class="wl-line"><code>            raise ValueError("nothing to summarise")</code>
+          <div class="wl-note">Refuse bad input at the door, by name. Far kinder than sending an empty prompt to a paid API and returning gibberish.</div></div>
+        <div class="wl-line"><code>        parts = chunk(text, config.MAX_CHUNK)</code>
+          <div class="wl-note">Long text is split into pieces the model can handle — the size knob comes straight from the environment via config.</div></div>
+        <div class="wl-line"><code>        log.info("summarising %d chunk(s) with %s", len(parts), self.model)</code></div>
+        <div class="wl-line"><code>        notes = [self.transport.complete(self.model, f"Summarise: {p}")</code>
+          <div class="wl-note">One API call per chunk, collected with a comprehension. Note that the class never knows <em>how</em> the call happens — it just trusts whatever transport it was handed to have a <code>complete</code> method.</div></div>
+        <div class="wl-line"><code>                 for p in parts]</code></div>
+        <div class="wl-line"><code>        if len(notes) == 1:</code>
+          <div class="wl-note">The common case: short text, one chunk, one note — return it directly and spend nothing more.</div></div>
+        <div class="wl-line"><code>            return notes[0]</code></div>
+        <div class="wl-line"><code>        return self.transport.complete(</code>
+          <div class="wl-note">The long-text case: one final call merges the per-chunk notes into a single summary. Chunk, summarise each, merge — you have now read a real map-then-reduce pattern in the wild.</div></div>
+        <div class="wl-line"><code>            self.model, "Merge these notes: " + " ".join(notes))</code></div>
+      </div>
+
+      <p>That design decision in <code>__init__</code> deserves its name: <dfn>dependency injection</dfn> — instead of a class creating the things it depends on, the caller hands them in. Because <code>DigestClient</code> accepts <em>any</em> object with a <code>complete</code> method, a test can hand it a scripted fake and check the class's behaviour without spending a rupee on API calls or touching the network.</p>
+
+      <h2>Stop 5: the tests — promises, executable</h2>
+      <p>Here is the habit that separates people who <em>skim</em> repos from people who <em>understand</em> them: read the tests as documentation. Prose documentation drifts out of date; a test cannot, because the moment it stops being true the suite fails and someone must deal with it. Every <dfn>assert</dfn> — a statement meaning "this must be true, or crash with a complaint" — is a promise about behaviour that is still being kept, re-verified mechanically on every change.</p>
+      <p>Almost every test has the same rhythm: <em>arrange</em> (set up the objects), <em>act</em> (call the thing), <em>assert</em> (check the promise). And each test's name is a full sentence with underscores for spaces — read just the names below and you get a specification for free.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">tests/test_client.py</div>
+        <div class="wl-line"><code>"""Each test states one promise the package makes, and proves it."""</code></div>
+        <div class="wl-line"><code>import pytest</code>
+          <div class="wl-note"><code>pytest</code> is the near-universal Python test runner: it finds files named <code>test_*.py</code>, runs every function named <code>test_*</code>, and reports which asserts held. No registration, no ceremony — naming <em>is</em> the wiring.</div></div>
+        <div class="wl-line"><code>from digest import DigestClient, chunk, clean</code>
+          <div class="wl-note">The tests import through the front door, exactly like a real user. So the suite quietly verifies the public API too: if someone renames <code>DigestClient</code> without updating <code>__init__.py</code>, this very line breaks first.</div></div>
+        <div class="wl-line"><code>class FakeTransport:</code>
+          <div class="wl-note">The star of the file: a scripted stand-in for the real LLM API. It quacks like the real transport — same <code>complete</code> method — but costs nothing, needs no network, and answers instantly and predictably. This is dependency injection paying out.</div></div>
+        <div class="wl-line"><code>    """Records every prompt; replies with a numbered note."""</code></div>
+        <div class="wl-line"><code>    def __init__(self):</code></div>
+        <div class="wl-line"><code>        self.prompts = []</code>
+          <div class="wl-note">The fake keeps a diary, so tests can assert not just <em>what</em> came back but <em>how many</em> API calls were made — cost behaviour, tested without spending money.</div></div>
+        <div class="wl-line"><code>    def complete(self, model, prompt):</code></div>
+        <div class="wl-line"><code>        self.prompts.append(prompt)</code></div>
+        <div class="wl-line"><code>        return f"note-{len(self.prompts)}"</code>
+          <div class="wl-note">Deterministic replies: the first call returns <code>note-1</code>, the second <code>note-2</code>. Predictability is the whole point of a fake — a test against a real model would pass or fail on the model's mood.</div></div>
+        <div class="wl-line"><code>def test_clean_collapses_whitespace():</code>
+          <div class="wl-note">Read the name aloud: "clean collapses whitespace." The test is its own headline.</div></div>
+        <div class="wl-line"><code>    assert clean("  hello   world \n") == "hello world"</code>
+          <div class="wl-note">One line, one promise, with a concrete example baked in. If you ever wonder "what exactly does <code>clean</code> do with newlines?", this line answers with evidence, not opinion.</div></div>
+        <div class="wl-line"><code>def test_short_text_is_one_api_call():</code></div>
+        <div class="wl-line"><code>    fake = FakeTransport()</code>
+          <div class="wl-note">Arrange: build the fake and hand it in. From here on, every "API call" the client makes lands in <code>fake.prompts</code> instead of the internet.</div></div>
+        <div class="wl-line"><code>    client = DigestClient(transport=fake)</code></div>
+        <div class="wl-line"><code>    assert client.summarise("A short update.") == "note-1"</code>
+          <div class="wl-note">Act and assert in one line: short input should produce exactly the first (and only) note, unmerged.</div></div>
+        <div class="wl-line"><code>    assert len(fake.prompts) == 1</code>
+          <div class="wl-note">And the cost promise: short text means <em>one</em> API call, not three. This is executable documentation of a billing behaviour — the kind of fact you would otherwise only learn from an invoice.</div></div>
+        <div class="wl-line"><code>def test_empty_text_is_rejected():</code></div>
+        <div class="wl-line"><code>    with pytest.raises(ValueError):</code>
+          <div class="wl-note">A <a href="ch018-context-managers.html">context manager</a> that inverts success: the block passes only if a <code>ValueError</code> is raised inside it. Tests do not just document happy paths — they pin down how the code refuses.</div></div>
+        <div class="wl-line"><code>        DigestClient(transport=FakeTransport()).summarise("   ")</code></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Your default route for any unfamiliar package, worth writing on your wall: <strong>front door first, tests second, then inward.</strong> <code>__init__.py</code> says what it offers; the tests say what it promises and how it is meant to be called; only then read the core files, with config and helpers as reference. You will understand a repo in a quarter of the time of someone reading files alphabetically.</p></div>
+
+      <h2>Run the whole package — tests included</h2>
+      <p>Below is the entire <code>digest</code> package flattened into one script — the banner comments mark where each real file begins (relative imports are dropped since everything shares one file here). At the bottom, a five-line hand-rolled runner does what <code>pytest</code> does at full scale: find the <code>test_</code> functions, run them, count the damage. Press <strong>Run</strong> and watch the inspection log go green.</p>
+
+      <div class="pyrun" data-title="The digest package + its tests, live">
+<textarea class="py-src" spellcheck="false">
+# ==== the whole package in one script; banners = real files ====
+import os
+
+# ---- config.py: knobs from the environment -----------------
+os.environ.setdefault("DIGEST_MODEL", "small-fast-1")
+os.environ.setdefault("DIGEST_MAX_CHUNK", "40")   # small, to force chunking
+
+MODEL = os.getenv("DIGEST_MODEL", "small-fast-1")
+MAX_CHUNK = int(os.getenv("DIGEST_MAX_CHUNK", "1000"))
+
+# ---- tools.py: small pure helpers ---------------------------
+def clean(text):
+    """Collapse runs of whitespace into single spaces."""
+    return " ".join(text.split())
+
+def chunk(text, size):
+    """Split text into pieces of at most `size` characters."""
+    if size &lt; 1:
+        raise ValueError("size must be at least 1")
+    return [text[i:i + size] for i in range(0, len(text), size)]
+
+# ---- client.py: the main class ------------------------------
+class DigestClient:
+    """Summarise long text through a pluggable transport."""
+    def __init__(self, transport, model=None):
+        self.transport = transport
+        self.model = model or MODEL
+
+    def summarise(self, text):
+        text = clean(text)
+        if not text:
+            raise ValueError("nothing to summarise")
+        parts = chunk(text, MAX_CHUNK)
+        notes = [self.transport.complete(self.model, "Summarise: " + p)
+                 for p in parts]
+        if len(notes) == 1:
+            return notes[0]
+        return self.transport.complete(
+            self.model, "Merge these notes: " + " ".join(notes))
+
+# ---- tests/test_client.py: the promises ----------------------
+class FakeTransport:
+    """Scripted stand-in for the real LLM API. Free and instant."""
+    def __init__(self):
+        self.prompts = []
+    def complete(self, model, prompt):
+        self.prompts.append(prompt)
+        return "note-" + str(len(self.prompts))
+
+def test_clean_collapses_whitespace():
+    assert clean("  hello   world \n") == "hello world"
+
+def test_chunk_splits_by_size():
+    assert chunk("abcdef", 4) == ["abcd", "ef"]
+
+def test_short_text_is_one_api_call():
+    fake = FakeTransport()
+    client = DigestClient(transport=fake)
+    assert client.summarise("A short update.") == "note-1"
+    assert len(fake.prompts) == 1, "short text should cost ONE call"
+
+def test_long_text_chunks_then_merges():
+    fake = FakeTransport()
+    client = DigestClient(transport=fake)
+    result = client.summarise("word " * 30)       # 149 chars, chunk=40
+    assert len(fake.prompts) == 5                 # 4 chunks + 1 merge
+    assert result == "note-5"                     # the merge's reply
+
+def test_empty_text_is_rejected():
+    try:
+        DigestClient(transport=FakeTransport()).summarise("   ")
+        assert False, "expected a ValueError"
+    except ValueError:
+        pass
+
+# ---- a tiny test runner (pytest does this, plus much more) ---
+passed = failed = 0
+for name, fn in sorted(globals().items()):
+    if name.startswith("test_"):
+        try:
+            fn()
+            print("PASS", name)
+            passed += 1
+        except AssertionError as e:
+            print("FAIL", name, "-", e)
+            failed += 1
+print()
+print(passed, "passed,", failed, "failed",
+      "(model=" + MODEL + ", max_chunk=" + str(MAX_CHUNK) + ")")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now vandalise the restaurant and watch the inspector catch it. Change <code>clean</code> to join with <code>"-"</code> instead of a space and read which tests fail and what they say. Set <code>DIGEST_MAX_CHUNK</code> to <code>"400"</code> and see the long-text test fail because chunking never happened — then fix the test's expectation to match. Delete the <code>if not text</code> guard and watch the rejection test complain. Every red line teaches you exactly what that assert was protecting.</p></div>
+
+      <h2>Act II, clicking into place</h2>
+      <p>Pause and notice what you just read: the whole act in one building. Imports wired the five modules together. A class carried the core behaviour on <code>self</code>. Type hints declared the contracts. Environment variables fed the config, with the secret left default-free. A logger stood ready to narrate production, and a context manager pinned down an error case in the tests. None of it was decoration — every idea had a load-bearing job, and you knew each one before you turned to this page.</p>
+      <p>Flip these to lock in the vocabulary this chapter added on top:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">package</span><span class="flip-back">A folder of Python modules that Python treats as one unit, marked by an __init__.py file. The building, not the page.</span></button>
+        <button class="flip" type="button"><span class="flip-front">module</span><span class="flip-back">One .py file. Every file in the tour was a module; the package is the folder holding them together.</span></button>
+        <button class="flip" type="button"><span class="flip-front">public API</span><span class="flip-back">The names a package deliberately offers outsiders — re-exported in __init__.py, often listed in __all__. Everything else is private wiring.</span></button>
+        <button class="flip" type="button"><span class="flip-front">relative import</span><span class="flip-back">An import starting with a dot — "from this same package". The dot is a location: our own corridor, not a street address.</span></button>
+        <button class="flip" type="button"><span class="flip-front">dependency injection</span><span class="flip-back">Handing a class its dependencies (like a transport) from outside instead of letting it build them — which is what lets tests swap in a fake.</span></button>
+        <button class="flip" type="button"><span class="flip-front">assert</span><span class="flip-back">"This must be true, or crash with a complaint." In a test file, each assert is a promise about behaviour that is mechanically re-verified forever.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This five-file shape scales up but never really changes. Open any serious Python repo and you will find it: an <code>__init__.py</code> re-exporting the headline names (when you write <code>from langchain.agents import create_agent</code>, an <code>agents/</code> folder's front door re-exported that function for you), a <code>config.py</code> or <code>settings.py</code> reading environment variables, one or two core classes, a <code>utils.py</code> drawer, and a <code>tests/</code> tree mirroring the package. Seasoned reviewers read a merge request's changed tests first — the diff of the promises — before the implementation. And when a colleague says "that's not part of the public API, don't depend on it", they mean exactly the <code>__init__.py</code> / <code>__all__</code> boundary you toured today.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. You have just cloned an unfamiliar Python package. Which file do you open first, and why?</p>
+          <div class="q-opts">
+            <button data-opt="a">client.py — it holds the real logic</button>
+            <button data-opt="b">__init__.py — it lists what the package publicly offers</button>
+            <button data-opt="c">config.py — it holds all the settings</button>
+          </div>
+          <p class="q-explain">The front door is short and answers the highest-value question: what is this thing for, and which names does it want you to use? Logic and settings make far more sense once you know that. (Tests are the strong second stop.)</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. In client.py you read <code>from .tools import clean</code>. What does the leading dot mean?</p>
+          <div class="q-opts">
+            <button data-opt="a">Import from the parent folder above the package</button>
+            <button data-opt="b">Import from Python's standard library</button>
+            <button data-opt="c">Import from a module inside this same package</button>
+          </div>
+          <p class="q-explain">The dot is a relative location: "the tools module down our own corridor". It is how files inside one package refer to their siblings without caring where the package is installed.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why does <code>DigestClient</code> accept its transport as a constructor argument instead of creating the real API caller internally?</p>
+          <div class="q-opts">
+            <button data-opt="a">So tests can inject a scripted fake and verify behaviour without network or cost</button>
+            <button data-opt="b">Python classes are not allowed to create objects inside __init__</button>
+            <button data-opt="c">It makes the API calls run faster</button>
+          </div>
+          <p class="q-explain">Dependency injection: the caller hands in the dependency, so a test can hand in FakeTransport. That single design choice is why the whole suite runs free, offline, and deterministically — and it is the same fake-the-model trick agent test suites use everywhere.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. A test contains <code>assert len(fake.prompts) == 1, "short text should cost ONE call"</code>. What is this line really documenting?</p>
+          <div class="q-opts">
+            <button data-opt="a">That the fake transport works correctly</button>
+            <button data-opt="b">A living promise that short input triggers exactly one API call — re-verified on every change</button>
+            <button data-opt="c">That prompts must always be stored in a list</button>
+          </div>
+          <p class="q-explain">The assert pins down a cost behaviour of the client. Unlike a comment or a wiki page, it cannot silently drift: the moment someone makes short text cost two calls, this line fails and names the broken promise.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. In config.py, <code>MODEL</code> has a default value but <code>API_KEY</code> does not. Why the difference?</p>
+          <div class="q-opts">
+            <button data-opt="a">Strings are allowed defaults but keys are a special type</button>
+            <button data-opt="b">An oversight — every setting should have a default</button>
+            <button data-opt="c">A default model is a harmless convenience; a default secret baked into code would eventually be committed and leaked</button>
+          </div>
+          <p class="q-explain">Tunables get sensible defaults so the package works out of the box. Secrets must only ever arrive from the environment — the only safe default for a credential is "absent, and fail loudly".</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A package is a folder of modules with an <code>__init__.py</code> front door; the layout — public face, config, core class, helpers, tests — repeats across the entire Python ecosystem.</li>
+          <li>Read in this order: <code>__init__.py</code> for what it offers, tests for what it promises, then the core files — never alphabetically.</li>
+          <li>Relative imports (<code>from .tools import ...</code>) wire sibling modules together, and dependencies flow from complex files towards simple ones.</li>
+          <li>Config lives in one file, read from environment variables: tunables get defaults, secrets get none, and missing keys fail early and loudly.</li>
+          <li>Tests are executable documentation — each assert is a promise that cannot drift out of date, and test names read as a free specification.</li>
+          <li>Dependency injection (handing the transport in from outside) is what makes the package testable with a scripted fake — the same pattern used to test agents without paying for model calls.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

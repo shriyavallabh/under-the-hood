@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Merge requests, end to end — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch099">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>Merge requests, end to end</h1>
+        <p class="ch-tagline">The complete ritual, one screen at a time: open the merge request, gather your reviewers, work the threads, wait for green — and then press the most satisfying button in software.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 100 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A busy restaurant keeps one master cookbook. Every dish the kitchen serves comes from it, so nobody — not even the head chef — writes in it directly. When a line cook improves the dal recipe, she photocopies the page, makes her changes on the copy, and clips it to the front of the book with a note: <em>"Reduced the cream, added kasuri methi. Please taste before this goes official."</em></p>
+        <p>That evening the sous chef tastes it. He scribbles two notes in the margin — <em>"salt is high"</em>, <em>"try 20 minutes, not 25"</em>. She adjusts, he tastes again, and this time he initials the card. Only now is the new page pasted into the master book. Her photocopy goes in the bin; the book remains the single, trusted source of truth.</p>
+        <p>The clipped card — the copy, the note, the margin conversation, the initials, the pasting-in, the bin — is a <strong>merge request</strong>. This chapter walks the whole ritual, screen by screen, exactly the way you will live it in a working team.</p>
+      </section>
+
+      <h2>One object, two jobs</h2>
+      <p>Quick refresher from <a href="ch021-just-enough-git.html">the Git chapter</a>: you never work on <code>main</code> directly. You make a <em>branch</em> — a private copy of the project's timeline — commit your work there, and <code>git push</code> it to the server. Your branch now exists on GitLab, but it is still a photocopy clipped to nothing. The team's <code>main</code> has not changed at all.</p>
+      <p>A <dfn>merge request</dfn> (MR) is the formal ask that closes that gap: "please merge my branch into <code>main</code>". But it is really two things stapled together. First, it is a <em>diff</em> — the precise set of line-by-line changes between your branch and the target. Second, it is a <em>conversation wrapped around that diff</em>: comments pinned to specific lines, approvals, a pipeline verdict, and finally a merge. GitHub calls the same object a <em>pull request</em>; the ritual is identical, only the labels differ.</p>
+      <p>Hold on to that framing. Everything on the MR screen — every button, badge, and checkbox — serves either the diff or the conversation.</p>
+
+      <h2>Screen one: the push that starts everything</h2>
+      <p>The ritual begins in your terminal, and GitLab meets you there. The moment you push a new branch, the server prints a gift into your push output:</p>
+
+      <div class="code-title">terminal — pushing a new branch</div>
+      <pre><code class="language-bash">$ git push -u origin eval/tone-check
+Enumerating objects: 11, done.
+Writing objects: 100% (7/7), 1.42 KiB | 1.42 MiB/s, done.
+remote:
+remote: To create a merge request for eval/tone-check, visit:
+remote:   https://gitlab.example.com/ml-platform/nightly-evals/-/merge_requests/new?merge_request%5Bsource_branch%5D=eval%2Ftone-check
+remote:
+To gitlab.example.com:ml-platform/nightly-evals.git
+ * [new branch]      eval/tone-check -&gt; eval/tone-check</code></pre>
+
+      <p>Those <code>remote:</code> lines are GitLab talking back through Git. Cmd-click the link and you land directly on the <strong>New merge request</strong> form with your branch pre-selected. (If you missed it, no harm: GitLab also shows a "Create merge request" banner on the project page for recently pushed branches, and there is always the Merge requests section in the left sidebar you met in the previous chapter's tour.)</p>
+      <p>Now step through the form itself, field by field:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Source and target">
+          <h3>1. Where from, where to</h3>
+          <div class="diagram">
+            <div class="d-box hot">Source branch<small>eval/tone-check — your work</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Target branch<small>main — where it wants to live</small></div>
+          </div>
+          <p class="step-cap">The top of the form states the whole transaction: merge the <em>source branch</em> (yours) into the <em>target branch</em> (usually <code>main</code>). GitLab pre-fills both from your push link. Glance anyway — targeting the wrong branch is a classic Monday mistake, and everything downstream (the diff, the pipeline) depends on this pair.</p>
+        </div>
+        <div class="step" data-title="Title">
+          <h3>2. The title — and the Draft: switch</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">Title<small>Draft: Add tone evaluator to the nightly suite</small></div>
+              <div class="d-box dim">Description</div>
+              <div class="d-box dim">Reviewer &#183; Assignee</div>
+            </div>
+          </div>
+          <p class="step-cap">Write the title like a commit subject: short, imperative, specific — "Add tone evaluator to the nightly suite", not "eval changes v2 final". Starting the title with <code>Draft:</code> flags the MR as a work in progress: everyone can look, CI still runs, but the Merge button is locked until you remove the prefix (there is a one-click "Mark as ready" for that later).</p>
+        </div>
+        <div class="step" data-title="Description">
+          <h3>3. The description — pick a template</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Title</div>
+              <div class="d-box hot">Description<small>Choose a template: default &#8595;</small></div>
+              <div class="d-box dim">Reviewer &#183; Assignee</div>
+            </div>
+          </div>
+          <p class="step-cap">Most teams keep <dfn>description templates</dfn> — pre-written outlines stored in the repo under <code>.gitlab/merge_request_templates/</code> — and the form offers them in a dropdown. Pick one and fill in the blanks. A good description is a courtesy to the reviewer: what changed, why, and how to check it. We will dissect one in a moment.</p>
+        </div>
+        <div class="step" data-title="People">
+          <h3>4. Reviewer and assignee — two different jobs</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Title &#183; Description</div>
+              <div class="d-box hot">Reviewer<small>the senior teammate you agreed with</small></div>
+              <div class="d-box hot">Assignee<small>you — you own landing this</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The <dfn>reviewer</dfn> is the person you are asking to read the diff — they get a to-do item and their approval is what you are waiting for. The <dfn>assignee</dfn> is whoever is responsible for driving the MR to completion — almost always you, the author. Assigning the MR to your reviewer is a common beginner slip; it quietly tells GitLab <em>they</em> own finishing your work.</p>
+        </div>
+        <div class="step" data-title="Create">
+          <h3>5. Create merge request</h3>
+          <div class="diagram">
+            <div class="d-box good">Create merge request<small>your MR gets a number: !214</small></div>
+          </div>
+          <p class="step-cap">Press the button and the MR is born with a number like <code>!214</code> (the exclamation mark means "merge request", the way <code>#87</code> means "issue"). From here on, the MR page is home: the conversation on the Overview tab, the diff on the Changes tab, and the pipeline verdict pinned to the merge widget.</p>
+        </div>
+      </div>
+
+      <h2>The description, dissected</h2>
+      <p>Here is a filled-in description for our example MR — adding a tone evaluator to a nightly <a href="ch104-agent-evals.html">eval suite</a>, the kind of change you will genuinely ship alongside data scientists. Click the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">Description of !214 — following .gitlab/merge_request_templates/default.md</div>
+        <div class="wl-line"><code>## What this MR does</code>
+          <div class="wl-note">The headline section. One or two sentences, plain language. Busy reviewers read this and decide how much attention the diff deserves — earn that attention honestly.</div></div>
+        <div class="wl-line"><code>Adds a tone evaluator to the nightly suite so brand-voice</code></div>
+        <div class="wl-line"><code>regressions fail the pipeline instead of reaching users.</code></div>
+        <div class="wl-line"><code>## Why</code>
+          <div class="wl-note">The motivation, with a link. A reviewer should never have to ask "why does this exist?" — that question in a thread means your description failed.</div></div>
+        <div class="wl-line"><code>Closes #87 (tone drift flagged after the March incident).</code>
+          <div class="wl-note"><code>Closes #87</code> is magic text: when this MR merges, GitLab automatically closes issue 87 and links the two forever. Traceability for free.</div></div>
+        <div class="wl-line"><code>## How to review</code>
+          <div class="wl-note">The kindest section you can write. Tell the reviewer where to start and what is boring: it shrinks their job from "read everything suspiciously" to "check the one interesting decision".</div></div>
+        <div class="wl-line"><code>Start with scorer.py — everything else is wiring.</code></div>
+        <div class="wl-line"><code>## Evidence</code>
+          <div class="wl-note">Proof it works: eval numbers, a screenshot, a log excerpt. For data-science MRs this section carries the most weight — reviewers trust measurements over adjectives.</div></div>
+        <div class="wl-line"><code>Nightly run on this branch: 96.4% pass (main: 96.1%).</code></div>
+        <div class="wl-line"><code>## Checklist</code>
+          <div class="wl-note">Markdown checkboxes render as real, clickable boxes on the MR page. Teams use them as a lightweight pre-flight ritual — tick them truthfully.</div></div>
+        <div class="wl-line"><code>- [x] Tests added and green locally</code></div>
+        <div class="wl-line"><code>- [x] No secrets or client names in the diff</code>
+          <div class="wl-note">Worth its own box on every template. A merge request is often visible to the whole company — and diffs live forever in history.</div></div>
+      </div>
+
+      <h2>Asking for review like a colleague, not a supplicant</h2>
+      <p>Setting the Reviewer field creates a to-do, but a to-do is not a conversation. In healthy teams you follow it with a short, human message — and there is a craft to writing one that gets picked up fast:</p>
+
+      <div class="code-title">a review request that gets picked up fast</div>
+      <pre><code class="language-markup">Hi Priya — when you have ~20 minutes today or tomorrow, could you
+review !214? It adds the tone evaluator to the nightly suite.
+
+The only interesting file is scorer.py; the rest is wiring.
+No rush before Thursday's release cut. Happy to walk you through
+it on a quick call if that's faster for you.</code></pre>
+
+      <p>Notice the five moving parts: what it is, an honest size estimate, where to focus, a real (not fake-urgent) deadline, and an easy out. What you never do: ping every senior person hoping someone bites, mark a half-finished MR as ready to "get in the queue", or chase after two hours. If a review has not happened in a day or so, one polite nudge — mentioning the deadline, not their slowness — is fair game.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Small MRs get reviewed fast; big ones rot. A 150-line MR often lands the same day. A 1,500-line MR sits for a week and then gets a shallow "looks fine". If your change is growing, split it — reviewers reward you with speed and depth.</p></div>
+
+      <h2>The conversation: threads, suggestions, resolution</h2>
+      <p>Now the reviewer opens the Changes tab and reads your diff. When something needs discussing, they do not email you — they start a <dfn>thread</dfn>: a comment pinned to a specific line of the diff, carrying an <em>unresolved / resolved</em> state. Threads are the actual review. Here is one, played out to the end:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Thread opens">
+          <h3>1. A thread appears on line 42</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Diff, scorer.py line 42<small>threshold = 0.7</small></div>
+              <div class="d-box hot">Reviewer thread — Unresolved<small>"Where does 0.7 come from? Our ad-hoc runs used 0.75."</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The comment is anchored to the exact line, so the discussion stays next to the evidence. The MR now shows "1 unresolved thread" — and most projects are configured to block merging while any thread is unresolved.</p>
+        </div>
+        <div class="step" data-title="Suggestion">
+          <h3>2. The reviewer attaches a suggestion</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">Suggested change<small>- threshold = 0.7&#8195;&#8594;&#8195;+ threshold = 0.75</small></div>
+              <div class="d-box">Apply suggestion<small>a button, right there in the thread</small></div>
+            </div>
+          </div>
+          <p class="step-cap">For small fixes, reviewers can go beyond commentary: a <dfn>suggestion</dfn> is a proposed edit rendered inline as a mini-diff, with an <em>Apply suggestion</em> button attached. It saves the "please change X to Y" round-trip entirely.</p>
+        </div>
+        <div class="step" data-title="You respond">
+          <h3>3. You reply — and apply</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Your reply<small>"Good catch — 0.75 matches the calibration run. Applying."</small></div>
+              <div class="d-box hot">Apply suggestion<small>GitLab creates a real commit on eval/tone-check for you</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Clicking Apply is not cosmetic: GitLab commits the change to your source branch on your behalf, and the MR updates instantly. For bigger fixes you edit locally and <code>git push</code> to the same branch — every new push flows into the open MR automatically. No new MR, ever, for the same piece of work.</p>
+        </div>
+        <div class="step" data-title="Resolve">
+          <h3>4. Resolve the thread</h3>
+          <div class="diagram">
+            <div class="d-box good">Thread resolved<small>0 unresolved threads remain</small></div>
+          </div>
+          <p class="step-cap">Once the fix is in, someone clicks <em>Resolve thread</em>. Etiquette varies by team: some say the author resolves after fixing, others reserve it for whoever opened the thread. The safe universal rule — never resolve a thread you have neither fixed nor answered. Resolving to make a question disappear is the fastest way to lose a reviewer's trust.</p>
+        </div>
+        <div class="step" data-title="Approve">
+          <h3>5. The approval lands</h3>
+          <div class="diagram">
+            <div class="d-box good">Approved<small>1 of 1 approvals — Priya pressed Approve</small></div>
+          </div>
+          <p class="step-cap">Satisfied, the reviewer presses <strong>Approve</strong>. An <dfn>approval</dfn> is a formal, recorded thumbs-up; projects can require one, two, or role-specific approvals (say, one from the code owners of <code>evals/</code>) before the Merge button unlocks. Note the new commits from step 3 also re-triggered the pipeline — which brings us to the last gate.</p>
+        </div>
+      </div>
+
+      <h2>Taking feedback without ego</h2>
+      <p>A page of red comments on your first real MR stings. Every engineer remembers that feeling — and the good ones learned the same few moves. First, read the <em>whole</em> review before replying to any single thread; comments often connect, and answering one in isolation makes you defend a position the reviewer already softened three comments later. Second, thank precisely: "good catch — that would have broken the Friday run" costs nothing and tells the reviewer their effort landed. Third, sort every comment into <em>defect</em> or <em>preference</em>. Defects you fix, gratefully. Preferences ("I'd name this <code>score_tone</code>") you concede cheaply — the karma is worth more than the name.</p>
+      <p>And when you genuinely disagree? Push back once, in the thread, with evidence: a measurement, a doc link, a failing case. If one written round does not settle it, take it to a fifteen-minute call and post the conclusion back to the thread for the record. What never works: relitigating across nine replies, quietly ignoring the comment, or treating the review as a verdict on you. The review is about the diff. You are not the diff — you are the person who gets better because someone read your work carefully, for free.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The asymmetry to remember: reviewers are spending their focus on your work. Respond to every thread — even just "done" or "agreed, follow-up in #91" — so nothing dangles. A trail of unanswered threads reads as carelessness, and carelessness is the one reputation that follows you between projects.</p></div>
+
+      <h2>The merge widget: green, squash, merge</h2>
+      <p>At the bottom of every MR sits the <dfn>merge widget</dfn> — the box that aggregates every gate into one verdict. It watches four things: the Draft flag, the pipeline, unresolved threads, and approvals. Watch it change state:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Pipeline running">
+          <h3>1. Pipeline running — merge blocked</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">Pipeline: running<small>tests &#183; lint &#183; nightly evals — for your latest commit</small></div>
+              <div class="d-box dim">Merge<small>blocked: pipeline must succeed</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Every push triggers the project's CI pipeline — the automated <a href="ch103-pytest.html">test</a> and check suite you will meet in depth two chapters from now. Well-run projects enable "pipelines must succeed", so the Merge button stays dead while CI is running or red. The machine gets a vote, and its vote cannot be charmed.</p>
+        </div>
+        <div class="step" data-title="Pipeline failed">
+          <h3>2. Red pipeline — fix and push, that is all</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">Pipeline: failed<small>test_scorer.py — 1 failure</small></div>
+              <div class="d-box dim">Merge<small>still blocked</small></div>
+            </div>
+          </div>
+          <p class="step-cap">A red pipeline is not a crisis and needs no new MR. Click into the failed job, read the log, fix locally, push to the same branch. The MR picks up the commit, the pipeline re-runs, the widget re-evaluates. This loop — push, watch, fix — is half of professional life.</p>
+        </div>
+        <div class="step" data-title="All green">
+          <h3>3. Everything green — decisions before the button</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box good">Pipeline passed &#183; Approvals 1/1 &#183; Threads 0 unresolved</div>
+              <div class="d-box hot">[x] Delete source branch&#8195;&#8195;[x] Squash commits</div>
+              <div class="d-box">Merge</div>
+            </div>
+          </div>
+          <p class="step-cap">Two checkboxes sit above the newly alive Merge button. <em>Delete source branch</em>: bin the photocopy after pasting — the commits will live on <code>main</code>, so nothing is lost. <em>Squash commits</em>: fold your branch's seven messy commits ("wip", "fix typo", "actually fix") into one clean, well-messaged commit on <code>main</code>. Many teams default both to on.</p>
+        </div>
+        <div class="step" data-title="Merged">
+          <h3>4. Press it</h3>
+          <div class="diagram">
+            <div class="d-box good">Merged<small>one squash commit on main &#183; eval/tone-check deleted &#183; issue #87 closed</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">main<small>now contains the tone evaluator</small></div>
+          </div>
+          <p class="step-cap">The MR flips to <strong>Merged</strong> — a permanent record anyone can revisit years later to see what changed, why, who approved, and what the pipeline said. Your branch is gone, <code>main</code> moved forward, and <code>Closes #87</code> quietly did its job. Locally, run <code>git checkout main &amp;&amp; git pull</code> and start the next branch fresh.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>If the pipeline is still running but everything else is settled, you do not have to babysit it: <strong>Set to auto-merge</strong> tells GitLab to merge automatically the moment the pipeline passes — and to stand down if it fails. Ending the day by setting three MRs to auto-merge is a small, real pleasure.</p></div>
+
+      <h2>The vocabulary, one flip at a time</h2>
+      <p>Eight terms carry the whole ritual. Flip until each back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">merge request</span><span class="flip-back">A request to merge one branch into another, wrapped in a conversation: diff + threads + approvals + pipeline verdict. GitHub calls it a pull request.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Draft:</span><span class="flip-back">Title prefix meaning "not ready". Review and CI still work; the Merge button is locked until you press Mark as ready.</span></button>
+        <button class="flip" type="button"><span class="flip-front">reviewer</span><span class="flip-back">The person you ask to read the diff. Gets a to-do, leaves threads, and presses Approve when satisfied.</span></button>
+        <button class="flip" type="button"><span class="flip-front">assignee</span><span class="flip-back">The person responsible for driving the MR to completion — almost always the author. Not the same job as reviewer.</span></button>
+        <button class="flip" type="button"><span class="flip-front">thread</span><span class="flip-back">A comment pinned to a diff line, with an unresolved/resolved state. Projects commonly block merging while any thread is unresolved.</span></button>
+        <button class="flip" type="button"><span class="flip-front">suggestion</span><span class="flip-back">A reviewer's proposed edit shown as an inline mini-diff. Apply suggestion turns it into a real commit on the source branch.</span></button>
+        <button class="flip" type="button"><span class="flip-front">approval</span><span class="flip-back">A formal, recorded thumbs-up on the MR. Projects can require one or more — sometimes from specific code owners — before merge unlocks.</span></button>
+        <button class="flip" type="button"><span class="flip-front">squash</span><span class="flip-back">A merge option that folds all the branch's commits into a single clean commit on the target branch. Messy drafts stay out of main's history.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>On a data-science team, the MR page is where models actually ship: you will see MRs titled "Bump reranker to v3", with eval tables pasted as evidence and a thread war over one threshold. In chat you will hear the dialect — "can someone look at !214?", "LGTM" (looks good to me), "nit:" prefixing a take-it-or-leave-it preference, "resolve when done". And increasingly, the author of the MR is not human: coding agents push branches and open merge requests too, which makes this ritual — review threads, required approvals, a pipeline that cannot be charmed — the safety layer that lets teams accept an agent's work with the same scrutiny as anyone else's. The ritual is the point.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. You want a senior data scientist to review your MR. Which field do you set — and where do you put yourself?</p>
+          <div class="q-opts">
+            <button data-opt="a">Make them the assignee; leave reviewer empty</button>
+            <button data-opt="b">Make them both reviewer and assignee, to be safe</button>
+            <button data-opt="c">Make them the reviewer; keep yourself as assignee</button>
+          </div>
+          <p class="q-explain">Reviewer = "please read this"; assignee = "responsible for landing it". You own landing your own MR, so you stay assignee. Assigning it to the reviewer quietly hands them your job.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Your MR title starts with <code>Draft:</code>. What does that actually change?</p>
+          <div class="q-opts">
+            <button data-opt="a">CI is skipped until the draft flag is removed</button>
+            <button data-opt="b">People can review and CI runs, but merging is blocked until Mark as ready</button>
+            <button data-opt="c">The MR is hidden from everyone except the reviewer</button>
+          </div>
+          <p class="q-explain">Draft is a merge lock plus a social signal, nothing more. The pipeline still runs and early feedback is welcome — it just cannot land on main by accident while you are still cooking.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. The merge widget says "Merge blocked: pipeline must succeed" and the pipeline is red. What is the professional move?</p>
+          <div class="q-opts">
+            <button data-opt="a">Read the failed job's log, fix locally, push to the same branch — the MR updates itself</button>
+            <button data-opt="b">Close this MR and open a fresh one from a new branch</button>
+            <button data-opt="c">Ask someone with admin rights to merge it anyway; the tests are probably flaky</button>
+          </div>
+          <p class="q-explain">An open MR tracks its source branch: every push flows in and re-runs the pipeline. New MRs for the same work just scatter the conversation — and overriding red pipelines is how Friday incidents are born.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. The reviewer left a suggestion and you click "Apply suggestion". What happens?</p>
+          <div class="q-opts">
+            <button data-opt="a">The diff display updates, but you still have to make the change yourself locally</button>
+            <button data-opt="b">The MR merges immediately with that change included</button>
+            <button data-opt="c">GitLab creates a real commit with that change on your source branch</button>
+          </div>
+          <p class="q-explain">Apply is a genuine write: the suggested edit becomes a commit on the branch, the MR updates, and the pipeline re-runs. Remember to <code>git pull</code> before your next local edit, or your branch will be one commit behind itself.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. You tick "Squash commits" and "Delete source branch", then merge. What does main's history show — and did deleting the branch lose anything?</p>
+          <div class="q-opts">
+            <button data-opt="a">All seven of your branch commits, and the deleted branch's work is gone with it</button>
+            <button data-opt="b">One clean commit for the whole MR; nothing is lost, because the work now lives on main</button>
+            <button data-opt="c">One commit, but the code changes only apply after the branch is recreated</button>
+          </div>
+          <p class="q-explain">Squash folds "wip", "fix typo", and friends into a single well-messaged commit on the target branch. The source branch was only the photocopy — once the page is pasted into the master book, the copy can safely go in the bin.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A merge request is two things stapled together: a diff (source branch into target branch) and a conversation around it (threads, approvals, pipeline). GitHub's pull request is the same ritual with different labels.</li>
+          <li>The ritual starts in your terminal — the push output hands you the create-MR link. Title like a commit subject, prefix <code>Draft:</code> while cooking, and fill the team's description template honestly, including "how to review".</li>
+          <li>Reviewer and assignee are different jobs: the reviewer reads and approves; the assignee (you) is responsible for landing it.</li>
+          <li>Threads are the real review. Reply to every one, apply or push fixes to the same branch, and never resolve a thread you have neither fixed nor answered.</li>
+          <li>The Merge button unlocks only when every gate agrees: not a draft, pipeline green, threads resolved, approvals in. Squash keeps main's history clean; deleting the source branch loses nothing.</li>
+          <li>Ask for review with size, focus, and a real deadline; take feedback as data about the diff, not a verdict on you. Fix defects gratefully, concede preferences cheaply, push back once — with evidence.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

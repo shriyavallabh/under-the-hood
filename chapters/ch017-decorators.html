@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decorators: what the @ really does — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch017">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act II · The Engineering Layer</div>
+        <h1>Decorators: what the @ really does</h1>
+        <p class="ch-tagline">The most common line in agent code is not a spell — it is a rename. Once you see the @ as ordinary function-passing, <code>@tool</code>, <code>@dataclass</code>, and <code>@app.route</code> stop being incantations and start being furniture.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 17 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Meera cooks the best dal in the neighbourhood. That is all she does — she cooks. One day a tiffin delivery service signs her up. From then on, every dish she makes gets collected, sealed in an insulated box, labelled, tracked, and delivered warm. Customers never meet Meera; they meet the box. Open it, and her dal is inside, completely untouched. The service did not change her cooking — it wrapped her cooking in extra behaviour.</p>
+        <p>Notice the details, because every one of them is about to become Python. Meera signed the contract <em>once</em>, not per meal. The box carries <em>her</em> name on the label — if it said "packed by TiffinCo" on every box in the city, customers could never tell whose food they were eating. And when she upgraded to the "deliver hot by 1 pm" plan, she first chose the plan, and <em>then</em> the configured service started wrapping her dishes.</p>
+        <p>A <strong>decorator</strong> is the tiffin service: it takes a function, returns a wrapped version, and from then on everyone deals with the wrapper. The <strong>@</strong> is the signature on the contract.</p>
+      </section>
+
+      <h2>Functions are things you can hold</h2>
+      <p>Before the wrapping makes sense, one fact has to feel completely normal: in Python, a function is a value — the same kind of citizen as a number, a string, or a list. Back in <a href="ch002-names-and-objects.html">names and objects</a> you saw that a name is just a label tied to an object. A <code>def</code> statement does two things: it builds a function <em>object</em>, and it ties a name to it. Which means you can untie that name, tie on another one, drop the function into a <a href="ch004-collections.html">dict</a>, or hand it to another function as an argument — brackets are the call; the bare name is the thing itself, as you first saw in <a href="ch007-functions.html">the functions chapter</a>.</p>
+      <p>Run this and change it until it is boring:</p>
+
+      <div class="pyrun" data-title="Functions are values — pass them around">
+<textarea class="py-src" spellcheck="false">
+def greet(name):
+    """Say a warm hello."""
+    return f"Namaste, {name}"
+
+def shout(name):
+    """Say it loudly."""
+    return f"{name.upper()}!"
+
+# 1. Assign a function to a new name. No brackets = no call.
+say_hello = greet
+print(say_hello("Asha"))
+
+# 2. Store functions in a dict, like any other value.
+styles = {"warm": greet, "loud": shout}
+print(styles["loud"]("Ravi"))
+
+# 3. Pass a function INTO a function.
+def apply_twice(fn, value):
+    return fn(fn(value))
+
+print(apply_twice(shout, "chalo"))
+
+# 4. Every function knows its own name and docstring.
+print(greet.__name__, "--", greet.__doc__)
+</textarea>
+      </div>
+
+      <p>Item 3 is the quiet superstar. If a function can be passed <em>in</em>, a function can also be handed <em>back</em>. A decorator is nothing more than a function that does both: function in, function out. And item 4 — the fact that a function carries its own <code>__name__</code> and docstring around — will matter enormously in a few minutes, when a framework starts reading those labels to build a schema.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>You have already relied on this professionally. An agent's toolbox is literally a dict of functions — in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> you will build one called <code>TOOLS</code> and watch a loop look tools up by name. Functions-as-values is not a party trick; it is how every plugin system, router, and tool registry works.</p></div>
+
+      <h2>Closures, gently: a function that remembers where it was born</h2>
+      <p>One more ingredient. Define a function <em>inside</em> another function, and the inner one can use the outer one's variables — and, here is the strange and wonderful part, it keeps using them even after the outer function has finished and gone home. That memory is called a <dfn>closure</dfn> — a function bundled together with the variables from the place it was created.</p>
+
+      <div class="code-title">closures.py</div>
+      <pre><code class="language-python">def make_greeter(greeting):
+    def greet(name):
+        # 'greeting' is not defined in here, and it is not global.
+        # greet REMEMBERS it from the call that created it.
+        return f"{greeting}, {name}!"
+    return greet
+
+good_morning = make_greeter("Suprabhat")
+formal = make_greeter("Dear")
+
+print(good_morning("Asha"))   # Suprabhat, Asha!
+print(formal("Ms Rao"))       # Dear, Ms Rao!</code></pre>
+
+      <p>Two calls to <code>make_greeter</code>, two separate greeting functions, each carrying its own private <code>greeting</code> in an invisible backpack. Nobody outside can touch that variable; the function alone remembers it. In the tiffin story, this is the packing slip taped inside the box — the wrapper knows which cook's dish it is carrying, without any global noticeboard announcing it.</p>
+      <p>That backpack is exactly where a decorator will keep your original function.</p>
+
+      <h2>The wrapper: same dish, new box</h2>
+      <p>Now combine the two ideas. Here is a function that takes a function and hands back a wrapped version — the tiffin service itself, in seven lines:</p>
+
+      <div class="code-title">logged.py — a hand-made decorator (no @ yet)</div>
+      <pre><code class="language-python">def logged(fn):
+    def wrapper(*args, **kwargs):
+        print(f"calling {fn.__name__} with {args}")
+        result = fn(*args, **kwargs)
+        print(f"{fn.__name__} returned {result!r}")
+        return result
+    return wrapper
+
+def fetch_rate(currency):
+    return 83.2   # pretend this hits a real API
+
+fetch_rate = logged(fetch_rate)   # the entire trick, right here
+fetch_rate("USD")</code></pre>
+
+      <p>Read the last two lines slowly, because they are the whole chapter. <code>logged(fetch_rate)</code> is called <em>once</em>. Inside, a new function called <code>wrapper</code> is born, holding the original <code>fetch_rate</code> in its closure backpack. Then — and this is the sleight of hand — the <em>name</em> <code>fetch_rate</code> is re-tied to point at <code>wrapper</code>. The original function still exists, but the only path to it now runs through the wrapper. Every future call to <code>fetch_rate("USD")</code> actually enters <code>wrapper</code>, which logs, calls the real function, logs again, and passes the result back out.</p>
+      <p>The <code>*args, **kwargs</code> pair is the wrapper saying "I will accept whatever arguments arrive and forward them unchanged" — the pass-through plumbing you met in <a href="ch007-functions.html">the functions chapter</a>. It is what lets one <code>logged</code> wrap a function of any shape.</p>
+
+      <h2>The @ is only sugar</h2>
+      <p>Writing <code>fetch_rate = logged(fetch_rate)</code> works, but it is easy to forget and it repeats the name three times. So Python gives you a shorthand. These two are <em>identical</em> — not similar, identical:</p>
+
+      <div class="code-title">The equivalence — memorise this one</div>
+      <pre><code class="language-python">@logged
+def fetch_rate(currency):
+    return 83.2
+
+# ...means exactly, character for character...
+
+def fetch_rate(currency):
+    return 83.2
+fetch_rate = logged(fetch_rate)</code></pre>
+
+      <p>That is the entire meaning of the @ symbol: <em>"as soon as this function is defined, pass it through the function named above, and re-tie my name to whatever comes back."</em> A <dfn>decorator</dfn> — the thing after the @ — is just a callable that takes a function and returns its replacement. Watch Python actually do it, step by step:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="def runs">
+          <h3>1. Python reaches the def</h3>
+          <div class="diagram">
+            <div class="d-box hot">def fetch_rate<small>source code being read</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">function object<small>freshly built in memory</small></div>
+            <div class="d-box dim">name: fetch_rate<small>not tied yet</small></div>
+          </div>
+          <p class="step-cap">A function object is created. Normally Python would now tie the name <code>fetch_rate</code> to it — but something is pinned above the def.</p>
+        </div>
+        <div class="step" data-title="@ intercepts">
+          <h3>2. The @ intercepts the hand-off</h3>
+          <div class="diagram">
+            <div class="d-box">function object</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">logged(...)<small>called once, right now</small></div>
+            <div class="d-box dim">name: fetch_rate<small>still waiting</small></div>
+          </div>
+          <p class="step-cap">Because of <code>@logged</code>, the brand-new function is passed straight into <code>logged</code> before any name is tied. This happens at definition time — usually the moment the module is <a href="ch011-imports-and-modules.html">imported</a> — not when you later call the function.</p>
+        </div>
+        <div class="step" data-title="wrapper is born">
+          <h3>3. A wrapper is born, original in its backpack</h3>
+          <div class="diagram">
+            <div class="d-box hot">wrapper<small>new function</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">closure<small>holds the original fetch_rate</small></div>
+          </div>
+          <p class="step-cap">Inside <code>logged</code>, the inner <code>wrapper</code> is created. Through its closure it remembers the original function — the packing slip taped inside the box.</p>
+        </div>
+        <div class="step" data-title="name rebound">
+          <h3>4. The name is tied to the wrapper</h3>
+          <div class="diagram">
+            <div class="d-box good">name: fetch_rate</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">wrapper</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">original function<small>reachable only via the closure</small></div>
+          </div>
+          <p class="step-cap"><code>logged</code> returns <code>wrapper</code>, and Python ties the name <code>fetch_rate</code> to it. The decoration is now complete — and it ran exactly once.</p>
+        </div>
+        <div class="step" data-title="every call">
+          <h3>5. From now on, every call enters the wrapper</h3>
+          <div class="diagram">
+            <div class="d-box">caller<small>fetch_rate("USD")</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">wrapper<small>log, call original, log</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">original<small>returns 83.2</small></div>
+          </div>
+          <p class="step-cap">Callers think they are calling <code>fetch_rate</code>; they are calling the wrapper, which adds its behaviour around the original. Decoration once, wrapping on every call.</p>
+        </div>
+      </div>
+
+      <h2>The name-tag problem, and functools.wraps</h2>
+      <p>There is one flaw in our hand-made service. Ask the wrapped function who it is:</p>
+
+      <div class="code-title">Whose dal is this?</div>
+      <pre><code class="language-python">print(fetch_rate.__name__)   # 'wrapper'  -- Meera's name is gone!
+print(fetch_rate.__doc__)    # None       -- and so is her docstring</code></pre>
+
+      <p>Every function we wrap now claims to be called <code>wrapper</code>. Every box in the city says "packed by TiffinCo". This is not cosmetic: tracebacks in your logs will point at <code>wrapper</code> instead of the real function, debuggers get vaguer, and — crucially for your world — frameworks that <em>read</em> a function's name and docstring to build something will read the wrong ones.</p>
+      <p>The standard library fix is <dfn>functools.wraps</dfn> — a helper that copies the original function's identity (its <code>__name__</code>, docstring, module, and friends) onto the wrapper, and leaves a pointer back to the original in <code>__wrapped__</code>. It is, delightfully, itself a decorator — one that you put on the wrapper:</p>
+
+      <div class="code-title">The professional version</div>
+      <pre><code class="language-python">import functools
+
+def logged(fn):
+    @functools.wraps(fn)          # copy fn's name-tag onto wrapper
+    def wrapper(*args, **kwargs):
+        print(f"calling {fn.__name__}")
+        return fn(*args, **kwargs)
+    return wrapper</code></pre>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Treat <code>@functools.wraps(fn)</code> as a non-negotiable part of the wrapper pattern — write it on muscle memory, the way you write a closing bracket. Nearly every "why does my tool show up with the wrong name" mystery in agent code traces back to a wrapper that forgot it.</p></div>
+
+      <h2>Build one: the timing decorator</h2>
+      <p>Time to cook. Operations people reach for timing before anything else — "which call is slow?" is the first question in every incident. Here is a complete timing decorator; run it, then break it using the suggestions below:</p>
+
+      <div class="pyrun" data-title="Write and run a timing decorator">
+<textarea class="py-src" spellcheck="false">
+import time
+import functools
+
+def timed(fn):
+    """Take a function, return a stopwatch-wearing version."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = fn(*args, **kwargs)
+        ms = (time.perf_counter() - start) * 1000
+        print(f"[timed] {fn.__name__} took {ms:.2f} ms")
+        return result
+    return wrapper
+
+@timed
+def add_up(n):
+    """Sum the numbers from 1 to n."""
+    total = 0
+    for i in range(1, n + 1):
+        total += i
+    return total
+
+@timed
+def fake_llm(prompt):
+    """A pretend model call: thinks briefly, then answers."""
+    time.sleep(0.2)   # a real API call would wait here too
+    return "The @ is sugar for fn = timed(fn)."
+
+print("sum:", add_up(200_000))
+print("model says:", fake_llm("What does @ really do?"))
+print()
+print("identity check:", add_up.__name__, "|", add_up.__doc__)
+
+# Try me:
+# 1. Delete the @functools.wraps(fn) line and re-run --
+#    watch the identity check turn into 'wrapper'.
+# 2. Add a call counter: create calls = {"n": 0} inside timed,
+#    bump it in wrapper, and print it.
+# 3. Stack decorators: write a shout(fn) decorator that
+#    upper-cases string results, and put @shout above @timed
+#    on fake_llm. Which one wraps which?
+</textarea>
+      </div>
+
+      <p>Notice what you just did: you added a stopwatch to two completely different functions without editing a single line inside either of them. That is the entire economic argument for decorators — cross-cutting behaviour (timing, logging, retrying, caching, authentication) written once and pinned onto anything, instead of copy-pasted into everything.</p>
+
+      <h2>Decorators with arguments: choose the plan first</h2>
+      <p>You will constantly meet decorators wearing brackets: <code>@retry(times=3)</code>, <code>@app.route("/health")</code>, <code>@mcp.tool()</code>. The brackets change the order of events, and it is worth getting this crisp because it explains a lot of otherwise-baffling syntax. Bare <code>@logged</code> hands your function to <code>logged</code>. But <code>@retry(times=3)</code> is two steps: <em>first</em> Python calls <code>retry(times=3)</code> — which must <em>return a decorator</em> — and <em>then</em> that returned decorator receives your function. Meera choosing the "deliver hot by 1 pm" plan: configure the service first, then the configured service wraps the dish.</p>
+      <p>So a decorator-with-arguments is a function that makes decorators — three nested layers, each one remembering things for the layer below via a closure. Click through the lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">retry.py — a decorator that takes arguments</div>
+        <div class="wl-line"><code>import functools</code></div>
+        <div class="wl-line"><code>def retry(times):</code>
+          <div class="wl-note">Layer one: the factory. This is NOT the decorator — it is called first, as <code>retry(3)</code>, and its whole job is to remember <code>times</code> in a closure and hand back the real decorator.</div></div>
+        <div class="wl-line"><code>    def decorator(fn):</code>
+          <div class="wl-note">Layer two: the actual decorator, shaped exactly like <code>logged</code> — function in, replacement out. It receives your function only after the factory has run.</div></div>
+        <div class="wl-line"><code>        @functools.wraps(fn)</code>
+          <div class="wl-note">The name-tag, as always. Without it, every retried function in your logs would be called <code>wrapper</code>.</div></div>
+        <div class="wl-line"><code>        def wrapper(*args, **kwargs):</code>
+          <div class="wl-note">Layer three: the wrapper that will replace <code>fn</code>. Through closures it can see both <code>fn</code> (one level up) and <code>times</code> (two levels up). Three backpacks, nested.</div></div>
+        <div class="wl-line"><code>            last_error = None</code></div>
+        <div class="wl-line"><code>            for attempt in range(1, times + 1):</code>
+          <div class="wl-note"><code>times</code> travels here from the very first call, <code>retry(3)</code>, made possibly seconds — or in a server, days — earlier. Closures do not expire.</div></div>
+        <div class="wl-line"><code>                try:</code></div>
+        <div class="wl-line"><code>                    return fn(*args, **kwargs)</code>
+          <div class="wl-note">The happy path: the first success returns immediately, and the remaining attempts never happen.</div></div>
+        <div class="wl-line"><code>                except Exception as err:</code>
+          <div class="wl-note">On failure, note the error and go around the loop again. Production versions also sleep with backoff between attempts.</div></div>
+        <div class="wl-line"><code>                    last_error = err</code></div>
+        <div class="wl-line"><code>            raise last_error</code>
+          <div class="wl-note">Budget exhausted: re-raise the final error so the caller sees the real failure, not a polite shrug.</div></div>
+        <div class="wl-line"><code>        return wrapper</code></div>
+        <div class="wl-line"><code>    return decorator</code>
+          <div class="wl-note">The factory returns the decorator, completing the chain: <code>@retry(3)</code> means <code>fetch = retry(3)(fetch)</code> — call the factory, then let its product wrap your function.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>@retry(times=3)</code>
+          <div class="wl-note">In use. Read it aloud: "wrap the function below with a three-attempt retry". Any network call in an agent deserves this hat.</div></div>
+        <div class="wl-line"><code>def call_model(prompt):</code></div>
+        <div class="wl-line"><code>    ...</code></div>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>This is why <code>@mcp.tool()</code> has brackets and <code>@tool</code> often does not. Empty brackets still mean "call the factory first, with default settings". Writing <code>@mcp.tool</code> (no brackets) when the framework expects <code>@mcp.tool()</code> hands your function to the <em>factory</em> instead of the decorator — a classic, confusing bug. When in doubt, copy the exact form from the library's docs.</p></div>
+
+      <h2>Decoding the ones you meet every day</h2>
+      <p>You now hold the master key. Every famous decorator is one of three moves, and you can usually tell which from context:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Family</th><th>Examples</th><th>What you get back</th></tr>
+        <tr><td>Wrap and replace</td><td><code>@timed</code>, <code>@functools.lru_cache</code>, <code>@retry(3)</code></td><td>A new function that adds behaviour around the original on every call</td></tr>
+        <tr><td>Register and return</td><td><code>@app.route("/health")</code>, <code>@mcp.tool()</code></td><td>Your own function, now also listed in a framework's lookup table</td></tr>
+        <tr><td>Transform</td><td><code>@dataclass</code>, <code>@tool</code></td><td>Something rebuilt or upgraded — a class with generated methods, or a Tool object with a schema</td></tr>
+      </table></div>
+
+      <p><strong><code>@app.route("/health")</code></strong> — Flask's register-and-return classic. The factory is called with the URL; the decorator it returns writes an entry in the app's URL table — "when a request hits <code>/health</code>, call this function" — and then hands your function back unchanged. No wrapper at all. FastAPI's <code>@app.get("/health")</code> plays the same game. A web framework is, at heart, a dict from URLs to functions, and the decorator is how entries get in.</p>
+      <p><strong><code>@dataclass</code></strong> — proof that decorators can receive <a href="ch013-classes-and-oop.html">classes</a>, not just functions. It reads your class's type-hinted fields — the hints you learned in <a href="ch016-type-hints-and-pydantic.html">the previous chapter</a> — writes <code>__init__</code>, <code>__repr__</code>, and <code>__eq__</code> for you, and returns the same class, upgraded. With arguments, <code>@dataclass(frozen=True)</code>, it is the factory pattern again.</p>
+      <p><strong><code>@tool</code></strong> — LangChain's. This one transforms: it reads the function's <code>__name__</code>, its docstring, and its type hints, builds the JSON schema the model will see, and gives you back a Tool object with the original function inside. Now you know why <code>functools.wraps</code> was a whole section: a wrapper without a name-tag would feed the framework the wrong name and an empty description, and your agent would advertise a tool called <code>wrapper</code> that does "no description". The docstring you write above a tool function is not a comment — it is the prompt the model reads when deciding whether to call it, as you will see properly in <a href="ch035-tool-calling.html">the tool-calling chapter</a>.</p>
+      <p><strong><code>@mcp.tool()</code></strong> — FastMCP's register-and-return, from the MCP Python SDK. Empty brackets, so the factory runs with defaults; the decorator adds your function to the server's tool table so it is advertised over the protocol to any connected client. Same idea as Flask's URL table, different audience: instead of browsers hitting URLs, models are calling tools.</p>
+      <p>Flip these until each back-of-card feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">@tool</span><span class="flip-back">LangChain: turns a plain function into a Tool object. Name, docstring, and type hints become the schema the model sees.</span></button>
+        <button class="flip" type="button"><span class="flip-front">@mcp.tool()</span><span class="flip-back">FastMCP: registers the function in an MCP server's tool table. Brackets = factory called first, with default settings.</span></button>
+        <button class="flip" type="button"><span class="flip-front">@dataclass</span><span class="flip-back">Stdlib: receives a whole CLASS, writes __init__, __repr__, and __eq__ from its type-hinted fields, returns the class.</span></button>
+        <button class="flip" type="button"><span class="flip-front">@app.route("/x")</span><span class="flip-back">Flask: files the function in the URL table — "requests to /x call me" — then returns it unchanged. No wrapper involved.</span></button>
+        <button class="flip" type="button"><span class="flip-front">@functools.lru_cache</span><span class="flip-back">Stdlib wrap-and-replace: remembers past results by argument, so repeat calls return instantly without re-running the body.</span></button>
+        <button class="flip" type="button"><span class="flip-front">@retry(times=3)</span><span class="flip-back">The pattern behind libraries like tenacity: re-run the function on failure, up to a budget. Brackets = configure first.</span></button>
+        <button class="flip" type="button"><span class="flip-front">@property</span><span class="flip-back">Stdlib: makes a method readable like an attribute — obj.total instead of obj.total(). A decorator you met with classes.</span></button>
+        <button class="flip" type="button"><span class="flip-front">@functools.wraps(fn)</span><span class="flip-back">The name-tag copier. Goes ON the wrapper, INSIDE your decorator, so the wrapped function keeps its identity.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any agent repository and search for the @ character — it will light up like a runway. Tool files are stacks of <code>@tool</code> or <code>@mcp.tool()</code> over small functions; API layers are <code>@app.get</code> and <code>@app.post</code>; config objects wear <code>@dataclass</code>; network calls wear <code>@retry</code> hats from tenacity; and test files are full of <code>@pytest.fixture</code>. In merge requests, "can we just decorate it?" means "add this behaviour without editing the function", and "the decorator is swallowing the signature" means someone forgot <code>functools.wraps</code>. When a stack trace in your logs points at a function called <code>wrapper</code> in a file you have never opened — you now know exactly what happened, and roughly where to look.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What is <code>@timed</code> written above <code>def report():</code> literally shorthand for?</p>
+          <div class="q-opts">
+            <button data-opt="a">Run <code>timed</code> automatically every time <code>report</code> is called</button>
+            <button data-opt="b"><code>report = timed(report)</code> — executed once, at definition time</button>
+            <button data-opt="c">A comment that tells linters <code>report</code> should be fast</button>
+          </div>
+          <p class="q-explain">The @ is pure sugar for calling the decorator with the fresh function and re-tying the name to whatever comes back. It happens once, when the def runs (usually at import) — the wrapping it sets up is what runs on every call.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. <code>@app.route("/health")</code> has brackets. What happens first?</p>
+          <div class="q-opts">
+            <button data-opt="a">Your function is called with the string "/health"</button>
+            <button data-opt="b">Your function is registered, then the string is checked</button>
+            <button data-opt="c"><code>app.route("/health")</code> is called, and it returns the actual decorator</button>
+          </div>
+          <p class="q-explain">Brackets mean factory-first: the call runs immediately and must return a decorator, which then receives your function. That is also why <code>@mcp.tool()</code> needs its empty brackets.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Your agent's logs show every tool is named <code>wrapper</code> with no description. What is missing?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>@functools.wraps(fn)</code> on the wrapper inside a decorator</button>
+            <button data-opt="b">Type hints on the tool functions</button>
+            <button data-opt="c">A <code>__name__ == "__main__"</code> guard</button>
+          </div>
+          <p class="q-explain">Without <code>functools.wraps</code>, the wrapper's own identity replaces the original's — so anything reading <code>__name__</code> and the docstring (loggers, tracebacks, schema builders like <code>@tool</code>) sees "wrapper" and nothing.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. After decoration, where does the wrapper keep its reference to the original function?</p>
+          <div class="q-opts">
+            <button data-opt="a">In a global registry Python maintains</button>
+            <button data-opt="b">In its closure — the variables remembered from where it was created</button>
+            <button data-opt="c">It re-imports the original from the module each call</button>
+          </div>
+          <p class="q-explain">The wrapper was born inside the decorator, where <code>fn</code> was in scope — so it remembers <code>fn</code> in its closure backpack forever. Nothing global, nothing re-imported.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. What does <code>@dataclass</code> receive, and what does it give back?</p>
+          <div class="q-opts">
+            <button data-opt="a">Each instance, as it is created, so it can validate the fields</button>
+            <button data-opt="b">A dict of field names, returning a new module</button>
+            <button data-opt="c">The class itself, returning the same class with <code>__init__</code> and friends written in</button>
+          </div>
+          <p class="q-explain">Decorators can take classes too. <code>@dataclass</code> reads the type-hinted fields, generates the boilerplate methods, and returns the upgraded class — a transform, not a wrap.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A decorator is a plain function that takes a function and returns its replacement. <code>@name</code> is exactly <code>f = name(f)</code> — nothing more is happening.</li>
+          <li>The @ line runs once, at definition time (usually import), not on every call; the wrapping it installs is what runs on every call.</li>
+          <li>Wrappers remember the original function through a closure, and <code>*args, **kwargs</code> lets one wrapper forward any call shape unchanged.</li>
+          <li><code>@functools.wraps(fn)</code> keeps the wrapped function's name-tag. Skip it and logs, tracebacks, and schema builders all see an anonymous <code>wrapper</code>.</li>
+          <li>Brackets after a decorator — <code>@retry(3)</code>, <code>@app.route("/x")</code>, <code>@mcp.tool()</code> — mean a factory is called first and its product does the decorating.</li>
+          <li>The famous ones are three moves in disguise: wrap-and-replace (<code>@timed</code>, <code>@lru_cache</code>), register-and-return (<code>@app.route</code>, <code>@mcp.tool()</code>), and transform (<code>@dataclass</code>, <code>@tool</code>).</li>
+          <li>Next up: the <code>with</code> block — the same "add behaviour around your code" instinct, applied to setup and cleanup instead of calls — in <a href="ch018-context-managers.html">context managers</a>.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

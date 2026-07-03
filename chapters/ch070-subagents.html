@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subagents: divide and conquer — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch070">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VIII · Deep Agents</div>
+        <h1>Subagents: divide and conquer</h1>
+        <p class="ch-tagline">Spawn a worker with a spotless, empty context, let it wade through the mess on your behalf, and take back only the one paragraph that matters. Context isolation is the deep agent's sharpest architectural trick — and this chapter shows you exactly how the task tool pulls it off.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 71 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>The senior advocate's desk is famously bare: one legal pad, one pen, tomorrow's hearing brief. Down the corridor, the firm's archive room holds four thousand pages on the case — contracts, amendments, three years of increasingly cross letters. She does not go there. Instead she calls in a junior associate: "Find me every precedent where a vendor missed a delivery deadline and the penalty clause still held up on appeal. One page, on my desk by six."</p>
+        <p>The junior disappears into the archive. He pulls forty boxes, reads three hundred pages, chases five leads, abandons four of them. His desk becomes a landslide. At six o'clock he knocks, hands over a single page — three precedents, each with a citation — and goes home. His landslide stays in the archive room.</p>
+        <p>Tomorrow, in court, the advocate carries the legal pad and the one page. She never saw the boxes. She never needed to. That move — send <em>someone else's desk</em> to absorb the messy reading, and take back only the page that matters — is exactly what a deep agent does when it spawns a <strong>subagent</strong>.</p>
+      </section>
+
+      <h2>The mess that files could not fix</h2>
+      <p>Quick recap, because this chapter stands on the last one. In <a href="ch069-virtual-filesystem.html">the virtual file system chapter</a> you learned <em>context offload</em>: when a tool returns something huge, the deep agent writes it to a file and keeps only a one-line stub in its history, because the history is re-sent — and re-billed — on every turn of the loop you built in <a href="ch045-react-loop-by-hand.html">chapter 45</a>. Files solve the problem of big <em>results</em>.</p>
+      <p>But files do not solve the problem of big <em>journeys</em>. Think about what research actually looks like in an agent transcript: a search that returns nothing useful, a file opened and found irrelevant, a promising lead that dies three tool calls later, a re-search with better keywords. Every one of those steps — the tool call, the disappointing observation, the model's "hmm, let me try again" — lands in the history and stays there. You can file the cargo, but the travel diary of finding it still fills the lead agent's desk. Twenty turns of rummaging is twenty turns of clutter, carried and paid for on every turn that follows, quietly distracting the model from the actual task.</p>
+      <p>The fix is the advocate's fix: do not make the journey yourself. Delegate it to a worker whose desk you never have to look at. A <dfn>subagent</dfn> is a complete, separate agent — its own loop, its own system prompt, its own tools, its own history — that the main agent can spin up for one bounded task and dismiss when the task is done.</p>
+
+      <h2>The task tool: one call, one worker, one report</h2>
+      <p>Mechanically, delegation arrives as one more tool on the menu. In <a href="ch067-create-deep-agent-anatomy.html">the create_deep_agent anatomy chapter</a> you saw that the subagent layer installs a tool named <code>task</code> alongside the planning and file tools. When the main agent — call it the <em>lead</em> from here on — decides some work is delegable, it calls <code>task()</code> the same way it would call a calculator: it writes a tool call, and the harness does the rest.</p>
+      <p>What the harness does is the interesting part. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Heavy reading looms">
+          <h3>1. The lead smells a landslide</h3>
+          <div class="diagram">
+            <div class="d-box hot">Lead agent<small>history: 12 tidy messages</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">task tool</div>
+            <div class="d-box dim">Worker<small>does not exist yet</small></div>
+          </div>
+          <p class="step-cap">The plan says "survey the vendor archive". The lead knows that doing this inline means twenty turns of searching and reading landing in its own history — so it reaches for the task tool instead.</p>
+        </div>
+        <div class="step" data-title="task() is called">
+          <h3>2. The lead writes the job ticket</h3>
+          <div class="diagram">
+            <div class="d-box">Lead agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">task tool<small>description + subagent_type</small></div>
+            <div class="d-box dim">Worker</div>
+          </div>
+          <p class="step-cap">The tool call carries two things: a description of the job ("summarise every delivery-delay dispute in the archive, with file references") and which kind of worker to hire — the <code>subagent_type</code>.</p>
+        </div>
+        <div class="step" data-title="A fresh worker wakes">
+          <h3>3. A worker wakes up with an empty desk</h3>
+          <div class="diagram">
+            <div class="d-box dim">Lead agent<small>paused, mid-tool-call</small></div>
+            <div class="d-box">task tool</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Worker<small>history: 1 message — the description</small></div>
+          </div>
+          <p class="step-cap">This is the moment that matters. The worker's history contains exactly one thing: the job description. Not the lead's twelve messages, not the user's original request, not the plan. A clean context — by design, not by accident.</p>
+        </div>
+        <div class="step" data-title="The worker grinds">
+          <h3>4. The landslide happens — over there</h3>
+          <div class="diagram">
+            <div class="d-box dim">Lead agent</div>
+            <div class="d-box dim">task tool</div>
+            <div class="d-box hot">Worker<small>search, read, dead end, re-search... history balloons to 40 messages</small></div>
+          </div>
+          <p class="step-cap">The worker runs its own full agent loop — think, act, observe — with its own tools. Every wrong turn and bulky observation piles onto the worker's history. The lead sees none of it; it is still waiting on one tool call.</p>
+        </div>
+        <div class="step" data-title="One report returns">
+          <h3>5. One page crosses the corridor</h3>
+          <div class="diagram">
+            <div class="d-box hot">Lead agent<small>+1 message: the report</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box">task tool</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box good">Worker<small>final answer only</small></div>
+          </div>
+          <p class="step-cap">When the worker writes its final answer, that answer — and only that — travels back to the lead as the task tool's observation. Forty messages of rummaging are distilled into one.</p>
+        </div>
+        <div class="step" data-title="Worker dismissed">
+          <h3>6. The worker's desk is cleared</h3>
+          <div class="diagram">
+            <div class="d-box good">Lead agent<small>history: 13 tidy messages</small></div>
+            <div class="d-box dim">task tool</div>
+            <div class="d-box dim">Worker<small>history discarded</small></div>
+          </div>
+          <p class="step-cap">The worker's ballooned history is thrown away. The lead resumes its loop one message heavier and continues at full focus. Nobody ever pays to re-send those forty messages again.</p>
+        </div>
+      </div>
+
+      <h2>Context quarantine: the actual point</h2>
+      <p>It is tempting to describe subagents as "parallelism" or "specialisation", and they can be both. But the reason they exist in every deep agent architecture is simpler and stricter: <dfn>context quarantine</dfn> — keeping one agent's mess from ever entering another agent's history. The quarantine runs in both directions, and each direction buys you something concrete.</p>
+      <p><strong>Outbound: the worker starts clean.</strong> A fresh context is not just cheap — it is <em>focused</em>. The worker is not distracted by the lead's plan, the user's small talk, or the residue of earlier subtasks. Models follow instructions noticeably better in short, single-purpose contexts, so a worker with one job in one message often out-performs a lead juggling nine concerns.</p>
+      <p><strong>Inbound: the lead stays clean.</strong> Whatever happens on the worker's desk — the forty search results, the poisoned lead, the tool error it recovered from — never reaches the lead's history. If a worker goes down a rabbit hole and fills its context with junk, the damage is contained: the lead gets back one disappointing report, not the rabbit hole itself. In the failure-modes language of <a href="ch048-failure-modes.html">chapter 48</a>, a subagent turns context poisoning from an infection into a contained incident.</p>
+      <p>There is one rule you must respect for the trick to work: delegation is <strong>one-shot</strong>. The lead writes the description, the worker runs to completion, one report comes back. The worker cannot lean over mid-task and ask the lead a clarifying question, and it cannot see anything the lead did not put in the description. If the job needs context, the description must carry it. Under-described tasks are the number one way subagents go wrong — the worker returns a confident answer to the wrong question, like a junior who spent all day in the archive researching the wrong clause.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Quarantine has a doorway: in deepagents the workers share the lead's <a href="ch069-virtual-filesystem.html">virtual file system</a>. A worker can write its full thirty-page findings to a file and return a two-line report saying "summary below; full detail in <code>/research/vendor-disputes.md</code>". The lead's history stays tiny, and the detail is on the shelf if anyone needs it. Messy histories are quarantined; useful artefacts are shared. This combination — subagent plus file — is the workhorse pattern of every long-running agent you will read.</p></div>
+
+      <h2>Say it in vocabulary</h2>
+      <p>Six terms carry the rest of this chapter — and most design discussions about multi-agent systems. Flip until fluent:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">subagent</span><span class="flip-back">A complete agent — own loop, own prompt, own tools, own history — spawned by another agent for one bounded task, then dismissed.</span></button>
+        <button class="flip" type="button"><span class="flip-front">task tool</span><span class="flip-back">The tool the lead calls to delegate: it takes a job description and a subagent_type, runs the whole worker loop inside one tool call, and returns the worker's final answer as the observation.</span></button>
+        <button class="flip" type="button"><span class="flip-front">context quarantine</span><span class="flip-back">The isolation guarantee: the worker never sees the lead's history, and the worker's mess never enters the lead's. Only the description goes out; only the report comes back.</span></button>
+        <button class="flip" type="button"><span class="flip-front">general-purpose subagent</span><span class="flip-back">The built-in worker deepagents provides by default: same tools as the lead, no speciality. You hire it purely for the clean context.</span></button>
+        <button class="flip" type="button"><span class="flip-front">description field</span><span class="flip-back">A custom subagent's job advert. It is all the lead reads when deciding whom to hire — write it for the caller, not the worker.</span></button>
+        <button class="flip" type="button"><span class="flip-front">one-shot delegation</span><span class="flip-back">The contract: no mid-task conversation between lead and worker. The description must carry everything the job needs, because there are no follow-up questions.</span></button>
+      </div>
+
+      <h2>Run a lead and its worker, right now</h2>
+      <p>Here is the whole architecture, small enough to run in your browser: a lead agent, a task tool, and a worker that grinds through an archive. Both "models" are scripted stand-ins, exactly as in <a href="ch045-react-loop-by-hand.html">chapter 45</a> — but the loops, the histories, and the quarantine are real. Press <strong>Run</strong>, then read the final three lines carefully.</p>
+
+      <div class="pyrun" data-title="A lead agent that delegates — run me">
+<textarea class="py-src" spellcheck="false">
+# The archive: big, boring, and exactly what we do NOT want
+# in the lead agent's history.
+ARCHIVE = {
+    "notes-jan.txt": "Jan: vendor quoted 90 days delivery. " * 40,
+    "notes-feb.txt": "Feb: vendor slipped to 120 days. " * 40,
+    "notes-mar.txt": "Mar: penalty clause was invoked. " * 40,
+}
+
+def read_file(name):
+    return ARCHIVE.get(name, "ERROR: no such file")
+
+# ---- the worker: a full agent with its OWN history --------
+def worker_llm(history):
+    done = sum("OBSERVATION" in m for m in history)
+    files = list(ARCHIVE)
+    if done &lt; len(files):
+        return f"ACTION: read_file({files[done]})"
+    return ("FINAL ANSWER: Delivery slipped from 90 to 120 days; "
+            "the penalty clause was invoked in March.")
+
+def run_worker(description, max_turns=6):
+    history = [f"TASK: {description}"]     # ONE message. Clean desk.
+    for _ in range(max_turns):
+        reply = worker_llm(history)
+        history.append(reply)
+        if "FINAL ANSWER:" in reply:
+            return reply.split("FINAL ANSWER:")[1].strip(), history
+        if "ACTION: read_file(" in reply:
+            name = reply.split("(")[1].split(")")[0]
+            history.append("OBSERVATION: " + read_file(name))
+    return "gave up", history
+
+# ---- the task tool: quarantine in six lines ----------------
+def task(description, subagent_type="general-purpose"):
+    answer, worker_history = run_worker(description)
+    waded = sum(len(m) for m in worker_history)
+    print(f"  [worker '{subagent_type}' carried {waded:,} chars "
+          f"of history; returning {len(answer)} chars]")
+    return answer      # worker_history is discarded right here
+
+# ---- the lead: never touches the archive -------------------
+def lead_llm(history):
+    if not any("OBSERVATION" in m for m in history):
+        return ("ACTION: task(Summarise the vendor delay story "
+                "from the archive notes)")
+    return "FINAL ANSWER: " + history[-1].split("OBSERVATION: ")[1]
+
+history = ["TASK: what happened with the vendor timeline?"]
+for turn in range(5):
+    reply = lead_llm(history)
+    history.append(reply)
+    if "FINAL ANSWER:" in reply:
+        print("LEAD ANSWERS:", reply.split("FINAL ANSWER:")[1].strip())
+        break
+    if "ACTION: task(" in reply:
+        desc = reply.split("task(")[1].rsplit(")", 1)[0]
+        history.append("OBSERVATION: " + task(desc))
+
+lead_size = sum(len(m) for m in history)
+archive_size = sum(len(v) for v in ARCHIVE.values())
+print(f"\nLead history: {lead_size:,} chars in {len(history)} messages")
+print(f"Archive the worker waded through: {archive_size:,} chars")
+print("Chars of archive in the lead's history: 0")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Two experiments worth thirty seconds each. First, make the lead do the work itself: in the lead's loop, replace the <code>task(...)</code> branch so it calls <code>read_file</code> directly three times, and watch the lead's history explode from hundreds of characters to thousands. Second, starve the worker: shorten the task description to just <code>Summarise</code> and notice the code still runs — a scripted worker cannot misunderstand, but a real LLM worker absolutely would. The description is the whole briefing; write it like a job ticket for a contractor you will never speak to again.</p></div>
+
+      <h2>Custom subagents: name, prompt, tools</h2>
+      <p>Out of the box, deepagents gives every lead one employee: the <strong>general-purpose</strong> subagent. It carries the same tools as the lead and no special instructions — you hire it purely for the clean context, the way our advocate might hand a colleague of equal rank the boring half of the reading. For anything more deliberate, you define <strong>custom subagents</strong>: named specialists with their own prompt, their own tool belt, and optionally their own model. Each one is just a dictionary handed to <code>create_deep_agent</code>:</p>
+
+      <div class="code-title">hiring a specialist — the subagents parameter</div>
+      <pre><code class="language-python">from deepagents import create_deep_agent
+
+precedent_hunter = {
+    "name": "precedent-hunter",
+    "description": "Searches case-law archives and returns a short, "
+                   "cited summary. Give it one legal question at a time.",
+    "system_prompt": "You are a meticulous legal researcher. Read "
+                     "everything relevant, then reply with at most "
+                     "five findings, each with a citation.",
+    "tools": [search_case_law],
+    "model": "openai:gpt-5.5-mini",  # optional: cheaper model for grunt work
+}
+
+agent = create_deep_agent(
+    model="openai:gpt-5.5",
+    tools=[search_case_law, draft_brief],
+    system_prompt="You are the lead advocate. Delegate heavy "
+                  "reading to your subagents; you write the brief.",
+    subagents=[precedent_hunter],
+)</code></pre>
+
+      <p>Read that dictionary the way a reviewer would — each key answers a different question:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">the anatomy of a subagent definition</div>
+        <div class="wl-line"><code>"name": "precedent-hunter",</code>
+          <div class="wl-note">The worker's unique identifier. This exact string is what the lead passes as <code>subagent_type</code> when it calls the task tool. Name one of your subagents <code>"general-purpose"</code> and you replace the built-in default.</div></div>
+        <div class="wl-line"><code>"description": "Searches case-law archives and returns a short, "</code>
+          <div class="wl-note">The job advert — and here is the subtlety: this text is for the <em>lead</em>, not the worker. It is all the lead sees when choosing whom to hire, so it should say what the worker is good at and how to brief it ("give it one question at a time"). Vague descriptions produce a lead that never delegates, or delegates the wrong jobs.</div></div>
+        <div class="wl-line"><code>"system_prompt": "You are a meticulous legal researcher. Read "</code>
+          <div class="wl-note">The worker's standing instructions — its whole identity. Crucially, it does <em>not</em> inherit the lead's system prompt: quarantine starts at birth. Tell the worker how to work and, above all, what shape its final report must take, because that report is the only thing anyone will ever see.</div></div>
+        <div class="wl-line"><code>"tools": [search_case_law],</code>
+          <div class="wl-note">Optional. Omit it and the worker inherits the lead's tools; provide it and the worker gets exactly this list and nothing else. A narrow belt is both focus and safety — a research worker with no write-tools cannot break anything, no matter how confused it gets.</div></div>
+        <div class="wl-line"><code>"model": "openai:gpt-5.5-mini",</code>
+          <div class="wl-note">Optional. Workers can run on a different — usually cheaper — model than the lead. Bulk reading rarely needs the expensive brain; judgement does. This one line is the biggest cost lever in the whole pattern.</div></div>
+        <div class="wl-line"><code>subagents=[precedent_hunter],</code>
+          <div class="wl-note">The roster. Every entry becomes a hireable <code>subagent_type</code>, and the task tool's own manual — generated from these descriptions — is added to the lead's prompt so it knows who is on staff.</div></div>
+      </div>
+
+      <p>If this smells like <a href="ch063-subgraphs-multi-agent.html">the multi-agent patterns of Act VII</a>, your nose is right — with one difference of temperament. A subgraph is <em>wired</em>: you draw the org chart in advance as nodes and edges. A subagent is <em>hired</em>: the lead decides at run time whether, when, and whom to delegate to, based on nothing but the descriptions on the roster. Wiring gives you control; hiring gives you flexibility. Deep agents choose hiring, and accept that the lead's judgement — like any manager's — will occasionally be wrong.</p>
+
+      <h2>When the intern costs more than the work</h2>
+      <p>Now the honest section. Delegation is not free, and reaching for subagents by reflex is one of the most common ways deep agents get slower and more expensive without getting better. Every <code>task()</code> call pays three tolls. First, a <strong>setup toll</strong>: the worker's system prompt and tool manuals are sent afresh, and everything relevant must be restated in the description. Second, a <strong>latency toll</strong>: an entire nested agent loop runs to completion inside one tool call while the lead — and your user — waits. Third, a <strong>fidelity toll</strong>: compression loses detail, and the lead cannot ask follow-ups; if the report missed the one nuance that mattered, the lead either proceeds wrong or pays for a second delegation.</p>
+      <p>Round, illustrative numbers make the shape of the trade obvious:</p>
+
+      <div data-bars data-title="One research-heavy task, two ways (illustrative round numbers)" data-unit="tokens"
+           data-note="Delegation slashes what the lead carries forward — but the total bill often rises, because the worker re-reads its own instructions and the findings are paid for twice. The next chapter does this arithmetic properly.">
+        <div class="bar" data-label="Lead's context after — inline" data-value="45000"></div>
+        <div class="bar" data-label="Lead's context after — delegated" data-value="4000"></div>
+        <div class="bar" data-label="Total tokens billed — inline" data-value="60000"></div>
+        <div class="bar" data-label="Total tokens billed — delegated" data-value="76000"></div>
+      </div>
+
+      <p>So when do subagents add cost without benefit? Four patterns cover most of the wasted money:</p>
+      <ul>
+        <li><strong>The one-button errand.</strong> The job is a single tool call — fetch one record, run one query. Hiring a worker means paying a full system prompt and loop setup to press one button. Just press the button.</li>
+        <li><strong>The answer <em>is</em> the bulk.</strong> "Rewrite this entire document" produces output as big as the input. The full result must come back to the lead anyway, so nothing gets quarantined — you paid the tolls and kept the landslide.</li>
+        <li><strong>The conversation-shaped task.</strong> Work that needs mid-course steering — "draft, show me, adjust" — fights the one-shot contract. Each round trip is a fresh worker with fresh amnesia, and the description grows into a novel trying to compensate.</li>
+        <li><strong>The context-heavy task.</strong> If the worker genuinely needs most of what the lead knows, you must paste it all into the description — at which point the "clean context" is neither clean nor cheaper. Work that is entangled with the lead's history should stay with the lead.</li>
+      </ul>
+      <p>The rule of thumb that survives contact with production: <strong>delegate when the reading is much bigger than the answer.</strong> Ten thousand tokens of searching that distils to a hundred-token summary is the perfect subagent job. A hundred tokens of work that produces ten thousand tokens of answer is the perfect job to keep inline. And when the totals still surprise you — they will — <a href="ch071-the-token-bill.html">the next chapter</a> exists precisely to explain why multi-agent bills run roughly double what intuition predicts.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You have almost certainly watched this pattern without naming it. When Claude Code prints a <code>Task(...)</code> line and goes quiet for a minute, that is a subagent — a fresh-context worker exploring the repository so the main session's context stays lean, returning a distilled report. Its custom agents are defined in small files with exactly the fields you met today: a name, a description for the caller, a prompt for the worker, and an allowed-tools list. In deepagents source you will meet the same machinery under the subagent middleware and its <code>task</code> tool. And in code review you will read the pattern in prose: "moved the doc-crawl into a subagent to keep the main context clean", or "this doesn't need a subagent, it's one API call" — sentences you can now argue about with numbers.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A lead agent calls the task tool and the worker runs for forty turns. What ends up in the lead's history?</p>
+          <div class="q-opts">
+            <button data-opt="a">All forty turns, so the lead has a full audit trail</button>
+            <button data-opt="b">Only the worker's final report, as the observation of one tool call</button>
+            <button data-opt="c">A compressed summary of every turn, generated automatically</button>
+          </div>
+          <p class="q-explain">The entire worker loop runs inside a single tool call, and only the final answer crosses back. The forty turns of rummaging are discarded with the worker — that disposal is the whole point of the pattern.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. What does the worker see of the lead's world when it wakes up?</p>
+          <div class="q-opts">
+            <button data-opt="a">The lead's full history, so it has complete context</button>
+            <button data-opt="b">The user's original request plus the lead's plan</button>
+            <button data-opt="c">Only the task description the lead wrote — nothing else</button>
+          </div>
+          <p class="q-explain">Quarantine runs both ways: the worker is born with a one-message history containing just the description. Anything the job needs must be written into that description, because the worker cannot ask follow-up questions.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. In a custom subagent definition, who is the <code>description</code> field written for?</p>
+          <div class="q-opts">
+            <button data-opt="a">The lead agent — it is the job advert used to decide whom to delegate to</button>
+            <button data-opt="b">The worker — it is the worker's standing instructions</button>
+            <button data-opt="c">The human developer — it is documentation only</button>
+          </div>
+          <p class="q-explain">The description is all the lead reads when choosing a worker; the worker's own instructions live in <code>system_prompt</code>. Mixing the two up produces workers that never get hired, or get hired for the wrong jobs.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Which task is the WORST candidate for a subagent?</p>
+          <div class="q-opts">
+            <button data-opt="a">Reading three hundred pages of logs to answer one question</button>
+            <button data-opt="b">Rewriting a long document, where the full output must return to the lead</button>
+            <button data-opt="c">Searching twelve sources and returning a five-line cited summary</button>
+          </div>
+          <p class="q-explain">When the answer is as big as the work, nothing gets quarantined — the full result lands in the lead's history anyway, and you have paid the worker's setup, latency, and re-billed tokens for no context saving. Delegate when reading dwarfs the answer.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. Delegating usually shrinks the lead's context but raises the total token bill. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">Subagents are billed at a premium rate by API providers</button>
+            <button data-opt="b">The lead must re-read the worker's entire history to verify it</button>
+            <button data-opt="c">The worker pays for its own system prompt and loop, and the findings are effectively paid for twice — once in the worker, once as the report in the lead</button>
+          </div>
+          <p class="q-explain">Every worker is a full agent with its own prompt, tool manuals, and turns; then its distilled findings re-enter the lead's history and are carried from there. Less context per agent, more tokens overall — the arithmetic the next chapter unpacks.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Files offload big <em>results</em>; subagents offload big <em>journeys</em>. The searching, the dead ends, and the bulky observations happen on a worker's desk that the lead never sees.</li>
+          <li>The task tool is the whole interface: the lead sends a description and a <code>subagent_type</code>, a fresh worker runs a complete agent loop inside that one tool call, and only its final report returns.</li>
+          <li>Context quarantine cuts both ways — the worker starts focused with an empty history, and the worker's mess (even a poisoned context) can never infect the lead.</li>
+          <li>Delegation is one-shot: no mid-task questions, no shared history. The description must carry the entire briefing, and the worker's <code>system_prompt</code> must specify the report format, because the report is all that survives.</li>
+          <li>Custom subagents are dictionaries — <code>name</code>, <code>description</code> (for the lead), <code>system_prompt</code> (for the worker), optional <code>tools</code> and <code>model</code> — while the built-in general-purpose worker offers quarantine with no speciality.</li>
+          <li>Delegate when the reading is much bigger than the answer; skip subagents for one-call errands, bulk-output tasks, and work entangled with the lead's context — otherwise you pay setup, latency, and double-billed tokens for nothing.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLMs vs deterministic models — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch031">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act III · The Data Scientist's World</div>
+        <h1>LLMs vs deterministic models</h1>
+        <p class="ch-tagline">Your colleagues' models live in PKL files and give the same number every single time; your models talk. Same word, totally different animals — this chapter is the map between them, plus the exact sentences to say when a meeting muddles the two.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 31 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>The office lobby has two ways to get a coffee. On the left, a vending machine: press B4 and exactly the same cup drops out — same volume, same temperature, same price, in nine seconds, ten thousand times in a row. If it breaks, everyone knows within a minute, because nothing comes out. On the right, a barista: you can say <em>"something warm, not too sweet, I've had a long day"</em> and receive something wonderful that no button could produce. But order the same thing twice and you get two slightly different drinks. She is slower, costs more per cup, and every so often she confidently hands over a lavender oat-milk creation nobody asked for.</p>
+        <p>Nobody in that lobby argues about which one is "better". The queue that wants a predictable espresso, nine seconds per person, goes left. The person holding a vague craving goes right. And the smartest order in the building uses both: the barista listens to your rambling, translates it into "that's a B4" — and the machine then makes it, identically, every time.</p>
+        <p>Hold that lobby in your mind. It is this entire chapter.</p>
+      </section>
+
+      <h2>One word, two completely different animals</h2>
+      <p>You have now met both animals. In <a href="ch024-what-is-a-model.html">what a model actually is</a> you learned that a model is a function whose behaviour was <em>learned from data</em> rather than typed by a programmer. In <a href="ch025-classical-ml.html">the classical toolkit</a> you met sklearn and XGBoost — stacks of tiny learned if-statements that score rows of numbers — and in <a href="ch026-pkl-files.html">PKL files</a> you saw how those get pickled into a jar and shipped. Then <a href="ch029-transformers-plainly.html">transformers</a> and <a href="ch030-tokens-embeddings-context.html">tokens, embeddings, and context windows</a> introduced the other creature: a giant next-token predictor that reads and writes language.</p>
+      <p>Both get called "model" in meetings, and that one overloaded word causes real, expensive confusion. So let us make the split precise. A <dfn>deterministic model</dfn> is one where the same input produces the same output, every single time, forever — the vending machine. XGBoost, logistic regression, a decision tree: at prediction time these are fixed arithmetic. An LLM is <dfn>stochastic</dfn> — it contains randomness by design: it predicts a probability for every possible next token and then <em>samples</em> one, so the same prompt can legitimately come back worded differently. The barista.</p>
+      <p>That one design difference fans out into five practical ones. Here they are at a glance; the rest of the chapter walks each row.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Axis</th><th>Deterministic model (XGBoost &amp; friends)</th><th>LLM</th></tr>
+        <tr><td>Same input, same output?</td><td>Always. Replayable to the last decimal.</td><td>No — it samples. Repeatable-ish at best.</td></tr>
+        <tr><td>Can it explain a decision?</td><td>Yes: per-decision reason codes from the actual mechanism.</td><td>No: it can narrate a plausible story, which is not the mechanism.</td></tr>
+        <tr><td>Cost per decision</td><td>Fractions of a paisa.</td><td>Real money, every call.</td></tr>
+        <tr><td>Latency per decision</td><td>Around a millisecond.</td><td>Seconds.</td></tr>
+        <tr><td>How it fails</td><td>Quietly and measurably (drift).</td><td>Fluently and confidently (hallucination).</td></tr>
+      </table></div>
+
+      <h2>Determinism and reproducibility: the replay test</h2>
+      <p>Here is the test a bank's auditors actually run: take a decision the system made last March, feed the same inputs in again, and check you get the same answer. A gradient-boosted model passes trivially — it is a frozen bundle of numbers in a <a href="ch026-pkl-files.html">PKL file</a>, versioned like any artifact, and prediction is pure arithmetic. Same row in, same score out, this year, next year, in court if necessary.</p>
+      <p>An LLM does not naturally pass it. Sampling is controlled by a dial called <dfn>temperature</dfn> — high means pick adventurously among likely next tokens; 0 means always pick the single likeliest one. So temperature 0 makes it deterministic? Mostly — but do not promise this in a meeting. Providers do not guarantee bit-identical outputs even at temperature 0 (floating-point arithmetic and request batching on their servers can nudge results), and the hosted model itself gets updated under you. Temperature 0 tames the randomness; it does not turn the barista into a vending machine.</p>
+      <p>Run both animals side by side and watch the difference with your own eyes:</p>
+
+      <div class="pyrun" data-title="Two animals, three calls each — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- Animal 1: a deterministic scorer ----------------------
+# A tiny stand-in for a gradient-boosted model like XGBoost.
+# The real thing is hundreds of learned if-statements; the
+# behaviour at prediction time is the same: pure arithmetic.
+def risk_score(income, emi, years_at_job):
+    score = 600
+    if income &gt;= 80000:
+        score += 90
+    elif income &gt;= 40000:
+        score += 40
+    if emi &gt; income * 0.40:
+        score -= 120
+    if years_at_job &gt;= 3:
+        score += 50
+    return score
+
+# ---- Animal 2: a scripted stand-in for an LLM --------------
+# temperature &gt; 0 means the model SAMPLES its next words from
+# a probability distribution, so the same prompt can come
+# back worded differently. random.choice simulates that.
+import random
+
+def fake_llm(prompt, temperature=0.8):
+    openers  = ["This applicant looks",
+                "Overall the profile seems",
+                "My read: the applicant appears"]
+    verdicts = ["fairly solid.",
+                "reasonable, with caveats.",
+                "acceptable at first glance."]
+    if temperature == 0:
+        return openers[0] + " " + verdicts[0]
+    return random.choice(openers) + " " + random.choice(verdicts)
+
+applicant = dict(income=65000, emi=30000, years_at_job=4)
+
+print("Deterministic scorer, same applicant, 3 calls:")
+for _ in range(3):
+    print("   score =", risk_score(**applicant))
+
+print()
+print("LLM at temperature 0.8, same prompt, 3 calls:")
+for _ in range(3):
+    print("  ", fake_llm("Assess this applicant"))
+
+print()
+print("LLM at temperature 0, same prompt, 3 calls:")
+for _ in range(3):
+    print("  ", fake_llm("Assess this applicant", temperature=0))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Press Run a few times. The scorer never moves. The temperature-0.8 answers shuffle between runs — and notice they are all <em>reasonable</em>, just different, which is exactly what makes LLM bugs so hard to reproduce. Then try changing the applicant's <code>emi</code> to 20000 and watch the deterministic score respond instantly and identically every time.</p></div>
+
+      <h2>Explainability: "why did you decline me?"</h2>
+      <p>Banking regulation has a blunt requirement hiding behind polite language: when a system declines a customer, someone must be able to say <em>which factors drove that specific decision</em>. This property is called <dfn>explainability</dfn> — pointing at the real inputs that moved the real output, per decision, not a story invented afterwards.</p>
+      <p>Classical models are good at this. A gradient-boosted scorer can emit <dfn>reason codes</dfn> — the top factors behind each individual score, such as "EMI above 40% of income; employment history under 3 years". These come from the model's actual mechanism (which features moved the score, and by how much), and compliance teams have accepted them across decades of scorecard history.</p>
+      <p>An LLM cannot do this honestly. Its "decision" is smeared across billions of learned weights, with no per-decision ledger of which ones mattered. Here is the trap that catches smart people: you <em>can</em> ask an LLM "why did you say that?" and it will answer beautifully. But recall from <a href="ch029-transformers-plainly.html">the transformer chapter</a> what it is actually doing — predicting plausible next tokens. The explanation is generated the same way the answer was: a plausible narrative <em>about</em> the answer, not a trace <em>of</em> it. Researchers call this post-hoc rationalisation. It reads like an audit trail and is nothing of the kind.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>"The model explained its reasoning" means two entirely different things depending on the animal. For the scorer it means mechanism: these inputs moved the number. For the LLM it means prose: a fluent story that may or may not match what happened inside. Regulators accept the first. Treat the second as a draft written by a persuasive intern.</p></div>
+
+      <h2>Cost and latency: the overnight-batch test</h2>
+      <p>Whenever someone proposes "let's just use the LLM for that", run the overnight-batch test in your head. A mid-sized bank re-scores millions of things per night: card transactions for fraud, accounts for limit reviews, portfolios for risk. <dfn>Inference</dfn> — running a trained model to get an answer, as opposed to training it — has wildly different economics for the two animals.</p>
+
+      <div data-bars data-title="Time to score ONE decision (illustrative round numbers)" data-unit="ms"
+           data-note="The classical bar is not missing — at ~1 ms it is simply invisible next to a ~2,000 ms LLM call. That thousand-fold gap per decision is the whole argument.">
+        <div class="bar" data-label="Gradient-boosted trees on a CPU" data-value="1"></div>
+        <div class="bar" data-label="LLM API call" data-value="2000"></div>
+      </div>
+
+      <p>Do the arithmetic once and you will never forget it. Ten million decisions at a millisecond each is under three hours on one modest machine, for pennies of electricity. Ten million LLM calls at two seconds each is over two hundred days of sequential compute — you can parallelise the time, but not the bill, because every call is metered. These are illustrative round numbers, but the <em>ratio</em> is the durable lesson: per decision, the two animals differ by around a thousand times in both time and money. This is why "why don't we replace the fraud model with GPT?" gets the reaction it gets from the data science team. Not defensiveness — arithmetic.</p>
+
+      <h2>Failure modes: how each animal breaks</h2>
+      <p>Both animals fail — but in opposite styles, and each style needs its own monitoring.</p>
+      <p>The classical model fails like a machine. Its big enemy is <dfn>drift</dfn> — the world changes while the training data stays frozen, so the model quietly gets worse: a fraud model trained before a new scam pattern simply does not know it exists. It is also brittle at the edges — a category it never saw in training gets a bad number without complaint. But notice the shape: these failures are <em>quiet, statistical, and measurable</em>. Dashboards catch them — accuracy this month versus last, score distributions shifting — which is exactly what your colleagues' monitoring notebooks do.</p>
+      <p>The LLM fails like a person. Its signature failure is <dfn>hallucination</dfn> — stating something false with total fluency and confidence; not a lie, since there is no intent, just next-token machinery producing plausible text that happens to be wrong. Add format drift (you asked for JSON, it returned JSON-with-a-friendly-preamble), sensitivity to phrasing, and the nondeterminism you watched above, which makes bugs maddening to reproduce. The dangerous part is the shape: LLM failures arrive <em>fluent and confident</em>, indistinguishable at a glance from successes. No dashboard of averages catches one confidently invented account number.</p>
+      <p>One sentence to keep: <strong>the classical model fails quietly and measurably; the LLM fails fluently and confidently.</strong> Quiet failures need statistical monitoring; confident failures need verification — checking each output against a source of truth before anything downstream trusts it.</p>
+
+      <p>Before the decision framework, lock in the vocabulary. Flip each card until the definitions feel obvious:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">deterministic</span><span class="flip-back">Same input, same output, every single time. A property of the mechanism, not a compliment. XGBoost at prediction time is deterministic.</span></button>
+        <button class="flip" type="button"><span class="flip-front">stochastic</span><span class="flip-back">Contains randomness by design — the same input may legitimately produce different outputs. LLMs sample their next token, so they are stochastic.</span></button>
+        <button class="flip" type="button"><span class="flip-front">temperature</span><span class="flip-back">The LLM's randomness dial. 0 = always pick the likeliest next token; higher = sample more adventurously. Taming randomness, not removing all variation.</span></button>
+        <button class="flip" type="button"><span class="flip-front">explainability</span><span class="flip-back">Being able to say which real inputs drove a specific decision — from the mechanism itself, not a story composed afterwards.</span></button>
+        <button class="flip" type="button"><span class="flip-front">reason codes</span><span class="flip-back">The per-decision top factors a scorer emits — "declined: EMI ratio, short employment history". What regulators expect to see.</span></button>
+        <button class="flip" type="button"><span class="flip-front">drift</span><span class="flip-back">The world changes while the training data stays frozen, so a classical model quietly degrades. Caught with monitoring dashboards, fixed by retraining.</span></button>
+        <button class="flip" type="button"><span class="flip-front">hallucination</span><span class="flip-back">An LLM stating something false with complete fluency and confidence. Not a lie — just next-token prediction producing plausible, wrong text.</span></button>
+        <button class="flip" type="button"><span class="flip-front">inference</span><span class="flip-back">Running an already-trained model to get an answer. Cheap and instant for classical models; slow and metered for LLMs.</span></button>
+      </div>
+
+      <h2>So when should a bank use which?</h2>
+      <p>Three questions sort almost every case. First: <em>is the input structured numbers or language?</em> Columns of amounts and ratios are the scorer's native food; letters, emails, transcripts, and contracts are the LLM's. Second: <em>is this decision repeated at scale?</em> Millions of near-identical decisions per day point at the vending machine; a handful of bespoke syntheses point at the barista. Third: <em>will someone have to explain each individual decision later — to a customer, an auditor, a regulator?</em> If yes, the deciding step must be the animal that produces real reason codes.</p>
+      <p>Credit scoring, fraud detection, limit setting: structured inputs, massive repetition, regulated explanations — deterministic model, full stop. Summarising a complaint thread, drafting a briefing, answering "what does this clause mean?": language in, language out, low volume, a human reads the result — LLM territory.</p>
+      <p>But the answer that wins in production — and in meetings — is usually <em>both</em>. A bank's most valuable information arrives as language wrapped around numbers: a loan application letter, a scanned statement, an income document. The LLM is the first system in history that can reliably read that wrapping. So let it do exactly that job, and only that job: the LLM reads the document into clean structured fields, and the deterministic model scores the fields and makes the decision. Language at the edges, determinism in the middle. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Document arrives">
+          <h3>1. A messy document arrives</h3>
+          <div class="diagram">
+            <div class="d-box hot">Document<small>a rambling loan letter + scanned statements</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">LLM<small>reader</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Scorer<small>gradient-boosted trees</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Decision</div>
+          </div>
+          <p class="step-cap">The raw input is language — the one thing the classical model cannot eat. In <a href="ch028-why-text-broke-ml.html">why text broke classical ML</a> you saw exactly why this used to be a dead end.</p>
+        </div>
+        <div class="step" data-title="LLM extracts">
+          <h3>2. The LLM reads it into clean fields</h3>
+          <div class="diagram">
+            <div class="d-box dim">Document</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">LLM<small>extracts income: 65,000 · EMI: 30,000 · years: 4</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Scorer</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Decision</div>
+          </div>
+          <p class="step-cap">One LLM call per document, prompted to return structured fields. Its output is checked (do the numbers parse? are they in sane ranges?) before anything downstream trusts it — that guards the hallucination failure mode.</p>
+        </div>
+        <div class="step" data-title="Scorer decides">
+          <h3>3. The deterministic model scores the fields</h3>
+          <div class="diagram">
+            <div class="d-box dim">Document</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">LLM</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Scorer<small>score = 570, reason codes attached</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Decision</div>
+          </div>
+          <p class="step-cap">The regulated step runs on the replayable animal: same fields in, same score out, with per-decision reason codes from the actual mechanism.</p>
+        </div>
+        <div class="step" data-title="Decision logged">
+          <h3>4. The decision lands with an audit trail</h3>
+          <div class="diagram">
+            <div class="d-box dim">Document</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">LLM</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Scorer</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Decision<small>logged, replayable, explainable</small></div>
+          </div>
+          <p class="step-cap">The extracted fields, the model version, the score, and the reasons are all stored. Replay next year reproduces the decision exactly — the audit test passes.</p>
+        </div>
+        <div class="step" data-title="LLM writes back">
+          <h3>5. The LLM turns the decision back into language</h3>
+          <div class="diagram">
+            <div class="d-box dim">Decision<small>score + reasons</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">LLM<small>drafts the customer letter from the reason codes</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Customer<small>a clear, polite, accurate letter</small></div>
+          </div>
+          <p class="step-cap">Language at the edges, determinism in the middle — the LLM reads on the way in and writes on the way out, while the decision itself stays deterministic, cheap, and explainable.</p>
+        </div>
+      </div>
+
+      <p>Now run the hybrid yourself. As in every runnable on this site, the LLM is a scripted stand-in — the pipeline shape is the real thing:</p>
+
+      <div class="pyrun" data-title="The hybrid pipeline: LLM reads, scorer decides — run me">
+<textarea class="py-src" spellcheck="false">
+# The hybrid: the LLM reads, the deterministic model decides.
+
+def fake_llm_extract(document):
+    # A real system would send the letter to an LLM with:
+    #   "Extract income, emi, years_at_job as JSON."
+    # We script the reply so this runs offline.
+    return {"income": 65000, "emi": 30000, "years_at_job": 4}
+
+def risk_score(fields):
+    score, reasons = 600, []
+    if fields["income"] &gt;= 40000:
+        score += 40
+    if fields["emi"] &gt; fields["income"] * 0.40:
+        score -= 120
+        reasons.append("EMI above 40 percent of income")
+    if fields["years_at_job"] &gt;= 3:
+        score += 50
+    if score &lt; 640:
+        reasons.append("score below approval threshold of 640")
+    return score, reasons
+
+letter = """Dear sir, I run a small printing shop.
+My monthly income is around 65,000 rupees and I pay an EMI
+of 30,000 on the delivery van. The shop has been running
+for 4 years now. Kindly consider my loan request."""
+
+fields = fake_llm_extract(letter)
+print("1. LLM read the letter and extracted:", fields)
+
+score, reasons = risk_score(fields)
+decision = "APPROVE" if score &gt;= 640 else "DECLINE"
+print("2. Deterministic model scored it:", score)
+print("3. Decision:", decision)
+for r in reasons:
+    print("   reason:", r)
+
+print()
+print("Replay this tomorrow: same fields, same score, same")
+print("decision, same reasons. The language step was one-off;")
+print("the decision step is reproducible and explainable --")
+print("which is exactly what an auditor wants to hear.")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Try lowering the extracted <code>emi</code> to 20000 and re-running: the score climbs, the reason codes change, the decision flips — and every step of that flip is visible and replayable. Then imagine the same request answered by a single LLM call: you would get a fluent verdict, a different one each run, and no ledger of why.</p></div>
+
+      <h2>How to say it in a meeting</h2>
+      <p>You will meet this confusion in real conference rooms, usually within a week of someone seeing an impressive demo. Here is language that holds up — accurate enough for the data science team, plain enough for everyone else.</p>
+
+      <div class="tbl"><table>
+        <tr><th>When someone says</th><th>You can say</th></tr>
+        <tr><td>"Why not just use the LLM for credit scoring?"</td><td>"Scoring is a repeated, regulated decision on structured data — we need the identical answer on replay and a reason code for every decision. That is the classical model's home turf. The LLM earns its keep reading the documents that feed the scorer."</td></tr>
+        <tr><td>"But the LLM got the demo case right."</td><td>"A demo is one run; production is millions of runs a night. Per decision the two differ by roughly a thousand times in cost and latency — let's price it per decision before we decide."</td></tr>
+        <tr><td>"Which model is more accurate?"</td><td>"They sit different exams. The scorer is graded on labelled history; the LLM is graded on extraction quality and hallucination rate. Let's measure each on its own exam instead of comparing across them."</td></tr>
+        <tr><td>"Can't we get the best of both?"</td><td>"Yes — that is the hybrid. The LLM reads the paperwork into clean fields; the deterministic model scores them and carries the audit trail. Language at the edges, determinism in the middle."</td></tr>
+      </table></div>
+
+      <p>And if you only get one sentence before the meeting moves on, spend it on the three sorting questions: <em>is the input numbers or language, is the decision repeated at scale, and who has to explain each decision afterwards?</em> Whoever asks those three questions out loud usually ends up owning the architecture discussion — because they are the questions both camps recognise as the real ones.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will see the two animals living side by side in a bank's repositories. The data science side has a <code>models/</code> folder of <code>.pkl</code> files, feature pipelines, and retraining notebooks; the platform side has a <code>prompts/</code> folder, an LLM gateway config, and merge requests saying "set temperature to 0 for the extraction step" or "add schema validation on the LLM output" — both of which you can now translate: taming nondeterminism, and guarding the hallucination failure mode. Listen for the word "model" in stand-ups too: to a data scientist it usually means the PKL; to the platform team it means the LLM endpoint. And when the risk office says "model governance", they mean the decades-old validation regime built for deterministic scorecards — which is precisely why putting an LLM in the regulated <em>deciding</em> seat, rather than the reading seat, sets off every alarm they have.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="a">
+          <p class="q-text">1. A regulator asks why one specific applicant was declined last March. Which setup answers cleanly?</p>
+          <div class="q-opts">
+            <button data-opt="a">A deterministic scorer — replay the stored inputs for the same score, plus per-decision reason codes</button>
+            <button data-opt="b">An LLM — ask it to explain its reasoning for that applicant</button>
+            <button data-opt="c">Either, as long as the logs were kept</button>
+          </div>
+          <p class="q-explain">The scorer's reasons come from its actual mechanism and its replay is exact. An LLM's "explanation" is generated the same way its answer was — plausible next tokens — so it is a narrative about the decision, not a trace of it.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Why can the same prompt to an LLM come back worded differently on two runs?</p>
+          <div class="q-opts">
+            <button data-opt="a">Network jitter corrupts some tokens in transit</button>
+            <button data-opt="b">The model remembers the first run and avoids repeating itself</button>
+            <button data-opt="c">The model samples its next token from a probability distribution, and temperature controls how adventurously</button>
+          </div>
+          <p class="q-explain">LLMs are stochastic by design: they predict probabilities for every possible next token and sample one. Temperature 0 tames this by always taking the likeliest token — but providers still do not guarantee bit-identical replay.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. The bank needs to re-score 10 million card transactions for fraud tonight. What is the deciding factor?</p>
+          <div class="q-opts">
+            <button data-opt="a">Accuracy — the LLM understands fraud narratives better</button>
+            <button data-opt="b">Cost and latency — at roughly a thousand times more per decision, LLM calls fail the overnight-batch test</button>
+            <button data-opt="c">Security — LLM calls cannot be encrypted</button>
+          </div>
+          <p class="q-explain">Structured inputs, massive repetition: a classical scorer does the batch in hours for pennies, while millions of metered, seconds-long LLM calls blow both the clock and the budget. The gap is arithmetic, not opinion.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. In the hybrid pattern, what is the correct division of labour?</p>
+          <div class="q-opts">
+            <button data-opt="a">The classical model reads the document; the LLM makes the final call</button>
+            <button data-opt="b">The LLM reads the document into structured fields; the deterministic model scores them and decides</button>
+            <button data-opt="c">Both models decide independently and the higher score wins</button>
+          </div>
+          <p class="q-explain">Language at the edges, determinism in the middle: the LLM does the one job classical ML never could — reading messy language — while the regulated, repeated, must-be-explainable decision stays on the replayable animal.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. "The classical model fails quietly; the LLM fails confidently." What does that mean for monitoring?</p>
+          <div class="q-opts">
+            <button data-opt="a">Only the classical model needs monitoring, since the LLM sounds fine</button>
+            <button data-opt="b">Both need the same dashboard of average accuracy</button>
+            <button data-opt="c">The scorer needs statistical drift dashboards; the LLM needs per-output verification against a source of truth</button>
+          </div>
+          <p class="q-explain">Drift shows up as shifting distributions and sliding accuracy — statistics catch it. A hallucination is a single fluent, confident, wrong output that looks exactly like a success, so it must be caught by checking the output itself before anything downstream trusts it.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>"Model" names two different animals: a deterministic function that scores structured numbers (XGBoost and friends, shipped as PKL files) and a stochastic next-token predictor of language (the LLM). Never let the shared word blur them.</li>
+          <li>Deterministic models replay exactly and emit per-decision reason codes from their real mechanism — which is why regulated, repeated decisions like credit and fraud stay on them.</li>
+          <li>LLMs sample: same prompt, different words. Temperature 0 tames the randomness but guarantees neither bit-identical replay nor explainability — an LLM's "why" is a plausible story, not an audit trail.</li>
+          <li>Per decision, the two animals differ by roughly a thousand times in cost and latency; the overnight-batch test kills most "just use the LLM for scoring" ideas on arithmetic alone.</li>
+          <li>They fail in opposite styles — classical models drift quietly and measurably, LLMs hallucinate fluently and confidently — so each needs its own kind of monitoring.</li>
+          <li>The winning production pattern is the hybrid: the LLM reads messy documents into clean fields and drafts the outgoing letter; the deterministic model scores and decides in between. Language at the edges, determinism in the middle.</li>
+          <li>In a meeting, sort any proposal with three questions: numbers or language? repeated at scale? who explains each decision later? Then you are ready for <a href="ch032-model-landscape.html">the model landscape</a>.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

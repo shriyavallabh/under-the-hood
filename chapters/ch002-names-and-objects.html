@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Variables: names stuck on objects — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch002">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act I · The Language</div>
+        <h1>Variables: names stuck on objects</h1>
+        <p class="ch-tagline">One picture — sticky notes stuck on boxes — and suddenly assignment, copying, and some of the strangest bug reports in Python all make perfect sense.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 2 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A shared storeroom in an office building. Cardboard boxes on steel shelves, and a pad of sticky notes by the door. The facilities manager packs fairy lights and lanterns into a box and slaps a note on it: <strong>FESTIVE</strong>. A month later the events team needs supplies for a party. They find the same box, decide it is exactly what they need, and stick their own note next to the first one: <strong>PARTY-KIT</strong>. They take the fairy lights out, use them, lose half of them, and drop a packet of balloons in.</p>
+        <p>Come the festival, the facilities manager pulls down the box labelled FESTIVE and finds balloons where his lights should be. He is furious: "Nobody touched my box!" And he is right — nobody touched <em>his note</em>. But there was never a "his" box. There was one box, two notes, and a change made through either note shows up under both. Hold that storeroom in your head. It is, honestly, the whole chapter.</p>
+      </section>
+
+      <h2>A name is a sticky note, not a box</h2>
+      <p>In <a href="ch001-why-python-looks-like-that.html">the previous chapter</a> you learned to read Python's shape — indentation shows structure, colons open blocks. Now the first sentence of <em>meaning</em>: what the humble <code>=</code> actually does.</p>
+      <p>Most people arrive with a picture from school or from other languages: a variable is a little box with a name engraved on the side, and assignment pours a value into it. In Python that picture is wrong, and the wrongness costs real money in production bugs. Here is the true picture. An <dfn>object</dfn> is a value living in memory — a number, a piece of text, a list — think of it as a box sitting on Python's shelf. A <dfn>name</dfn> (what people casually call a variable) is just a sticky note. And an assignment like <code>x = 5</code> is a two-step act called <dfn>binding</dfn>: first Python builds or finds the object on the right-hand side, <em>then</em> it sticks the note <code>x</code> onto that box. The note goes on the box; nothing is ever poured into anything.</p>
+      <p>Three consequences fall straight out of the sticky-note picture, and each one will earn its keep before this page is done:</p>
+      <ul>
+        <li><strong>Notes are free and boxes are real.</strong> You can stick as many notes on one box as you like. Two names, one object — our storeroom exactly.</li>
+        <li><strong>The note has no type; the box does.</strong> That is why the same name can label a number this line and a list the next. Python does not mind; the note simply moved.</li>
+        <li><strong>Reading a variable means following its note.</strong> When you write <code>print(x)</code>, Python walks to whatever box <code>x</code> is currently stuck on and looks inside. The note itself holds nothing.</li>
+      </ul>
+      <p>Watch the storeroom disaster happen in slow motion, in code. Step through it — the highlight follows the action:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Build the box">
+          <h3>1. <code>a = ["idli", "dosa"]</code> — box first, note second</h3>
+          <div class="diagram">
+            <div class="d-box hot">a<small>sticky note</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">list object<small>["idli", "dosa"]</small></div>
+          </div>
+          <p class="step-cap">Python evaluates the right-hand side first: it builds a brand-new list object — a real box in memory holding two strings. Only then does it stick the note <code>a</code> on that box.</p>
+        </div>
+        <div class="step" data-title="Copy the note">
+          <h3>2. <code>b = a</code> — a second note on the same box</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">a<small>note</small></div>
+              <div class="d-box hot">b<small>new note</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">list object<small>["idli", "dosa"]</small></div>
+          </div>
+          <p class="step-cap">The right-hand side is just "whatever box <code>a</code> is stuck on". No new box is built, nothing is copied. Python writes a fresh note reading <code>b</code> and sticks it on the one existing list. Storeroom status: FESTIVE and PARTY-KIT, side by side.</p>
+        </div>
+        <div class="step" data-title="Open the box">
+          <h3>3. <code>b.append("vada")</code> — the box itself changes</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">a</div>
+              <div class="d-box dim">b</div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">list object<small>["idli", "dosa", "vada"]</small></div>
+          </div>
+          <p class="step-cap">The events team opens the box. <code>.append</code> does not touch any note — it reaches through <code>b</code>'s note, opens the box, and puts a third item inside. Both notes are still stuck on it.</p>
+        </div>
+        <div class="step" data-title="The surprise">
+          <h3>4. <code>print(a)</code> — the "untouched" name has changed</h3>
+          <div class="diagram">
+            <div class="d-box hot">a<small>follow the note...</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">list object<small>["idli", "dosa", "vada"]</small></div>
+          </div>
+          <p class="step-cap">Reading <code>a</code> means following <code>a</code>'s note — which leads to the same, now-modified box. It prints all three items. Nothing ever happened <em>to</em> <code>a</code>; something happened to the box both names share.</p>
+        </div>
+        <div class="step" data-title="Move the note">
+          <h3>5. <code>b = ["pav bhaji"]</code> — only the note moves</h3>
+          <div class="diagram">
+            <div class="d-box">a</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">old list<small>["idli", "dosa", "vada"]</small></div>
+            <div class="d-box hot">b</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">new list<small>["pav bhaji"]</small></div>
+          </div>
+          <p class="step-cap">Assignment again — so Python builds the new box first, then peels <code>b</code>'s note off the old box and sticks it on the new one. <code>a</code> is completely unaffected. The two names have gone their separate ways.</p>
+        </div>
+      </div>
+
+      <h2>Assignment moves notes; mutation opens boxes</h2>
+      <p>Steps 3 and 5 above are the two fundamentally different kinds of change in Python, and telling them apart is the skill this chapter exists to give you.</p>
+      <p><dfn>Rebinding</dfn> is what plain assignment does: <code>x = something</code> peels the note <code>x</code> off whatever it was stuck on and sticks it on a new box. The old box is untouched — and if no notes remain on it at all, Python's housekeeping quietly discards it (that cleanup is called garbage collection, and you get it for free). <dfn>Mutation</dfn> is changing the contents of an existing box: <code>orders.append("chai")</code>, <code>config["retries"] = 3</code>, <code>team.remove("intern")</code>. No note moves; the box changes — and <em>every</em> name stuck on that box sees the new contents instantly.</p>
+      <p>Happily, the syntax usually tells you which is which. A bare name on the left of <code>=</code> is rebinding. A dot-method that changes something, or square brackets on the left of <code>=</code>, is mutation — you are reaching through a note into a box.</p>
+      <p>There is one more twist: some boxes are factory-sealed. An <dfn>immutable</dfn> object is one that cannot be changed after it is built — there is no way to open the box, ever. A <dfn>mutable</dfn> object can be opened and modified freely.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Sealed boxes (immutable)</th><th>Openable boxes (mutable)</th></tr>
+        <tr><td><code>int</code>, <code>float</code>, <code>bool</code></td><td><code>list</code></td></tr>
+        <tr><td><code>str</code> (text)</td><td><code>dict</code> (key-value maps)</td></tr>
+        <tr><td><code>tuple</code></td><td><code>set</code></td></tr>
+        <tr><td><code>None</code></td><td>most objects you define yourself</td></tr>
+      </table></div>
+
+      <p>This is why <code>x = x + 1</code> never surprises anyone: integers are sealed, so "adding one" can only mean building a <em>new</em> box holding the result and moving <code>x</code>'s note to it. Whoever else had a note on the old <code>5</code> still sees <code>5</code>. Strings work the same way — every "change" to text quietly builds new text, which matters enormously for prompt-building and is where <a href="ch003-strings-and-fstrings.html">the next chapter</a> picks up. All the drama in this chapter comes from the openable column: lists, dicts, and sets are the boxes that can change under your feet.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Two lines that look like twins behave differently on lists: <code>x = x + [4]</code> builds a brand-new list and moves the note, while <code>x += [4]</code> opens the existing box and extends it in place. If <code>x</code> was the only note on the box, you cannot tell the difference. If the box was shared, one of these changes what your colleagues see and the other does not. When it matters, say what you mean explicitly.</p></div>
+
+      <h2>Two notes, one box: why <code>b = a</code> then <code>b.append()</code> surprises people</h2>
+      <p>Now you can name the storeroom incident precisely. When two names are stuck on the same box, each is an <dfn>alias</dfn> of the other — alternative names for one object. And the single most-reported "bug" in beginner Python is aliasing working exactly as designed:</p>
+
+      <div class="code-title">the classic surprise</div>
+      <pre><code class="language-python">a = ["idli", "dosa"]
+b = a              # feels like "make me a copy"...
+b.append("vada")   # ...but this opens the ONE shared box
+print(a)           # ['idli', 'dosa', 'vada']  -- "who changed a?!"</code></pre>
+
+      <p>Nobody changed <code>a</code>. <code>a</code> is a sticky note; notes do not have contents. The <em>box</em> changed, and <code>a</code> happens to be stuck on it. The line that misleads people is <code>b = a</code>, because in everyday English "b equals a" sounds like duplication. In Python it is never duplication — assignment copies notes, full stop. Why was the language designed this way? Because boxes can be enormous — a list of a million log lines, a dict holding an entire model configuration — and silently duplicating them on every <code>=</code> would be slow and wasteful. Python refuses to guess. Notes are free; copies are something you must ask for by name:</p>
+
+      <div class="code-title">asking for a real copy</div>
+      <pre><code class="language-python">b = a.copy()      # a new box with the same contents
+b = list(a)       # same thing, different spelling
+b = a[:]          # same thing again, older spelling</code></pre>
+
+      <p>One honest caveat: these are <em>shallow</em> copies — Python builds a new outer box and puts notes to the same inner objects inside it. Copy a list of dicts this way and the list is yours, but the dicts inside are still shared. When you need the whole nested structure duplicated, boxes all the way down, the standard library has <code>copy.deepcopy()</code>.</p>
+      <p>Aliasing also hides in a place people rarely think to look: function calls. When you call <code>process(orders)</code>, Python does not ship a copy of your list into the function — it sticks the function's parameter name onto <em>your box</em>. If the function mutates it, your data changes. Sometimes that is the entire point: in <a href="ch045-react-loop-by-hand.html">the agent loop you will build later</a>, <code>history.append(reply)</code> deliberately mutates one shared transcript that the whole run keeps re-reading. Deliberate sharing is a feature. Accidental sharing is a bug report.</p>
+
+      <h2><code>is</code> vs <code>==</code>: same contents, or same box?</h2>
+      <p>Once you know one box can wear many notes, an obvious question follows: given two names, how do you find out whether you are looking at one box or two? Python gives you two different questions to ask, and they are not the same question.</p>
+      <p><code>==</code> asks: <em>do these boxes hold equal contents?</em> Two separate shopping lists that both read "milk, bread" are equal. <code>is</code> asks: <em>are these literally the same box?</em> — the same object, the same shelf position. That sameness is called <dfn>identity</dfn>, and Python exposes it through <dfn><code>id()</code></dfn>, a built-in that returns the box's serial number: a number guaranteed unique to that object for as long as it lives. (In CPython, the standard interpreter, the serial happens to be a memory address — but treat it as an opaque serial. All that matters is: same id, same box.) <code>a is b</code> is simply shorthand for "do <code>a</code> and <code>b</code> have the same serial?"</p>
+      <p>The professional rule of thumb is short: use <code>==</code> for comparing values, and reserve <code>is</code> for one job — checking for <code>None</code>, as in <code>if response is None:</code>. There is exactly one <code>None</code> box in the whole program, so identity is the correct and idiomatic test for it.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Never use <code>is</code> to compare numbers or strings. As a speed trick, Python pre-builds one shared box for each small integer (-5 through 256) and reuses it everywhere, so <code>is</code> happens to say True for some numbers and False for others depending on size and how they were made. Code that relies on this passes tests with small values and fails mysteriously with big ones. <code>==</code> is what you mean.</p></div>
+
+      <p>Time to stop taking my word for things. The lab below runs every claim of the chapter — serial numbers, aliasing, rebinding, real copies, and the <code>is</code>/<code>==</code> split. Press <strong>Run</strong>, read the output against the comments, then break it: predict each line before you run.</p>
+
+      <div class="pyrun" data-title="The identity lab — every box has a serial number">
+<textarea class="py-src" spellcheck="false">
+# --- Two notes, one box ------------------------------------
+a = ["idli", "dosa"]
+b = a                        # copies the NOTE, not the box
+
+print("id(a):", id(a))
+print("id(b):", id(b))
+print("same box?      ", a is b)     # identity
+print("equal contents?", a == b)     # equality
+
+# --- Mutation: open the shared box through EITHER note -----
+b.append("vada")
+print("a is now:", a)
+
+# --- Rebinding: peel b's note off, stick it on a NEW box ---
+b = ["pav bhaji"]
+print("same box now?", a is b)
+print("a:", a, "| b:", b)
+
+# --- A real copy: a second box with the same contents ------
+c = a.copy()
+c.append("misal")
+print("a:", a, "| c:", c)
+
+# --- Equal but not identical: two boxes, same contents -----
+x = int("500")
+y = int("500")
+print("x == y?", x == y, "| x is y?", x is y)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Experiments worth running: change <code>b = a</code> to <code>b = a.copy()</code> and watch the surprise vanish. Replace <code>int("500")</code> with <code>int("5")</code> and see the small-integer trick make <code>is</code> say True. Add <code>d = a</code> right after the first line and check <code>id(d)</code> — three notes, one serial.</p></div>
+
+      <p>Before the main event, pin the vocabulary. Flip each card until the back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">name</span><span class="flip-back">A sticky note. It labels an object but contains nothing and has no type of its own.</span></button>
+        <button class="flip" type="button"><span class="flip-front">object</span><span class="flip-back">The box — an actual value living in memory, with a type and contents. It exists whether or not any note is stuck on it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">binding</span><span class="flip-back">Sticking a note on a box. What every assignment does: build or find the object first, attach the name second.</span></button>
+        <button class="flip" type="button"><span class="flip-front">rebinding</span><span class="flip-back">Peeling a note off one box and sticking it on another. Plain assignment to an existing name. The old box is untouched.</span></button>
+        <button class="flip" type="button"><span class="flip-front">mutation</span><span class="flip-back">Opening a box and changing its contents — append, remove, key assignment. Every name on that box sees the change.</span></button>
+        <button class="flip" type="button"><span class="flip-front">alias</span><span class="flip-back">A second (or third...) name stuck on the same object. Cheap, useful, and the source of the classic b = a surprise.</span></button>
+        <button class="flip" type="button"><span class="flip-front">id()</span><span class="flip-back">The box's serial number — unique while the object lives. a is b just compares serials.</span></button>
+        <button class="flip" type="button"><span class="flip-front">is vs ==</span><span class="flip-back">is asks "same box?"; == asks "equal contents?". Use == for values; reserve is for None.</span></button>
+      </div>
+
+      <h2>The bug you will actually meet</h2>
+      <p>Here is the shape this chapter takes when it costs someone an afternoon. A module keeps a default list of tools; a factory function builds agents; and one innocent-looking line quietly welds every agent — and the default itself — to a single shared box. Read it like a reviewer would: click each annotated line and make sure the note matches what you now know.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">agent_setup.py — spot the shared box</div>
+        <div class="wl-line"><code>DEFAULT_TOOLS = ["calculator"]</code>
+          <div class="wl-note">A module-level list: ONE box, built once when the file loads. Every part of the program that touches this name is touching the same box.</div></div>
+        <div class="wl-line"><code>def make_agent(name, tools=None):</code>
+          <div class="wl-note">A factory that builds an agent. Callers may pass their own tool list; if they do not, we fall back to the defaults. So far, reasonable.</div></div>
+        <div class="wl-line"><code>    if tools is None:</code>
+          <div class="wl-note">The one blessed use of <code>is</code> — there is a single None box in the whole program, so identity is the right test for "the caller gave us nothing".</div></div>
+        <div class="wl-line"><code>        tools = DEFAULT_TOOLS</code>
+          <div class="wl-note">THE BUG. This reads as "give me my own set of defaults", but it only sticks the local note <code>tools</code> onto the one shared box. No copy exists anywhere. The fix is to ask for one: <code>tools = list(DEFAULT_TOOLS)</code>.</div></div>
+        <div class="wl-line"><code>    tools.append("web_search")</code>
+          <div class="wl-note">Mutation — opens whatever box <code>tools</code> is stuck on. When the bug line ran, that box IS <code>DEFAULT_TOOLS</code>. The first call pollutes the module's defaults; every later call inherits the leftovers and adds more.</div></div>
+        <div class="wl-line"><code>    return {"name": name, "tools": tools}</code>
+          <div class="wl-note">The returned dict carries yet another note to the same box. After two calls there are notes everywhere — <code>DEFAULT_TOOLS</code>, both agents' <code>"tools"</code> entries — all stuck on one list.</div></div>
+        <div class="wl-line"><code>support = make_agent("support-bot")</code>
+          <div class="wl-note">Looks fine afterwards: tools are <code>['calculator', 'web_search']</code>. The damage is invisible — the defaults box now contains the extra tool.</div></div>
+        <div class="wl-line"><code>billing = make_agent("billing-bot")</code>
+          <div class="wl-note">The second victim starts from the polluted box and appends again: <code>['calculator', 'web_search', 'web_search']</code>. Worse — because it is one box, <code>support</code>'s tools silently changed too. By agent fifty, the list is absurd.</div></div>
+      </div>
+
+      <p>Run it and watch the pollution spread — then apply the one-word fix and run it again:</p>
+
+      <div class="pyrun" data-title="One shared box poisons every agent — run, then fix">
+<textarea class="py-src" spellcheck="false">
+DEFAULT_TOOLS = ["calculator"]
+
+def make_agent(name, tools=None):
+    if tools is None:
+        tools = DEFAULT_TOOLS       # BUG: note copied, box shared
+    tools.append("web_search")
+    return {"name": name, "tools": tools}
+
+support = make_agent("support-bot")
+billing = make_agent("billing-bot")
+
+print("support tools:", support["tools"])
+print("billing tools:", billing["tools"])
+print("DEFAULT_TOOLS:", DEFAULT_TOOLS)
+print("all one box?  ", support["tools"] is DEFAULT_TOOLS)
+
+# THE FIX: change the bug line to
+#     tools = list(DEFAULT_TOOLS)
+# then press Run again. Each agent gets its own box,
+# and DEFAULT_TOOLS stays clean forever.
+</textarea>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>A close cousin of this bug is writing the default straight into the signature: <code>def make_agent(name, tools=[])</code>. That single list box is built once, when the function is defined, and then shared by every call that omits the argument. Linters flag it as the "mutable default argument" trap, and the standard cure is exactly the pattern above: default to <code>None</code>, then build a fresh box inside the function.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Once you see sticky notes, you see them everywhere. Code reviews are sprinkled with <code>list(items)</code>, <code>dict(config)</code>, <code>.copy()</code>, and <code>copy.deepcopy(state)</code> — all of it is note-versus-box management, someone deliberately paying for a new box so a caller's data cannot change under them. Linters ship a dedicated rule for the mutable-default trap you just fixed. Agent frameworks care deeply too: LangGraph's state updates work by <em>returning new values</em> for the graph to merge rather than mutating shared state in place, precisely so that checkpointing and replay stay trustworthy. And when a teammate reports "my prompt template changed between runs and nobody edited the file" — you now know the first question to ask: how many notes are stuck on that box?</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. You run <code>a = ["invoice.pdf"]</code>, then <code>b = a</code>, then <code>b.append("receipt.pdf")</code>. What does <code>a</code> hold now?</p>
+          <div class="q-opts">
+            <button data-opt="a">["invoice.pdf"] — b got its own copy at assignment</button>
+            <button data-opt="b">Nothing — the list was moved from a to b</button>
+            <button data-opt="c">["invoice.pdf", "receipt.pdf"] — a and b are two notes on one box</button>
+          </div>
+          <p class="q-explain"><code>b = a</code> copies the note, never the box. The append opened the single shared list, and both names see the new contents.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Which line changes an existing object, rather than moving a name to a (possibly new) object?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>x = 10</code></button>
+            <button data-opt="b"><code>orders.append("chai")</code></button>
+            <button data-opt="c"><code>x = x + 1</code></button>
+          </div>
+          <p class="q-explain">Both assignments are rebinding — they stick the note <code>x</code> on a box. Only <code>.append</code> is mutation: it opens the box <code>orders</code> is stuck on and changes its contents for every alias.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. <code>a == b</code> is True but <code>a is b</code> is False. What do you know for certain?</p>
+          <div class="q-opts">
+            <button data-opt="a">Two different boxes holding equal contents</button>
+            <button data-opt="b">One box — so a change through a will show through b</button>
+            <button data-opt="c">Nothing — that combination is impossible</button>
+          </div>
+          <p class="q-explain"><code>==</code> compares contents; <code>is</code> compares identity (the serial from <code>id()</code>). Equal-but-not-identical means two separate boxes that happen to hold matching values — mutate one and the other stays put.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. You want <code>team_b</code> to start with the same members as <code>team_a</code> but grow independently from now on. Which line is right?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>team_b = team_a</code></button>
+            <button data-opt="b"><code>team_b is team_a</code></button>
+            <button data-opt="c"><code>team_b = team_a.copy()</code></button>
+          </div>
+          <p class="q-explain">Copies must be asked for by name: <code>.copy()</code> (or <code>list(team_a)</code>) builds a new box with the same contents. Plain assignment would alias, and option b is a question, not an action — it just returns True or False.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. A colleague's function is <code>def add_tool(tools): tools.append("search")</code> and you call it with your own list. After the call, your list...</p>
+          <div class="q-opts">
+            <button data-opt="a">is unchanged — functions receive copies of their arguments</button>
+            <button data-opt="b">now contains "search" — the parameter was a new note on your box</button>
+            <button data-opt="c">is unchanged, but only because strings are immutable</button>
+          </div>
+          <p class="q-explain">Calling a function binds the parameter name to the very object you passed — no copy is made. The function opened your box. Deliberate sharing like this powers agent history lists; accidental sharing powers bug reports.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A variable is a sticky note on an object, never a container. Assignment builds or finds the box first, then attaches the name — nothing is ever poured into anything.</li>
+          <li><code>b = a</code> copies the note, not the box. Two names, one object — and any mutation through either name is visible through both.</li>
+          <li>Rebinding (<code>x = ...</code>) moves a note; mutation (<code>.append</code>, key assignment) opens a box. Immutable objects (int, str, tuple) are sealed boxes and never surprise you; lists, dicts, and sets are where aliasing bites.</li>
+          <li><code>==</code> asks "equal contents?"; <code>is</code> asks "same box?" (same <code>id()</code> serial). Reserve <code>is</code> for <code>None</code> — never for numbers or strings.</li>
+          <li>Copies must be requested explicitly: <code>a.copy()</code>, <code>list(a)</code>, or <code>copy.deepcopy()</code> for nested structures. Function arguments are notes on your boxes, so functions can mutate what you pass them.</li>
+          <li>When data "changes by itself" in any Python system — an agent's tool list, a prompt template, a config dict — the first suspect is always two notes on one box.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

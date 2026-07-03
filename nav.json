@@ -1,0 +1,230 @@
+{
+  "site": {
+    "title": "Under the Hood",
+    "subtitle": "From agent operator to agent engineer",
+    "promise": "Read any Python, YAML, or agent-framework code without it feeling foreign — and know exactly how the machines you already drive are built."
+  },
+  "acts": [
+    {
+      "id": "act1",
+      "num": "I",
+      "title": "The Language",
+      "theme": "Python, read fluently — the alphabet of everything that follows",
+      "chapters": [
+        { "id": "ch001", "slug": "ch001-why-python-looks-like-that.html", "title": "Why Python looks the way it does", "tagline": "Indentation, colons, and no semicolons — the design choices that make Python readable, and how to see structure at a glance", "minutes": 20 },
+        { "id": "ch002", "slug": "ch002-names-and-objects.html", "title": "Variables: names stuck on objects", "tagline": "The one mental model (sticky notes on boxes) that explains assignment, mutation, and half the bugs you'll ever read about", "minutes": 25 },
+        { "id": "ch003", "slug": "ch003-strings-and-fstrings.html", "title": "Strings and f-strings", "tagline": "Text is the raw material of LLM work — slicing, methods, and the f\"...\" syntax you'll see in every prompt template", "minutes": 25 },
+        { "id": "ch004", "slug": "ch004-collections.html", "title": "The four containers", "tagline": "Lists, dicts, tuples, sets — what each is for, and why agent code is basically dicts all the way down", "minutes": 30 },
+        { "id": "ch005", "slug": "ch005-yaml-and-json.html", "title": "YAML and JSON: dicts in costume", "tagline": "You just learned lists and dicts — every config file you've ever squinted at is exactly that, in different clothes", "minutes": 30 },
+        { "id": "ch006", "slug": "ch006-control-flow.html", "title": "Control flow: if, for, while", "tagline": "The three ways a program makes decisions and repeats itself — traced visually, step by step", "minutes": 25 },
+        { "id": "ch007", "slug": "ch007-functions.html", "title": "Functions: reading any signature", "tagline": "def, arguments, defaults, *args and **kwargs — after this, no function definition will ever look foreign", "minutes": 30 },
+        { "id": "ch008", "slug": "ch008-comprehensions.html", "title": "Comprehensions: loops folded flat", "tagline": "[x for x in ...] — the one-line loop that makes framework code look cryptic, unfolded until it reads like English", "minutes": 25 },
+        { "id": "ch009", "slug": "ch009-errors-and-tracebacks.html", "title": "Errors, exceptions, and tracebacks", "tagline": "Read a 40-line traceback calmly, bottom-up, and know exactly where to look — the superpower of every debugging session", "minutes": 25 },
+        { "id": "ch010", "slug": "ch010-reading-real-code-1.html", "title": "Reading real code: your first AI script", "tagline": "A 20-line script that calls an LLM API — and you can already read every line of it. Proof this is working", "minutes": 30 }
+      ]
+    },
+    {
+      "id": "act2",
+      "num": "II",
+      "title": "The Engineering Layer",
+      "theme": "How real Python projects fit together — files, classes, and the machinery frameworks are built on",
+      "chapters": [
+        { "id": "ch011", "slug": "ch011-imports-and-modules.html", "title": "What import actually does", "tagline": "Modules, packages, __init__.py, sys.path — demystifying the lines at the top of every file", "minutes": 30 },
+        { "id": "ch012", "slug": "ch012-why-so-many-files.html", "title": "Why so many files?", "tagline": "Project layout, packages, and how files interlink — why engineers split code up, and how to navigate any repo's folder tree", "minutes": 30 },
+        { "id": "ch013", "slug": "ch013-classes-and-oop.html", "title": "Classes: objects with a job", "tagline": "class, __init__, self, methods vs functions — the object-oriented core you need to read any framework", "minutes": 30 },
+        { "id": "ch014", "slug": "ch014-dunders-object-protocol.html", "title": "Dunders: Python's secret handshakes", "tagline": "__repr__, __call__, __enter__ — the double-underscore methods that make framework code look like magic, decoded", "minutes": 25 },
+        { "id": "ch015", "slug": "ch015-inheritance-and-composition.html", "title": "Inheritance, composition, and framework style", "tagline": "Why LangChain code says class MyAgent(BaseAgent) — and how to read a class hierarchy without drowning", "minutes": 30 },
+        { "id": "ch016", "slug": "ch016-type-hints-and-pydantic.html", "title": "Type hints and Pydantic", "tagline": "Reading def f(x: list[str]) -> dict fluently, and the BaseModel classes that define every agent's state and tool schemas", "minutes": 30 },
+        { "id": "ch017", "slug": "ch017-decorators.html", "title": "Decorators: what the @ really does", "tagline": "@tool, @app.route, @dataclass — the wrapper pattern behind the most common line in agent code", "minutes": 30 },
+        { "id": "ch018", "slug": "ch018-context-managers.html", "title": "Context managers: the with block", "tagline": "Files, database sessions, API clients — why 'with' means 'borrow it, then put it back', guaranteed", "minutes": 20 },
+        { "id": "ch019", "slug": "ch019-logging-config-env.html", "title": "Logging, config, and env vars", "tagline": "The plumbing half of every merge request — loggers, settings files, .env, and secrets referenced by name", "minutes": 30 },
+        { "id": "ch020", "slug": "ch020-environments-and-packaging.html", "title": "Environments, pip, and pyproject.toml", "tagline": "venvs, requirements.txt, uv, lock files — why 'it works on my machine' happens and how teams prevent it", "minutes": 25 },
+        { "id": "ch021", "slug": "ch021-just-enough-git.html", "title": "Just enough git to explore", "tagline": "clone, pull, log, and reading a diff — the four moves you need to walk into any repository today (the full git story comes in Act XII)", "minutes": 25 },
+        { "id": "ch022", "slug": "ch022-reading-real-code-2.html", "title": "Reading real code: a full package tour", "tagline": "Walk a real multi-file package end to end — imports, classes, config, and its tests — and feel the layout click into place", "minutes": 35 }
+      ]
+    },
+    {
+      "id": "act3",
+      "num": "III",
+      "title": "The Data Scientist's World",
+      "theme": "pandas, PKL files, transformers — what your colleagues mean by 'model', and how LLMs are different",
+      "chapters": [
+        { "id": "ch023", "slug": "ch023-pandas-numpy-notebooks.html", "title": "DataFrames and notebooks", "tagline": "pandas, numpy, and Jupyter — the data scientist's native tongue, and the .loc/groupby/merge idioms in every DS merge request", "minutes": 35 },
+        { "id": "ch024", "slug": "ch024-what-is-a-model.html", "title": "What a model actually is", "tagline": "A function fitted to data — the single idea underneath every model your colleagues ship, from credit scoring to ChatGPT", "minutes": 25 },
+        { "id": "ch025", "slug": "ch025-classical-ml.html", "title": "The classical toolkit: sklearn and friends", "tagline": "fit(), predict(), features, training — the product-prediction models banks run every day, in plain terms", "minutes": 30 },
+        { "id": "ch026", "slug": "ch026-pkl-files.html", "title": "PKL files: models in a jar", "tagline": "What pickling is, why trained models ship as .pkl files, how they're loaded — and why you never unpickle a stranger's file", "minutes": 25 },
+        { "id": "ch027", "slug": "ch027-ds-vocabulary.html", "title": "Speaking data scientist", "tagline": "Train/test splits, overfitting, precision vs recall, drift — the vocabulary that earns you a seat in any model review", "minutes": 30 },
+        { "id": "ch028", "slug": "ch028-why-text-broke-ml.html", "title": "Why text broke classical ML", "tagline": "Spreadsheets were easy; language wasn't — the decade-long struggle that set the stage for transformers", "minutes": 25 },
+        { "id": "ch029", "slug": "ch029-transformers-plainly.html", "title": "Transformers, in plain terms", "tagline": "Attention, next-token prediction, and why 'it just predicts the next word' both is and isn't the whole story", "minutes": 35 },
+        { "id": "ch030", "slug": "ch030-tokens-embeddings-context.html", "title": "Tokens, embeddings, and context windows", "tagline": "The physics of LLMs — what a token costs, what an embedding means, and why context windows rule everything around you", "minutes": 30 },
+        { "id": "ch031", "slug": "ch031-llms-vs-deterministic.html", "title": "LLMs vs deterministic models", "tagline": "Same word 'model', totally different animals — when a bank should use which, and how to say so in a meeting", "minutes": 25 },
+        { "id": "ch032", "slug": "ch032-model-landscape.html", "title": "The model landscape", "tagline": "GPT, Claude, Gemini, Llama, open vs closed weights, small vs frontier — a working map of who makes what", "minutes": 25 },
+        { "id": "ch117", "slug": "ch117-fine-tuning.html", "title": "Fine-tuning: when to train, when to just prompt", "tagline": "Epochs, learning rates, LoRA, VRAM budgets — what fine-tuning really involves, and the honest decision ladder for when it is worth it", "minutes": 35 }
+      ]
+    },
+    {
+      "id": "act4",
+      "num": "IV",
+      "title": "Talking to the Model",
+      "theme": "LLM APIs — messages, tool calls, streaming, RAG: the wire format every framework wraps",
+      "chapters": [
+        { "id": "ch033", "slug": "ch033-first-api-call.html", "title": "Your first API call", "tagline": "Messages, roles, system prompts — the request/response shape that every agent framework is secretly built on", "minutes": 30 },
+        { "id": "ch034", "slug": "ch034-sampling-params.html", "title": "Temperature and friends", "tagline": "temperature, top_p, max_tokens, stop — what the knobs actually do to the next-token dice roll", "minutes": 20 },
+        { "id": "ch035", "slug": "ch035-tool-calling.html", "title": "Tool calling: the trick under every agent", "tagline": "How a text-predicting model 'calls a function' — the JSON handshake that makes agents possible at all", "minutes": 35 },
+        { "id": "ch036", "slug": "ch036-structured-output.html", "title": "Structured output", "tagline": "JSON schemas and Pydantic models as contracts — making a creative model fill in a form, reliably (Pydantic from ch016, back on stage)", "minutes": 25 },
+        { "id": "ch037", "slug": "ch037-prompting-that-matters.html", "title": "Prompt engineering that matters", "tagline": "Instructions, examples, context placement — the 20% of prompting craft that does 90% of the work", "minutes": 25 },
+        { "id": "ch038", "slug": "ch038-generators-and-yield.html", "title": "Generators and yield", "tagline": "How data flows piece-by-piece — the Python mechanism you need before streaming makes sense", "minutes": 25 },
+        { "id": "ch039", "slug": "ch039-async-await.html", "title": "Async: why agent code says await", "tagline": "The restaurant-kitchen model of async/await and the event loop — reading async code without fear", "minutes": 35 },
+        { "id": "ch040", "slug": "ch040-streaming-responses.html", "title": "Streaming responses", "tagline": "Server-sent events, chunk by chunk — yield and await from the last two chapters power the typing effect in every chat UI", "minutes": 25 },
+        { "id": "ch041", "slug": "ch041-tokens-and-cost.html", "title": "The meter is always running", "tagline": "Token economics — input vs output pricing, caching, and how a harmless-looking loop becomes a bill", "minutes": 20 },
+        { "id": "ch042", "slug": "ch042-rag.html", "title": "RAG: retrieval-augmented generation", "tagline": "Embeddings, vector stores, retrieval, grounded answers — the pattern behind nearly every enterprise chatbot, end to end", "minutes": 35 },
+        { "id": "ch043", "slug": "ch043-reading-real-code-4.html", "title": "Reading real code: a tiny chat CLI", "tagline": "A complete little chat app — API calls, streaming, history — read end to end. Act IV, integrated", "minutes": 30 }
+      ]
+    },
+    {
+      "id": "act5",
+      "num": "V",
+      "title": "Agents From Scratch",
+      "theme": "Build the loop yourself — once you've hand-rolled an agent, no framework can intimidate you",
+      "chapters": [
+        { "id": "ch044", "slug": "ch044-what-is-an-agent.html", "title": "What is an agent, actually?", "tagline": "LLM + tools + a loop. That's it. Everything else is packaging — and now you'll prove it to yourself", "minutes": 25 },
+        { "id": "ch045", "slug": "ch045-react-loop-by-hand.html", "title": "Build a ReAct loop by hand", "tagline": "Fifty lines of Python, running live in your browser — the same loop inside Claude Code, LangChain, and every harness", "minutes": 40 },
+        { "id": "ch046", "slug": "ch046-tools.html", "title": "Tools: giving the model hands", "tagline": "Writing a tool, describing it well, executing it safely — and why tool descriptions are the real prompt engineering", "minutes": 30 },
+        { "id": "ch047", "slug": "ch047-memory-and-context.html", "title": "Memory and the context problem", "tagline": "Conversation history is the agent's entire world — what happens when it fills up, and the tricks every harness uses", "minutes": 30 },
+        { "id": "ch048", "slug": "ch048-failure-modes.html", "title": "How agents fail", "tagline": "Infinite loops, hallucinated tools, runaway costs, prompt injection — the rogues' gallery every operator already suspects", "minutes": 25 },
+        { "id": "ch049", "slug": "ch049-building-effective-agents.html", "title": "Anthropic's playbook: workflows vs agents", "tagline": "The five workflow patterns and the golden rule — find the simplest thing that works. The most-cited agent essay, decoded", "minutes": 30 },
+        { "id": "ch050", "slug": "ch050-reading-real-code-5.html", "title": "Reading real code: an annotated agent", "tagline": "A complete hand-rolled agent with tools and memory, read top to bottom — your Act V victory lap", "minutes": 35 }
+      ]
+    },
+    {
+      "id": "act6",
+      "num": "VI",
+      "title": "LangChain",
+      "theme": "The framework — what it wraps, what it adds, and how to read its code without getting lost",
+      "chapters": [
+        { "id": "ch051", "slug": "ch051-langchain-ecosystem-map.html", "title": "The LangChain ecosystem map", "tagline": "langchain-core, integrations, LangGraph, LangSmith — one map of the empire so you always know which layer you're reading", "minutes": 25 },
+        { "id": "ch052", "slug": "ch052-messages-and-models.html", "title": "Messages and chat models", "tagline": "HumanMessage, AIMessage, ToolMessage, init_chat_model — LangChain's vocabulary for what you already know from Act IV", "minutes": 25 },
+        { "id": "ch053", "slug": "ch053-langchain-tools.html", "title": "Tools and the @tool decorator", "tagline": "How a plain Python function becomes a schema the model can call — decorators from ch017, earning their keep", "minutes": 25 },
+        { "id": "ch054", "slug": "ch054-create-agent.html", "title": "create_agent: the packaged loop", "tagline": "The framework's ReAct-in-a-box — exactly what it does for you, and how it maps line-for-line to your ch045 hand-rolled loop", "minutes": 30 },
+        { "id": "ch055", "slug": "ch055-middleware.html", "title": "Middleware: wrapping the loop", "tagline": "Before-model, after-model, tool-call hooks — the extension mechanism that turns a simple loop into a platform", "minutes": 30 },
+        { "id": "ch056", "slug": "ch056-reading-langchain-code.html", "title": "Reading LangChain code fluently", "tagline": "The import cheat-sheet, common idioms, and a guided read of a real LangChain app — fluency checkpoint", "minutes": 30 }
+      ]
+    },
+    {
+      "id": "act7",
+      "num": "VII",
+      "title": "LangGraph",
+      "theme": "Agents as graphs — state machines, checkpoints, and the bring-your-own-graph pattern",
+      "chapters": [
+        { "id": "ch057", "slug": "ch057-why-graphs.html", "title": "Why graphs?", "tagline": "From free-running loop to explicit state machine — why enterprises want to see (and gate) every step an agent takes", "minutes": 25 },
+        { "id": "ch058", "slug": "ch058-stategraph-anatomy.html", "title": "StateGraph anatomy", "tagline": "State schema, nodes, edges — the three parts of every LangGraph app, built up from a toy example you can trace by hand", "minutes": 35 },
+        { "id": "ch059", "slug": "ch059-conditional-edges.html", "title": "Conditional edges and routing", "tagline": "The graph decides where to go next — routing functions, and how a ReAct loop is secretly just a two-node graph", "minutes": 25 },
+        { "id": "ch060", "slug": "ch060-compile-invoke-stream.html", "title": "Compile, invoke, stream", "tagline": ".compile(), .invoke(), .stream() — the lifecycle of a graph run, and what those calls return", "minutes": 25 },
+        { "id": "ch061", "slug": "ch061-checkpointing.html", "title": "Checkpointing and persistence", "tagline": "Threads, checkpointers, Postgres and Redis backends (with a five-minute what-even-is-a-database primer) — how a graph survives a restart", "minutes": 30 },
+        { "id": "ch062", "slug": "ch062-human-in-the-loop.html", "title": "Human-in-the-loop: interrupts", "tagline": "Pause the graph, ask a human, resume — the approval-gate mechanism regulators (and your risk team) love", "minutes": 25 },
+        { "id": "ch063", "slug": "ch063-subgraphs-multi-agent.html", "title": "Subgraphs and multi-agent patterns", "tagline": "Supervisor, swarm, hierarchical teams — composing graphs of graphs, and when multiple agents beat one", "minutes": 30 },
+        { "id": "ch064", "slug": "ch064-bring-your-own-graph.html", "title": "Bring your own graph", "tagline": "Hand-built deterministic graphs with explicit gates — the pattern for flows where an LLM must not freestyle", "minutes": 25 },
+        { "id": "ch065", "slug": "ch065-reading-real-code-6.html", "title": "Reading real code: a full LangGraph app", "tagline": "A complete graph application — state, nodes, routing, checkpoints — annotated end to end", "minutes": 35 }
+      ]
+    },
+    {
+      "id": "act8",
+      "num": "VIII",
+      "title": "Deep Agents",
+      "theme": "Planning, virtual files, subagents — the architecture of agents that can run for hours",
+      "chapters": [
+        { "id": "ch066", "slug": "ch066-what-makes-an-agent-deep.html", "title": "What makes an agent 'deep'", "tagline": "Planning, a file system, subagents, and a detailed prompt — the four additions that turn a shallow loop into a long-horizon worker", "minutes": 25 },
+        { "id": "ch067", "slug": "ch067-create-deep-agent-anatomy.html", "title": "create_deep_agent, dissected", "tagline": "One function call, a whole middleware stack — what you actually get, layer by layer", "minutes": 30 },
+        { "id": "ch068", "slug": "ch068-planning-and-todos.html", "title": "The planning tool", "tagline": "Why writing a todo list makes a model smarter — plans as context anchors on long tasks", "minutes": 25 },
+        { "id": "ch069", "slug": "ch069-virtual-filesystem.html", "title": "The virtual file system", "tagline": "Offloading context to files — and the backends (state, real disk, Postgres, Redis, composite) that store them", "minutes": 30 },
+        { "id": "ch070", "slug": "ch070-subagents.html", "title": "Subagents: divide and conquer", "tagline": "Spawn a worker with a clean context, get back only the answer — context isolation as an architectural pattern", "minutes": 25 },
+        { "id": "ch071", "slug": "ch071-the-token-bill.html", "title": "The 2x token bill", "tagline": "Deep agents cost roughly double a plain loop — where the tokens go, and how to decide when the power is worth the price", "minutes": 25 },
+        { "id": "ch072", "slug": "ch072-deep-agents-vs-claude-code.html", "title": "Deep agents vs Claude Code", "tagline": "Convergent evolution — the same four ideas discovered independently, compared side by side", "minutes": 25 },
+        { "id": "ch073", "slug": "ch073-reading-deepagents-source.html", "title": "Reading real code: the deepagents source", "tagline": "Descend from create_deep_agent into the middleware — a guided tour of a real framework's insides", "minutes": 35 }
+      ]
+    },
+    {
+      "id": "act9",
+      "num": "IX",
+      "title": "MCP and Agent Protocols",
+      "theme": "The standards layer — one protocol for tools, one for agent-to-agent",
+      "chapters": [
+        { "id": "ch074", "slug": "ch074-why-mcp-exists.html", "title": "The M-by-N problem", "tagline": "Every agent times every tool = chaos. One protocol = a USB-C port for AI. Why MCP took over in a year", "minutes": 20 },
+        { "id": "ch075", "slug": "ch075-mcp-architecture.html", "title": "MCP architecture", "tagline": "Hosts, clients, servers; stdio vs streamable HTTP — who talks to whom, drawn step by step", "minutes": 30 },
+        { "id": "ch076", "slug": "ch076-mcp-primitives.html", "title": "Tools, resources, prompts — and tasks", "tagline": "The core things a server can offer, why 'tools' gets 90% of the attention, and the newer spec additions (tasks, elicitation)", "minutes": 25 },
+        { "id": "ch077", "slug": "ch077-build-an-mcp-server.html", "title": "Build an MCP server", "tagline": "FastMCP: a working server in 20 lines — decorators from ch017 and type hints from ch016, one more time", "minutes": 30 },
+        { "id": "ch078", "slug": "ch078-mcp-in-langgraph.html", "title": "MCP inside LangChain and LangGraph", "tagline": "Adapters that turn any MCP server into agent tools, the code-execution-with-MCP pattern — and why MCP makes a toolbox harness-agnostic", "minutes": 25 },
+        { "id": "ch079", "slug": "ch079-mcp-security.html", "title": "MCP security and governance", "tagline": "Prompt injection through tools, allow-lists, certification — what it takes to run other people's tools safely", "minutes": 25 },
+        { "id": "ch080", "slug": "ch080-a2a-protocol.html", "title": "A2A: when agents talk to agents", "tagline": "Agent cards, tasks, and the agent-to-agent protocol — MCP connects agents to tools; A2A connects agents to each other", "minutes": 25 }
+      ]
+    },
+    {
+      "id": "act10",
+      "num": "X",
+      "title": "Harness Anatomy",
+      "theme": "The loop around the loop — context engineering, memory, skills, durability, guardrails",
+      "chapters": [
+        { "id": "ch081", "slug": "ch081-what-is-a-harness.html", "title": "What a harness actually is", "tagline": "Model, framework, harness, platform — four words everyone confuses, untangled with one diagram", "minutes": 25 },
+        { "id": "ch082", "slug": "ch082-context-engineering.html", "title": "Context engineering", "tagline": "Compaction, sub-agent isolation, just-in-time retrieval, tool-result pruning — the named discipline behind how Claude Code keeps a days-long session inside a fixed window", "minutes": 35 },
+        { "id": "ch083", "slug": "ch083-long-term-memory.html", "title": "Long-term memory", "tagline": "From CLAUDE.md files to vector stores to knowledge graphs — how agents remember across sessions, three generations of designs", "minutes": 30 },
+        { "id": "ch084", "slug": "ch084-agent-skills.html", "title": "Agent skills: SKILL.md", "tagline": "Teaching agents procedures with markdown files and progressive disclosure — the open standard now read by dozens of tools", "minutes": 25 },
+        { "id": "ch085", "slug": "ch085-durability.html", "title": "Durability: checkpoints, resume, replay", "tagline": "What happens when the process dies mid-task — and why replayable runs are non-negotiable in a bank", "minutes": 25 },
+        { "id": "ch086", "slug": "ch086-sandboxing.html", "title": "Sandboxing and code execution", "tagline": "Letting an agent run code without letting it run amok — containers, permissions, egress control", "minutes": 30 },
+        { "id": "ch087", "slug": "ch087-guardrails.html", "title": "Guardrails: the safety layer", "tagline": "Input and output checks, PII redaction, injection defense — the runtime protections that wrap every serious deployment", "minutes": 25 },
+        { "id": "ch088", "slug": "ch088-observability.html", "title": "Observability: traces, costs, audit", "tagline": "Seeing what your agent did and what it cost — tracing, metering, and the immutable audit trail regulators require", "minutes": 30 },
+        { "id": "ch089", "slug": "ch089-watchdogs-self-healing.html", "title": "Watchdogs and self-healing", "tagline": "Always-on platforms need guardians — health checks, auto-recovery, and the operational patterns behind 24/7 agents", "minutes": 25 }
+      ]
+    },
+    {
+      "id": "act11",
+      "num": "XI",
+      "title": "The Landscape",
+      "theme": "Choosing and comparing harnesses — the honest scorecard method",
+      "chapters": [
+        { "id": "ch090", "slug": "ch090-the-contenders.html", "title": "The contenders", "tagline": "LangGraph, OpenAI Agents SDK, Claude Agent SDK, Microsoft Agent Framework, CrewAI, smolagents — what each is actually for", "minutes": 35 },
+        { "id": "ch091", "slug": "ch091-claude-code-dissected.html", "title": "Claude Code, dissected", "tagline": "The best-known harness in the world, taken apart — system prompt, tools, permissions, memory, subagents", "minutes": 35 },
+        { "id": "ch092", "slug": "ch092-always-on-platforms.html", "title": "What always-on platforms add", "tagline": "Event wake-ups, channels, schedulers, watchdogs — the gap between a framework and a platform that never sleeps", "minutes": 25 },
+        { "id": "ch093", "slug": "ch093-is-langgraph-right.html", "title": "Is LangGraph the right choice?", "tagline": "An honest scorecard — where graph-based orchestration wins, where it costs you, and what the alternatives buy", "minutes": 30 },
+        { "id": "ch094", "slug": "ch094-bank-grade-requirements.html", "title": "Bank-grade requirements", "tagline": "Identity, entitlements, audit, human approval gates — what 'enterprise-ready' actually means when regulators are real", "minutes": 30 },
+        { "id": "ch095", "slug": "ch095-capability-matrix-method.html", "title": "The capability-matrix method", "tagline": "How to evaluate any harness rigorously — areas, sub-rows, evidence, and driving a roomful of engineers to a decision", "minutes": 30 }
+      ]
+    },
+    {
+      "id": "act12",
+      "num": "XII",
+      "title": "The Working Engineer",
+      "theme": "Git, GitLab, merge requests, pipelines, tests, evals — shipping alongside data scientists as an equal",
+      "chapters": [
+        { "id": "ch096", "slug": "ch096-git-fundamentals.html", "title": "Git: the time machine", "tagline": "Commits, branches, HEAD — the graph model that makes git click, and the eight commands that cover 95% of daily work", "minutes": 35 },
+        { "id": "ch097", "slug": "ch097-branching-strategies.html", "title": "Feature branches, release branches", "tagline": "Why teams branch, which branch you create from where, and the lifecycle of a change from branch to merge", "minutes": 30 },
+        { "id": "ch098", "slug": "ch098-gitlab-tour.html", "title": "A guided tour of GitLab", "tagline": "Projects, groups, the sidebar, where everything lives — annotated walkthroughs of the screens you'll use daily", "minutes": 30 },
+        { "id": "ch099", "slug": "ch099-merge-requests.html", "title": "Merge requests, end to end", "tagline": "Create the MR, assign reviewers, respond to threads, get approval, merge — the full ritual, screen by screen", "minutes": 35 },
+        { "id": "ch100", "slug": "ch100-reading-diffs-review.html", "title": "Reading diffs and reviewing like a pro", "tagline": "Red and green fluency, what to look for, how to comment — hold your own in any code review from tomorrow", "minutes": 30 },
+        { "id": "ch101", "slug": "ch101-gitlab-pipelines.html", "title": "Pipelines: .gitlab-ci.yml decoded", "tagline": "Stages, jobs, runners, artifacts — your YAML fluency from ch005 unlocks the whole CI/CD file", "minutes": 35 },
+        { "id": "ch102", "slug": "ch102-when-pipelines-fail.html", "title": "When pipelines fail", "tagline": "Reading job logs bottom-up, the six most common failure types, and exactly what to do for each", "minutes": 30 },
+        { "id": "ch103", "slug": "ch103-pytest.html", "title": "Tests: why they gate merges", "tagline": "pytest basics, fixtures, asserts — the first thing a reviewer reads in your MR, and how to read theirs", "minutes": 30 },
+        { "id": "ch104", "slug": "ch104-agent-evals.html", "title": "Agent evals", "tagline": "Trajectory scoring, LLM-as-judge, regression suites in CI — how serious teams measure whether an agent actually works", "minutes": 30 },
+        { "id": "ch105", "slug": "ch105-reading-a-new-codebase.html", "title": "Reading a new codebase in 30 minutes", "tagline": "A repeatable method — entry points, config, the money path — so no repo ever intimidates you again", "minutes": 30 },
+        { "id": "ch106", "slug": "ch106-ai-assisted-engineering.html", "title": "AI-assisted engineering, done right", "tagline": "AI as tutor and pair, not ghostwriter — the workflow that builds your skill instead of hiding your gaps", "minutes": 25 },
+        { "id": "ch107", "slug": "ch107-staying-current.html", "title": "Staying current", "tagline": "The reading list that matters — Anthropic's engineering posts, the MCP spec, A2A, and how to filter the noise", "minutes": 25 },
+        { "id": "ch108", "slug": "ch108-capstone-mini-harness.html", "title": "Capstone: build your own mini-harness", "tagline": "Loop, tools, memory, compaction, a checkpoint file, a tiny eval — everything you've learned, in one project you build", "minutes": 60 }
+      ]
+    },
+    {
+      "id": "act13",
+      "num": "XIII",
+      "title": "The Deployment Platform",
+      "theme": "Azure, Kubernetes, and the pod your agent lives in — from az login to a running fleet",
+      "chapters": [
+        { "id": "ch109", "slug": "ch109-azure-mental-model.html", "title": "The cloud, from zero: Azure's mental model", "tagline": "Subscriptions, resource groups, regions, the portal and the az CLI — the office-building map that makes every Azure screen make sense", "minutes": 30 },
+        { "id": "ch110", "slug": "ch110-containers-and-images.html", "title": "Containers: shipping your agent in a box", "tagline": "Dockerfile line by line, images, registries (ACR) — why every agent ships as a container, and the build-push commands that get it there", "minutes": 30 },
+        { "id": "ch111", "slug": "ch111-kubernetes-plainly.html", "title": "Kubernetes in plain terms", "tagline": "Clusters, nodes, pods, deployments, services — the harbour-master analogy, and the desired-state loop that runs the whole show", "minutes": 30 },
+        { "id": "ch112", "slug": "ch112-aks-from-scratch.html", "title": "AKS from scratch: your first cluster", "tagline": "az aks create to kubectl get pods — the exact command sequence from nothing to your agent's container running in a pod", "minutes": 35 },
+        { "id": "ch113", "slug": "ch113-agent-in-a-pod.html", "title": "An agent in a pod", "tagline": "The pod as the agent's body — config, secrets, mounted skills, MCP connections, and an A2A endpoint, drawn end to end", "minutes": 35 },
+        { "id": "ch114", "slug": "ch114-kubectl-fluency.html", "title": "kubectl fluency: checking anything", "tagline": "get, describe, logs, exec, port-forward — and what Pending, CrashLoopBackOff and ImagePullBackOff are actually telling you", "minutes": 30 },
+        { "id": "ch115", "slug": "ch115-k8s-yaml-decoded.html", "title": "Kubernetes YAML, decoded", "tagline": "Deployment, Service, ConfigMap, Secret — the manifests behind every agent deployment, read line by line with your ch005 YAML fluency", "minutes": 30 },
+        { "id": "ch116", "slug": "ch116-day2-on-aks.html", "title": "Day-2 on AKS: scale, heal, secure", "tagline": "Autoscaling, rolling updates, health probes, workload identity, and the GitLab pipeline that ships your agent — production for real", "minutes": 35 }
+      ]
+    }
+  ]
+}

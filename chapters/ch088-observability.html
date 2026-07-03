@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Observability: traces, costs, audit — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch088">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act X · Harness Anatomy</div>
+        <h1>Observability: traces, costs, audit</h1>
+        <p class="ch-tagline">An agent you cannot see is an agent you cannot trust, debug, or bill. This chapter gives you the three instruments every serious harness carries: the trace, the meter, and the tamper-evident record.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 89 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Friday night at a packed Pune restaurant. Table nine waves the manager over: the paneer arrived forty minutes late, it was the wrong dish, and the bill looks inflated. In a badly run kitchen this becomes a shouting match — the waiter blames the chef, the chef blames the tandoor, and nobody knows what the plate actually cost to make.</p>
+        <p>But this kitchen runs on tickets. Every order prints a chit, timestamped as it enters, stamped again at each station it passes — cold prep, tandoor, plating, pass. The costing sheet tracks the ingredient cost of every plate, sliced by table and by waiter. And as each order completes, its chit is pressed onto the steel spike by the pass: order after order, in strict sequence, impossible to reorder or quietly slide one out. The manager pulls the chit for table nine: ordered 8:14, fired 8:19, plated 8:52 — the delay was the tandoor queue, plain as ink. The costing sheet shows the wrong dish was rung in by a trainee. And when the food-safety inspector asks "who handled the chicken on the 14th?", the spike answers, because the spike never forgets and never lies.</p>
+        <p>The ticket that follows the dish is a <strong>trace</strong>. The costing sheet is <strong>metering</strong>. The spike is the <strong>audit trail</strong>. Your agent needs all three.</p>
+      </section>
+
+      <h2>Three questions, three instruments</h2>
+      <p>The previous chapter, <a href="ch087-guardrails.html">guardrails</a>, was about deciding in the moment: is this input safe, is this action allowed, does this need a human? Guardrails are the bouncer at the door. This chapter is the security camera, the till roll, and the visitor register — the layer that lets you answer questions <em>after</em> the fact. <dfn>Observability</dfn> is the property of a system that lets you work out what happened inside it purely from what it emitted while running — without stopping it, guessing, or re-running the failure and hoping.</p>
+      <p>For agents, every question an operator ever asks turns out to be one of three:</p>
+      <ul>
+        <li><strong>What did it do?</strong> Which model calls, which tool calls, in what order, with what inputs and outputs, and how long did each take? That is the <strong>trace</strong>.</li>
+        <li><strong>What did it cost?</strong> How many tokens, at what price, attributed to which agent, which user, which customer? That is <strong>metering</strong>.</li>
+        <li><strong>On whose authority?</strong> Who asked for this, under which permissions, and can we prove the record has not been edited since? That is the <strong>audit trail</strong>.</li>
+      </ul>
+      <p>They sound similar, and lazy systems mash them into one log file. They are not the same. A trace is rich and disposable — you might keep it for thirty days and sample only a fraction of runs. A meter is a running total — you keep the aggregates forever but not the detail. An audit trail is sparse and sacred — every consequential action, kept for years, tamper-evident, because a regulator may one day read it back to you.</p>
+
+      <h2>Traces: the ticket that follows the dish</h2>
+      <p>Remember the loop you built by hand in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>: model call, tool call, observation, repeat. A <dfn>trace</dfn> is the complete recorded story of one run of that loop — every model call and tool call captured as a timeline, with timings, token counts, inputs and outputs attached. Each individual operation inside the trace is a <dfn>span</dfn> — one timed unit of work with a start, an end, and a bag of attributes. Spans nest: the run is the root span, each turn of the loop is a child, each tool call a child of its turn. The result is a tree, and the tree shape is the whole point — a flat log tells you <em>that</em> things happened; a trace tells you <em>which run</em> they belonged to and <em>what caused what</em>.</p>
+      <p>Two names dominate this space. <a href="ch051-langchain-ecosystem-map.html">LangChain's</a> hosted trace viewer is <strong>LangSmith</strong> — set its environment variables (an API key and a tracing flag) and every agent run is captured automatically, no code changes; its <code>traceable</code> decorator (a <a href="ch017-decorators.html">decorator</a>, wrapping a function to add behaviour) lets you add spans around your own functions too. The vendor-neutral standard is <strong>OpenTelemetry</strong> — an open specification for emitting traces from any software, which your platform team almost certainly already uses for ordinary services; agent frameworks increasingly emit OpenTelemetry spans so agent traces land in the same dashboards as everything else. Langfuse, Arize Phoenix and friends play in the same league. The concepts are identical everywhere; only the logos differ.</p>
+      <p>Flip these until they feel obvious — they are the vocabulary of every observability dashboard you will ever open:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">trace</span><span class="flip-back">The full recorded story of one agent run — every model call, tool call and decision, as a tree with timings attached.</span></button>
+        <button class="flip" type="button"><span class="flip-front">span</span><span class="flip-back">One timed unit of work inside a trace: a single model call, tool call or retrieval, with start time, duration and attributes.</span></button>
+        <button class="flip" type="button"><span class="flip-front">latency</span><span class="flip-back">How long a span took. The waterfall of latencies tells you where a slow run actually spent its time.</span></button>
+        <button class="flip" type="button"><span class="flip-front">tokens in / out</span><span class="flip-back">What the model read and what it wrote, per call. Input and output are priced differently, so both are recorded.</span></button>
+        <button class="flip" type="button"><span class="flip-front">metadata / tags</span><span class="flip-back">Labels stitched onto a trace — user id, tenant, prompt version, environment — so you can filter ten thousand runs down to the one you need.</span></button>
+        <button class="flip" type="button"><span class="flip-front">sampling</span><span class="flip-back">Keeping only a fraction of traces (say all failures plus 10 percent of successes) because storing everything forever is money.</span></button>
+      </div>
+
+      <h2>Run a traced, metered, audited agent right now</h2>
+      <p>Below is the fifty-line agent from <a href="ch045-react-loop-by-hand.html">chapter 45</a> wearing a flight recorder. A <code>Recorder</code> class captures a span for every model and tool call, converts tokens into money, and writes a hash-chained audit trail — each audit record's fingerprint is computed from the record <em>plus the previous fingerprint</em>, so editing any old record breaks every fingerprint after it. As before, the "model" is a scripted stand-in; the recording machinery is exactly what production does. Press <strong>Run</strong>, then try the tamper experiment at the bottom.</p>
+
+      <div class="pyrun" data-title="A flight recorder for the ReAct loop — run me">
+<textarea class="py-src" spellcheck="false">
+import hashlib, json
+
+PRICE_IN, PRICE_OUT = 3.00, 15.00   # illustrative $ per MILLION tokens
+
+class Recorder:
+    def __init__(self):
+        self.spans, self.audit, self.prev = [], [], "genesis"
+
+    def span(self, kind, name, ms, t_in=0, t_out=0):
+        cost = (t_in * PRICE_IN + t_out * PRICE_OUT) / 1_000_000
+        self.spans.append((kind, name, ms, t_in, t_out, cost))
+
+    def record(self, event):            # append-only audit trail
+        payload = json.dumps(event, sort_keys=True)
+        h = hashlib.sha256((self.prev + payload).encode()).hexdigest()[:12]
+        self.audit.append((payload, h))
+        self.prev = h
+
+    def verify(self):                   # walk the hash chain
+        prev = "genesis"
+        for payload, h in self.audit:
+            want = hashlib.sha256((prev + payload).encode()).hexdigest()[:12]
+            if want != h:
+                return "TAMPERED at record: " + payload[:52]
+            prev = h
+        return "chain intact"
+
+# ---- tools + scripted model, exactly as in chapter 45 ------
+def calculate(expr):
+    ok = set(expr) &lt;= set("0123456789.+-*/() ")
+    return str(eval(expr)) if ok else "ERROR"
+
+TOOLS = {"calculate": calculate}
+
+def fake_llm(history):                  # (reply, tokens_in, tokens_out)
+    if "OBSERVATION" not in history[-1]:
+        return ("ACTION: calculate(1500 * 0.20)", 412, 21)
+    return ("FINAL ANSWER: GST is 300 rupees.", 455, 12)
+
+rec = Recorder()
+
+def run_agent(task, user="priya.k", max_turns=4):
+    history = ["TASK: " + task]
+    rec.record({"who": user, "did": "run.start",
+                "authority": "role:ops-analyst"})
+    for turn in range(1, max_turns + 1):
+        reply, t_in, t_out = fake_llm(history)
+        history.append(reply)
+        rec.span("llm", "model.call #" + str(turn), 240, t_in, t_out)
+        if "FINAL ANSWER:" in reply:
+            rec.record({"who": user, "did": "run.finish", "status": "ok"})
+            return reply.split("FINAL ANSWER:")[1].strip()
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            name = call.split("(")[0]
+            arg = call[call.index("(") + 1 : call.rindex(")")]
+            result = TOOLS[name](arg.strip())
+            rec.span("tool", "tool." + name, 3)
+            rec.record({"who": user, "did": "tool.call", "name": name,
+                        "args": arg, "result": result})
+            history.append("OBSERVATION: " + result)
+    return "hit max turns"
+
+print("ANSWER:", run_agent("What is 20% GST on a 1500 rupee invoice?"))
+
+print()
+print("TRACE run-7f3a  (latencies simulated)")
+ti = to = cost = 0
+for kind, name, ms, t_in, t_out, c in rec.spans:
+    ti, to, cost = ti + t_in, to + t_out, cost + c
+    print(f"  [{kind:4}] {name:16} {ms:4d} ms  {t_in:4d} in /{t_out:3d} out  ${c:.6f}")
+print(f"  TOTAL {ti} in / {to} out tokens  ${cost:.6f}")
+
+print()
+print("AUDIT TRAIL (hash-chained)")
+for payload, h in rec.audit:
+    print(" ", h, payload)
+print("  verify:", rec.verify())
+
+# ---- the insider experiment: quietly edit an old record ----
+payload, h = rec.audit[1]
+rec.audit[1] = (payload.replace("300.0", "999.0"), h)
+print("  verify after edit:", rec.verify())
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Play with it. Change the tampered value back and watch the chain verify again. Add a second tool call and see the trace grow. Then try to "fix" the tamper properly — you will discover you must recompute <em>every</em> hash from the edited record onward, which is exactly why hash chains make quiet edits loud.</p></div>
+
+      <h2>Metering: the bill, sliced the way you need it</h2>
+      <p>You met token pricing in <a href="ch041-tokens-and-cost.html">tokens and cost</a> and watched deep agents multiply it in <a href="ch071-the-token-bill.html">the token bill</a>. <dfn>Metering</dfn> is the harness discipline built on top of that arithmetic: recording usage per call, then rolling it up by every dimension someone will eventually ask about. "How much did the agent cost today?" is the easy question. The real ones are: which <em>agent</em> (the invoice-chaser or the researcher?), which <em>user</em> (is one analyst running fifty times more jobs than the rest?), and which <em>tenant</em> — which customer, in a multi-customer product — so you can charge back, cap, or investigate. If cost is not attributed at write time, it cannot be reconstructed later; the meter must stamp every span with agent, user and tenant the moment the call happens.</p>
+
+      <div data-bars data-title="Daily agent spend by tenant (illustrative numbers)" data-unit="USD/day"
+           data-note="Totals hide the story: one tenant is quietly burning most of the budget — attribution is what makes the meter useful.">
+        <div class="bar" data-label="Tenant A" data-value="18"></div>
+        <div class="bar" data-label="Tenant B" data-value="9"></div>
+        <div class="bar" data-label="Tenant C" data-value="127"></div>
+        <div class="bar" data-label="Tenant D" data-value="22"></div>
+      </div>
+
+      <p>On top of attribution sit <dfn>budgets</dfn> — pre-agreed spending limits that the harness enforces rather than merely reports. A sane setup has three rungs. A <strong>soft alert</strong> fires at, say, 80 percent of budget: a message to the operators, nothing stops. A <strong>hard cap</strong> stops new runs when the budget is spent — the agent politely refuses rather than silently overdrafting. And a <strong>per-run circuit breaker</strong> kills any single run that exceeds its own allowance, because the most common cost incident is not a thousand users — it is one confused agent looping, exactly the failure the <code>max_turns</code> guard in chapter 45 protected against, now measured in currency instead of iterations. Budgets are guardrails' financial cousins: the guardrail says "you may not call that tool"; the budget says "you may not spend a rupee more".</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Meter <em>tokens</em>, not just money. Prices change, cached input tokens are billed at a discount, and different models cost wildly different amounts per token — so the durable record is tokens per call per model, with price applied at read time. Store the raw measurement; derive the invoice.</p></div>
+
+      <h2>The audit trail: memory that cannot be edited</h2>
+      <p>Traces and meters serve <em>you</em>. The audit trail serves people who do not trust you — auditors, regulators, courts, and your own future self during an incident review. An <dfn>audit trail</dfn> is an append-only record of every consequential action, designed so that its completeness and integrity can be proven. Financial regulators have demanded this of trading systems for decades (records kept for years, on storage that cannot be rewritten), and the EU AI Act extends the same expectation to high-risk AI systems: automatic event logging, retained, reviewable. When an agent moves money, sends email, or changes customer data, "we think it was fine" is not an answer. The spike must answer.</p>
+      <p>Three properties separate an audit trail from a fancy log. It is <strong>append-only</strong>: records are added, never updated, never deleted within the retention window — often enforced with WORM storage ("write once, read many"). It is <strong>tamper-evident</strong>: each record carries a cryptographic fingerprint chained to the previous one, as in the runner above, so any edit is detectable. And it is <strong>complete for the questions that matter</strong> — every record answers <em>who asked</em>, <em>what the agent did</em>, and <em>on whose authority</em>. That last one is the piece newcomers miss: an agent acts with delegated permission, so the record must capture the delegation — which human or service initiated the run, which role and policy version authorised the action, and whether a <a href="ch062-human-in-the-loop.html">human approval</a> was in the chain. Click through a real-shaped record:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">audit-record 214 — one line in the trail, unfolded</div>
+        <div class="wl-line"><code>{</code></div>
+        <div class="wl-line"><code>  "seq": 214,</code>
+          <div class="wl-note">A strictly increasing sequence number. If the trail ever jumps from 213 to 215, something was deleted — gaps are themselves evidence.</div></div>
+        <div class="wl-line"><code>  "ts": "2026-07-02T09:14:07Z",</code>
+          <div class="wl-note">Timestamp in UTC, from a trusted clock. Auditors reconstruct timelines across systems, so everyone logs in the same timezone: none.</div></div>
+        <div class="wl-line"><code>  "actor": {"user": "priya.k", "channel": "web", "session": "s-88f2"},</code>
+          <div class="wl-note"><em>Who asked.</em> The human (or upstream service) that initiated the run — not the agent's name. Agents are never the actor of record; they are the instrument.</div></div>
+        <div class="wl-line"><code>  "authority": {"role": "ops-analyst", "policy": "refunds-v3", "approval": "auto"},</code>
+          <div class="wl-note"><em>On whose authority.</em> The role that permitted this action, the exact policy version in force, and whether approval was automatic or given by a named human. When the policy changes next month, this record still shows which rules applied today.</div></div>
+        <div class="wl-line"><code>  "action": {"type": "tool.call", "name": "issue_refund", "args_digest": "sha256:9c1f..."},</code>
+          <div class="wl-note"><em>What the agent did.</em> Note the digest: a fingerprint of the arguments rather than the raw arguments, so the trail proves what was sent without storing card numbers or personal data inside an immutable record you can never redact.</div></div>
+        <div class="wl-line"><code>  "agent": {"run_id": "run-7f3a", "model": "claude-x", "prompt_version": "12"},</code>
+          <div class="wl-note">The bridge to the trace: the run id links this legal-grade record to the rich debugging detail, and the model + prompt version pin down exactly which brain, with which instructions, acted.</div></div>
+        <div class="wl-line"><code>  "outcome": {"status": "ok", "amount": 1500, "currency": "INR"},</code>
+          <div class="wl-note">What actually happened — including failures. An audit trail that only records successes is a marketing document.</div></div>
+        <div class="wl-line"><code>  "prev_hash": "sha256:41ab...",</code>
+          <div class="wl-note">The previous record's fingerprint, folded into this one. This is the chain from the runner above: edit record 150 and records 151 onward all stop verifying.</div></div>
+        <div class="wl-line"><code>  "hash": "sha256:77d0..."</code>
+          <div class="wl-note">This record's own fingerprint. Periodically, the latest hash is written somewhere external (another system, even a printed register) — anchoring the whole chain against wholesale replacement.</div></div>
+        <div class="wl-line"><code>}</code></div>
+      </div>
+
+      <h2>Debugging from a trace: reading a failed run</h2>
+      <p>Now the payoff. Observability earns its keep on the bad morning: an invoice-chasing agent has emailed a payment reminder to a customer who already paid, the customer is annoyed, and you were not in the room — the run happened at 2 a.m. Here is how an operator actually reads the failure, step by step. This exact walk — symptom, trace, suspicious span, attributes, root cause — is the same every time; only the details change.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Find the run">
+          <h3>1. Find the run</h3>
+          <div class="diagram">
+            <div class="d-box hot">Trace search<small>tenant=acme · agent=invoice-chaser · last 24 h</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">run-4c9d<small>status: success</small></div>
+          </div>
+          <p class="step-cap">You filter thousands of traces by the metadata tags — tenant, agent, time window — and find run-4c9d. First surprise: the run reports <em>success</em>. The agent believes it did its job. Whatever went wrong, the model never saw it as an error.</p>
+        </div>
+        <div class="step" data-title="Open the tree">
+          <h3>2. Open the trace tree</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">run-4c9d<small>root span · 41 s · $0.09</small></div>
+              <div class="d-box">model.call #1<small>plan</small></div>
+              <div class="d-box">tool.get_unpaid_invoices</div>
+              <div class="d-box">model.call #2<small>draft email</small></div>
+              <div class="d-box">tool.send_email</div>
+            </div>
+          </div>
+          <p class="step-cap">The root span unfolds into its children: two model calls, two tool calls, all green, latencies unremarkable. Nothing is flashing red — which tells you this is a <em>data</em> problem or a <em>reasoning</em> problem, not a crash. Time to read contents, not just statuses.</p>
+        </div>
+        <div class="step" data-title="Read the tool output">
+          <h3>3. Read what the tool returned</h3>
+          <div class="diagram">
+            <div class="d-box dim">model.call #1</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">tool.get_unpaid_invoices<small>output: 12 rows... INV-208 "unpaid"</small></div>
+          </div>
+          <p class="step-cap">Traces record inputs and outputs, so you open the tool span's recorded output — and there it is: INV-208, the invoice the customer already paid, listed as unpaid. The tool <em>told</em> the agent this invoice was outstanding. The suspect list just changed.</p>
+        </div>
+        <div class="step" data-title="Check the model's side">
+          <h3>4. Clear the model</h3>
+          <div class="diagram">
+            <div class="d-box">tool output<small>INV-208 unpaid</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">model.call #2<small>reasoned correctly from what it saw</small></div>
+          </div>
+          <p class="step-cap">Read model.call #2's input and output: the model was shown a list containing INV-208 and correctly drafted a reminder for it. Given its inputs, the reasoning is flawless. This was never a hallucination — the model was fed a wrong world and behaved perfectly inside it.</p>
+        </div>
+        <div class="step" data-title="Root cause">
+          <h3>5. Drop one level: the span attributes</h3>
+          <div class="diagram">
+            <div class="d-box hot">tool.get_unpaid_invoices<small>cache_hit: true · data_as_of: 22:10</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">payment landed<small>22:41</small></div>
+          </div>
+          <p class="step-cap">The tool span's attributes hold the confession: <code>cache_hit: true</code>, data as of 22:10. The customer paid at 22:41. The run happened at 2 a.m. against a cache that never refreshed. Root cause: a stale cache TTL in the invoice tool — three levels below anything an eyeball on the agent's chat output could have caught.</p>
+        </div>
+        <div class="step" data-title="Close the loop">
+          <h3>6. Fix, then answer the hard question</h3>
+          <div class="diagram">
+            <div class="d-box good">Fix<small>cache TTL + freshness check</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Audit trail<small>who was emailed, what was sent, on whose authority</small></div>
+          </div>
+          <p class="step-cap">The engineering fix is a one-liner. But the customer-facing question — "what exactly did you send, to whom, authorised by what?" — is answered from the audit trail, verbatim and provable. Trace for the diagnosis, audit for the accountability. That division of labour is the whole chapter.</p>
+        </div>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The most dangerous failed run is the one that reports success. Error dashboards only catch crashes; the wrong-refund, wrong-email, wrong-customer class of failure sails through green. This is why serious teams sample <em>successful</em> traces for review and run <a href="ch104-agent-evals.html">evals</a> against recorded runs — the trace store doubles as a test-case mine.</p></div>
+
+      <h2>In the wild</h2>
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this layer everywhere once you know its face. In LangChain projects, a couple of LangSmith environment variables in the deployment config mean every run is being traced — follow the run id from a bug report straight into the trace viewer. In enterprise repos, look for an OpenTelemetry collector config (a YAML file routing spans to the company's dashboards), middleware named <code>tracing.py</code> or <code>metering.py</code> wrapped around the agent loop, and merge-request comments like "add a span around the retriever" or "tag traces with tenant id". Cost work shows up as dashboards titled "spend by agent" and incident channels lighting up with budget alerts. And in any bank-adjacent setting, the audit trail has its own review: append-only tables or WORM buckets, hash chaining, retention policies measured in years — because when the regulator asks "who authorised this action?", the answer must come from the spike, not from memory.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. What does a trace give you that a plain log file does not?</p>
+          <div class="q-opts">
+            <button data-opt="a">It stores messages more compactly</button>
+            <button data-opt="b">It hides sensitive data automatically</button>
+            <button data-opt="c">It preserves structure — which spans belong to which run, and what caused what, as a tree</button>
+          </div>
+          <p class="q-explain">Logs are flat lines from everywhere at once. A trace groups every model call and tool call under the run that caused them, nested parent-to-child — so you can follow one request through the whole loop instead of grepping and guessing.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Why must cost be attributed to agent, user, and tenant at the moment each call happens?</p>
+          <div class="q-opts">
+            <button data-opt="a">Because prices change daily and old costs expire</button>
+            <button data-opt="b">Because attribution cannot be reconstructed later — an unlabelled total can never be split back into who spent what</button>
+            <button data-opt="c">Because the model provider requires it in the API request</button>
+          </div>
+          <p class="q-explain">Once usage lands in one undifferentiated total, no amount of analysis recovers who caused it. The meter must stamp each span with its dimensions at write time; roll-ups, chargeback and per-tenant caps all depend on that.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What does hash-chaining the audit trail actually guarantee?</p>
+          <div class="q-opts">
+            <button data-opt="a">That any edit to a past record becomes detectable, because every later fingerprint stops verifying</button>
+            <button data-opt="b">That records are encrypted and unreadable to attackers</button>
+            <button data-opt="c">That the agent can never perform a harmful action</button>
+          </div>
+          <p class="q-explain">A hash chain is tamper <em>evidence</em>, not tamper <em>prevention</em> and not encryption. Anyone can still read the records, and a bad action still lands in the trail — but nobody can quietly rewrite history, because each record's fingerprint is folded into the next.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. In the failed-run walkthrough, the model drafted a reminder for an invoice that was already paid. What did the trace reveal?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model hallucinated an invoice that never existed</button>
+            <button data-opt="b">The email tool crashed and retried twice</button>
+            <button data-opt="c">The model reasoned correctly over stale data — the tool served a cached, out-of-date invoice list</button>
+          </div>
+          <p class="q-explain">Reading the spans cleared the model: given its inputs it behaved perfectly. The tool span's attributes (<code>cache_hit: true</code>, stale timestamp) held the root cause. A huge share of "the AI messed up" incidents are really "the AI was fed a wrong world" — and only traces can tell the difference.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. A regulator asks: "Prove who authorised the refund your agent issued in March." Which instrument answers, and why?</p>
+          <div class="q-opts">
+            <button data-opt="a">The trace — it has the most detail about the run</button>
+            <button data-opt="b">The audit trail — it records actor and authority per action, is retained for years, and its integrity is provable</button>
+            <button data-opt="c">The meter — it shows the refund's cost per tenant</button>
+          </div>
+          <p class="q-explain">Traces are rich but disposable — sampled, expired after weeks, and editable in principle. The audit trail exists precisely for this question: who asked, what was done, on whose authority, append-only and tamper-evident across the retention window.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Observability answers three distinct questions with three distinct instruments: the trace (what happened), the meter (what it cost), and the audit trail (who asked, on whose authority).</li>
+          <li>A trace is a tree of spans — every model call and tool call with latency, tokens and recorded inputs/outputs. LangSmith and OpenTelemetry are the two names you will meet; the concepts are identical.</li>
+          <li>Meter tokens per call, stamped with agent, user and tenant at write time — attribution cannot be reconstructed later. Budgets turn the meter into a guardrail: soft alert, hard cap, per-run circuit breaker.</li>
+          <li>An audit trail is append-only, tamper-evident (hash-chained), and captures actor, action and authority — the record regulators require when an agent acts with delegated permission.</li>
+          <li>Debugging a failed run is a repeatable walk: find the run by its tags, open the tree, read tool outputs before blaming the model, then drop into span attributes for the root cause.</li>
+          <li>The scariest failures report success. Sample and review green traces too — the trace store is also your eval data.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

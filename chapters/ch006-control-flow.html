@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control flow: if, for, while — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch006">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act I · The Language</div>
+        <h1>Control flow: if, for, while</h1>
+        <p class="ch-tagline">Every program you will ever read is a straight line, a fork, and a circle. This chapter gives you the fork (if), the walk (for), and the repeat-until (while) — and teaches you to trace a loop by hand, the way the interpreter does.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 6 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>It is 9 p.m. and the night watchman at a housing society clips on his torch and glances at the laminated card by the gate. The card has three rules. If the face at the gate is a resident, wave them through. Otherwise, if they carry a visitor pass, note the flat number and let them in. Otherwise, ring the flat and ask.</p>
+        <p>Then come the rounds: for every floor in the building, walk its corridor and check each door. The third floor is empty for renovation — he skips it and carries on. On the seventh floor he finds a door ajar, abandons the rest of the round on the spot, and deals with it. And underneath it all runs the shift itself: while the clock has not yet struck six, stay at your post and keep watching.</p>
+        <p>Nobody ever taught the watchman the phrase "control flow", but he is running all three of its shapes: a decision, a walk over a collection, and a repeat-until. Every program you will ever read — every agent, every pipeline, every script — is built from exactly these three moves. Tonight you learn to read them fluently.</p>
+      </section>
+
+      <h2>Programs are mostly a straight line — until they are not</h2>
+      <p>For five chapters you have read Python the way you read a recipe: top to bottom, one line after another. You stuck <a href="ch002-names-and-objects.html">names on objects</a>, glued text together with <a href="ch003-strings-and-fstrings.html">f-strings</a>, filled <a href="ch004-collections.html">the four containers</a>, and in the previous chapter you unmasked <a href="ch005-yaml-and-json.html">YAML and JSON as dicts in costume</a>. Every example so far ran in a straight line.</p>
+      <p>Real programs almost never do. They pause at forks and pick a path. They repeat the same few lines a thousand times, once per customer, once per document, once per agent turn. <dfn>Control flow</dfn> is the set of rules that decides which line runs next — the grammar of decisions and repetition. Python gives you three keywords for it, and they map exactly onto the watchman's evening:</p>
+
+      <div class="tbl"><table>
+        <tr><th>The move</th><th>Keyword</th><th>The watchman</th></tr>
+        <tr><td>Decide between paths</td><td><code>if</code> / <code>elif</code> / <code>else</code></td><td>The laminated gate rules</td></tr>
+        <tr><td>Do something once per item</td><td><code>for</code></td><td>The rounds — one pass per floor</td></tr>
+        <tr><td>Repeat until something changes</td><td><code>while</code></td><td>The shift — keep going until 6 a.m.</td></tr>
+      </table></div>
+
+      <p>Everything else in this chapter — <code>break</code>, <code>continue</code>, <code>range</code>, <code>enumerate</code>, <code>zip</code> — is an accessory to those three. Learn the three shapes and the accessories click into place on their own.</p>
+
+      <h2>if / elif / else: the gate rules</h2>
+      <p>Here is the watchman's card, written in Python:</p>
+
+      <div class="code-title">gate_rules.py</div>
+      <pre><code class="language-python">if face == "resident":
+    open_gate()
+elif has_visitor_pass:
+    log_visit()
+    open_gate()
+else:
+    ring_the_flat()</code></pre>
+
+      <p>Read the mechanics slowly, because they never change. After <code>if</code> comes a condition — an expression Python evaluates to a yes or a no. Then a colon, and below it an indented block: the lines that run only when the answer is yes. You already know from <a href="ch001-why-python-looks-like-that.html">chapter 1</a> that indentation is not decoration in Python — it <em>is</em> the block. Everything pushed four spaces in belongs to that branch; the first line back at the left margin is outside it.</p>
+      <p>A <dfn>branch</dfn> is one of the paths the program might take — each indented block under an <code>if</code>, <code>elif</code>, or <code>else</code> is a branch. <code>elif</code> is simply "else, if": it is checked only when everything above it said no. You can chain as many as you like. <code>else</code> is the optional catch-all at the bottom with no condition at all.</p>
+      <p>The rule that matters most when reading real code: Python checks the chain top to bottom, and <strong>the first condition that says yes wins</strong>. Its block runs, and every other branch in the chain — including ones lower down that would also have said yes — is skipped entirely. Exactly one branch runs. If nothing matches and there is no <code>else</code>, none of them run and life continues at the next unindented line.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Real code is full of one-branch ifs at the top of a file or function, shaped like <code>if not api_key: raise SystemExit("set the API key first")</code>. This is called a guard clause — read it as "bounce early if the setup is wrong". When you see several of these stacked at the top of a function, that is a careful engineer checking the ground before walking on it.</p></div>
+
+      <p>Try the shape yourself. This little router decides what to do with a finished agent run — change <code>status</code> and re-run to walk each branch:</p>
+
+      <div class="pyrun" data-title="An if/elif/else router — change status and re-run">
+<textarea class="py-src" spellcheck="false">
+# A run just finished. Route it.
+status = "needs_review"   # try: "ok", "failed", "", "banana"
+
+if status == "ok":
+    print("Archive the run.")
+elif status == "failed":
+    print("Alert the on-call channel.")
+elif status == "needs_review":
+    print("Add it to tomorrow's review queue.")
+else:
+    print("Unknown status:", repr(status))
+
+print("...and this line runs no matter which branch fired.")
+</textarea>
+      </div>
+
+      <h2>Truthiness: what Python counts as a yes</h2>
+      <p>The condition after <code>if</code> does not have to be a comparison. You will constantly meet lines like <code>if findings:</code> where <code>findings</code> is just a list. This works because every value in Python has a built-in truth value — a property called <dfn>truthiness</dfn>, meaning whether a value counts as yes or no when a condition asks. The rule of thumb is beautiful: <strong>empty and zero things are no; everything else is yes.</strong></p>
+      <p>The complete "no" list — the falsy values — is short: <code>False</code>, <code>None</code>, the number zero (<code>0</code>, <code>0.0</code>), and every empty container: <code>""</code>, <code>[]</code>, <code>{}</code>, <code>set()</code>. Absolutely everything else is truthy. Flip these cards until none of them surprise you:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">[]</span><span class="flip-back">Falsy. An empty list is a no — which is why "if results:" reads as "if we found anything".</span></button>
+        <button class="flip" type="button"><span class="flip-front">0</span><span class="flip-back">Falsy. Zero counts as no. Watch out when 0 is a legitimate value, like a count or an index.</span></button>
+        <button class="flip" type="button"><span class="flip-front">None</span><span class="flip-back">Falsy. The "nothing here" object from chapter 2. "if reply is None:" is the precise way to test for it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">"false"</span><span class="flip-back">Truthy! It is a non-empty string. Python never reads the word inside — it only checks emptiness.</span></button>
+        <button class="flip" type="button"><span class="flip-front">" "</span><span class="flip-back">Truthy. A single space is still a character, so the string is not empty. A classic source of "why did my check pass?" bugs.</span></button>
+        <button class="flip" type="button"><span class="flip-front">{"retries": 0}</span><span class="flip-back">Truthy. The dict has one key, so it is non-empty — even though its value happens to be a falsy zero.</span></button>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Truthiness has one famous trap. <code>if count:</code> treats a count of zero the same as "no count at all". If zero is a real, meaningful value — zero retries, zero rupees, row zero — you must ask the precise question instead: <code>if count is not None:</code>. When you see a reviewer comment "this breaks when the value is 0", this is almost always the bug they found.</p></div>
+
+      <h2>for: once per item</h2>
+      <p>The watchman does not think "let floor-counter equal one; while floor-counter is less than eleven…". He thinks: <em>for each floor, walk it</em>. Python's <code>for</code> works exactly like the watchman, and this surprises people coming from older languages: it is not a counter, it is a <em>walk over a collection</em>.</p>
+
+      <div class="code-title">the shape to read aloud</div>
+      <pre><code class="language-python">for tool in tools:
+    print("checking", tool)</code></pre>
+
+      <p>Read it aloud as: "for each <code>tool</code> in the list <code>tools</code>, do the indented block". Each trip through the block is one <dfn>iteration</dfn> — one pass of the loop. The name <code>tool</code> is the <dfn>loop variable</dfn>: an ordinary name, exactly like the ones in <a href="ch002-names-and-objects.html">chapter 2</a>, that Python re-sticks onto the next item before each pass. You may loop over anything that holds items: a list gives you its elements, a string gives you its characters, a dict gives you its keys (use <code>.items()</code> to get key–value pairs, as you saw in <a href="ch004-collections.html">chapter 4</a>), a file gives you its lines.</p>
+      <p>Three small helpers cover almost every for-loop you will meet in real code:</p>
+      <p><strong><code>range</code></strong> manufactures a sequence of numbers when there is no collection to walk — <code>range(5)</code> yields 0, 1, 2, 3, 4. Two things to lock in: counting starts at 0, and the stop value is <em>excluded</em>. <code>range(1, 4)</code> is 1, 2, 3 — it stops one before the number you wrote. That is why the pattern for "n turns, counted from one" is <code>range(1, n + 1)</code>.</p>
+      <p><strong><code>enumerate</code></strong> hands you each item <em>and its position</em> at the same time, so you never need to maintain a counter by hand. <strong><code>zip</code></strong> walks two (or more) lists in lockstep, pairing the first with the first, the second with the second — and quietly stops at the end of the shorter one. Run all three:</p>
+
+      <div class="pyrun" data-title="for, range, enumerate, zip — all four shapes">
+<textarea class="py-src" spellcheck="false">
+tools = ["search", "calculator", "file_reader"]
+calls = [12, 3, 7]
+
+print("-- for: one pass per item --")
+for tool in tools:
+    print("checking", tool)
+
+print()
+print("-- range: when you just need numbers --")
+for turn in range(1, 4):
+    print("agent turn", turn)
+
+print()
+print("-- enumerate: the item AND its position --")
+for i, tool in enumerate(tools, start=1):
+    print(f"{i}. {tool}")
+
+print()
+print("-- zip: two lists, side by side --")
+for tool, n in zip(tools, calls):
+    print(f"{tool} was called {n} times")
+</textarea>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Lines like <code>for i, tool in enumerate(...)</code> use two loop variables at once. That works because enumerate hands back little pairs, and Python unpacks each pair into the two names — the same tuple unpacking you met in <a href="ch004-collections.html">chapter 4</a>. Later you will meet <a href="ch008-comprehensions.html">comprehensions</a>, which are these same loops folded flat into one line.</p></div>
+
+      <h2>Trace a loop by hand</h2>
+      <p>Here is the single most useful skill this chapter can give you: when a loop confuses you, <em>become the interpreter</em>. Take a pencil, track each variable, and play the loop one iteration at a time. Every senior engineer does this — usually in their head, sometimes genuinely on paper during a code review.</p>
+      <p>Let us trace this loop together. It scans a list of health-check results and stops at the first failure:</p>
+
+      <div class="code-title">first_failure.py</div>
+      <pre><code class="language-python">checks = ["ok", "ok", "error", "ok"]
+for i, status in enumerate(checks):
+    if status == "error":
+        print("problem at position", i)
+        break
+    print("check", i, "passed")
+print("done")</code></pre>
+
+      <p>Step through it exactly as Python would:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Setup">
+          <h3>Before the loop: the list exists, the loop variables do not</h3>
+          <div class="diagram">
+            <div class="d-box hot">checks<small>["ok", "ok", "error", "ok"]</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">i<small>does not exist yet</small></div>
+            <div class="d-box dim">status<small>does not exist yet</small></div>
+          </div>
+          <p class="step-cap">Line 1 runs once: the name <code>checks</code> is stuck onto a four-item list. The loop variables <code>i</code> and <code>status</code> will only come into existence when the loop starts handing out items.</p>
+        </div>
+        <div class="step" data-title="Iteration 1">
+          <h3>Iteration 1: i = 0, status = "ok"</h3>
+          <div class="diagram">
+            <div class="d-box hot">item 0<small>"ok"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">i = 0<small>status = "ok"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">if says no<small>prints: check 0 passed</small></div>
+          </div>
+          <p class="step-cap">enumerate hands over position 0 and the item "ok". The condition <code>status == "error"</code> is false, so the if-block is skipped and the last line of the loop body prints "check 0 passed". End of the body — back to the top for the next item.</p>
+        </div>
+        <div class="step" data-title="Iteration 2">
+          <h3>Iteration 2: i = 1, status = "ok"</h3>
+          <div class="diagram">
+            <div class="d-box dim">item 0</div>
+            <div class="d-box hot">item 1<small>"ok"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">i = 1<small>status = "ok"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">if says no<small>prints: check 1 passed</small></div>
+          </div>
+          <p class="step-cap">Same story, next item. The names <code>i</code> and <code>status</code> are re-stuck onto new values — 1 and "ok". Nothing about the loop's code changed; only the data moving through it did.</p>
+        </div>
+        <div class="step" data-title="Iteration 3">
+          <h3>Iteration 3: the condition finally says yes</h3>
+          <div class="diagram">
+            <div class="d-box dim">item 0</div>
+            <div class="d-box dim">item 1</div>
+            <div class="d-box hot">item 2<small>"error"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">i = 2<small>status = "error"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">if says YES<small>prints: problem at position 2</small></div>
+          </div>
+          <p class="step-cap">This time <code>status == "error"</code> is true, so the if-branch runs: it prints the warning — and then hits <code>break</code>.</p>
+        </div>
+        <div class="step" data-title="break fires">
+          <h3>break: leave the loop, right now</h3>
+          <div class="diagram">
+            <div class="d-box hot">break<small>abandon the loop immediately</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">item 3<small>"ok" — never visited</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">print("done")<small>first line after the loop</small></div>
+          </div>
+          <p class="step-cap">break is the watchman abandoning his round at the open door. The fourth item is never looked at, "check 2 passed" never prints, and execution jumps straight to the first line after the loop.</p>
+        </div>
+        <div class="step" data-title="Final output">
+          <h3>What actually printed</h3>
+          <div class="diagram">
+            <div class="d-box good">check 0 passed</div>
+            <div class="d-box good">check 1 passed</div>
+            <div class="d-box hot">problem at position 2</div>
+            <div class="d-box good">done</div>
+          </div>
+          <p class="step-cap">Four lines of output from a four-item list — but not one line per item. Tracing by hand is how you predict exactly this, before you run anything. If your prediction and the real output ever differ, the difference is precisely where your misunderstanding lives.</p>
+        </div>
+      </div>
+
+      <h2>break and continue: the two escape hatches</h2>
+      <p>You just watched <code>break</code> in action; its sibling deserves equal billing. <code>break</code> means <em>leave the loop entirely</em> — no more items, jump to the first line after the loop. <code>continue</code> means <em>abandon this pass only</em> — skip the rest of the body and move straight to the next item. The watchman breaking off his round at the open door is <code>break</code>; the watchman skipping the empty renovation floor and carrying on with the rest is <code>continue</code>.</p>
+      <p>Both only make sense inside a loop, and both are usually guarded by an <code>if</code>. When you read <code>if not line.strip(): continue</code> in a file-processing script, translate it instantly: "blank line? skip it and move on."</p>
+
+      <h2>while: repeat until the world changes</h2>
+      <p>A <code>for</code> loop knows its itinerary in advance — these ten floors, these five turns, this list of documents. A <code>while</code> loop does not. It keeps going <em>as long as a condition stays true</em>, and it is the right tool when you cannot know up front how many repetitions you need: retry until the API stops being busy, poll until the job finishes, keep the agent going until it produces an answer.</p>
+      <p>The mechanics: before every pass — including the very first — Python checks the condition. True? Run the body once, then check again. False? Skip past the loop and carry on. Which reveals the one way <code>while</code> can hurt you: if nothing inside the body ever changes the condition, the check stays true forever, and you have written an <dfn>infinite loop</dfn> — a loop that never ends and hangs the program (or, with a paid API inside it, burns money until someone notices). Every honest <code>while</code> loop has a line inside it whose whole job is to move the world toward "false".</p>
+      <p>Here is the most common <code>while</code> loop in the AI world — retry with backoff — annotated line by line. Click the lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">retry.py — the shape inside every SDK</div>
+        <div class="wl-line"><code>def ask_with_retries(question, max_tries=4):</code>
+          <div class="wl-note">This wraps the loop in a reusable function — the whole topic of the <a href="ch007-functions.html">next chapter</a>. For now, just read on to the loop inside.</div></div>
+        <div class="wl-line"><code>    attempt = 0</code>
+          <div class="wl-note">The counter starts at zero, <em>before</em> the loop. This is the value the while-condition will watch. Forget this line and Python complains the name does not exist; put it inside the loop by mistake and the counter resets every pass — a classic bug.</div></div>
+        <div class="wl-line"><code>    while attempt &lt; max_tries:</code>
+          <div class="wl-note">The condition is checked before every pass, including the first. As long as we have attempts left, go round again. The comparison reads exactly like English: "while attempt is less than max_tries".</div></div>
+        <div class="wl-line"><code>        attempt += 1</code>
+          <div class="wl-note">The most important line in any while loop: the one that moves the condition toward false. <code>+=</code> means "add to what is already there". Delete this line and the loop never ends — that is the infinite loop.</div></div>
+        <div class="wl-line"><code>        reply = call_model(question)</code>
+          <div class="wl-note">The real work — in production this is a paid API call, which is exactly why it lives inside a bounded loop rather than an unbounded one.</div></div>
+        <div class="wl-line"><code>        if reply == "overloaded":</code>
+          <div class="wl-note">A fork inside the circle. Loops and ifs nest freely — most real control flow is exactly this sandwich: a loop on the outside, decisions on the inside.</div></div>
+        <div class="wl-line"><code>            wait(2 ** attempt)</code>
+          <div class="wl-note"><code>2 ** attempt</code> is 2 to the power of attempt: wait 2, then 4, then 8 seconds. This is exponential backoff — ease off a struggling service more with each failure. You will meet this exact line in nearly every API client ever written.</div></div>
+        <div class="wl-line"><code>            continue</code>
+          <div class="wl-note">Skip the rest of the body and jump back up to the while-condition for another try. The renovation floor, remember: skip this pass, keep the loop alive.</div></div>
+        <div class="wl-line"><code>        return reply</code>
+          <div class="wl-note">If we got here, the reply was good. Returning leaves the function — which also ends the loop. A successful pass never reaches a fifth attempt.</div></div>
+        <div class="wl-line"><code>    return "Model stayed busy -- giving up."</code>
+          <div class="wl-note">Back at the left margin of the function: this only runs if the while-condition went false — all four attempts failed. An honest, bounded surrender instead of an infinite wait.</div></div>
+      </div>
+
+      <p>Now run a live version. The flaky API below is scripted — it fails twice, then succeeds — so you can watch the loop earn its keep. Try changing the number of <code>"overloaded"</code> entries, or the <code>5</code> in the condition:</p>
+
+      <div class="pyrun" data-title="A while loop retrying a flaky API — run me">
+<textarea class="py-src" spellcheck="false">
+# A scripted stand-in for a flaky API: fails twice, then works.
+responses = ["overloaded", "overloaded", "All good: here is your answer."]
+
+def fake_api():
+    if responses:
+        return responses.pop(0)   # hand out the next scripted reply
+    return "overloaded"
+
+attempts = 0
+answer = None
+while answer is None and attempts &lt; 5:
+    attempts += 1
+    reply = fake_api()
+    print(f"attempt {attempts}: got {reply!r}")
+    if reply == "overloaded":
+        continue        # skip the rest of this pass, try again
+    answer = reply      # success: the while-condition goes false
+
+print()
+if answer:
+    print(f"Success after {attempts} attempt(s): {answer}")
+else:
+    print(f"Gave up after {attempts} attempts.")
+</textarea>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>You will often see <code>while True:</code> in real code — a condition that is always yes, on purpose. It is not a mistake: it means "loop forever, and I will use <code>break</code> (or <code>return</code>) to get out from the inside". Chat interfaces, servers, and agent loops love this shape. And there is a fourth kind of control flow — the emergency exit called an exception — which gets <a href="ch009-errors-and-tracebacks.html">a chapter of its own</a>.</p></div>
+
+      <p>One more connection before you move on. In Act V you will build a working AI agent by hand, and its entire heartbeat is one line you can now read fluently: <code>for turn in range(1, max_turns + 1)</code> — a bounded loop with an LLM call inside and a <code>break</code>-style exit when the model says it is done. That is <a href="ch045-react-loop-by-hand.html">the ReAct loop</a>, and it is nothing more than this chapter wearing a lanyard.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Control flow is the most common thing you will ever see in a codebase, so learn its costumes. Guard clauses open most functions: <code>if not api_key: raise ...</code>. Ingestion pipelines are for-loops: <code>for doc in documents:</code>. Every SDK hides a retry while-loop with exponential backoff, surfaced as a <code>max_retries</code> setting. Agent harnesses cap their loop with <code>max_turns</code> or a recursion limit — when someone says "the agent hit max iterations", they mean a loop guard fired. And control flow escapes Python entirely: the <code>rules:</code> section of a GitLab CI file is an if/elif chain written in <a href="ch005-yaml-and-json.html">YAML</a> — conditions checked top to bottom, first match wins, deciding whether a job runs at all.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. A script runs <code>findings = []</code> and then <code>if findings:</code>. What happens to the if-block?</p>
+          <div class="q-opts">
+            <button data-opt="a">It runs — the list exists, so the condition is true</button>
+            <button data-opt="b">Python raises an error, because a list is not True or False</button>
+            <button data-opt="c">It is skipped — an empty list counts as falsy</button>
+          </div>
+          <p class="q-explain">Every value has a truth value, and empty containers count as no. <code>if findings:</code> reads as "if we found anything" — with zero findings, the block is skipped.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">2. A loop is scanning 100 log lines. On line 40 it hits <code>continue</code>. What happens next?</p>
+          <div class="q-opts">
+            <button data-opt="a">The rest of the body is skipped for line 40, and the loop moves on to line 41</button>
+            <button data-opt="b">The loop ends immediately, and lines 41–100 are never seen</button>
+            <button data-opt="c">Line 40 is processed again from the top of the loop body</button>
+          </div>
+          <p class="q-explain"><code>continue</code> abandons the current pass only — the renovation floor. Ending the whole loop and jumping past the remaining 60 lines would be <code>break</code>.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. What does <code>for i in range(3):</code> give you?</p>
+          <div class="q-opts">
+            <button data-opt="a">1, 2, 3</button>
+            <button data-opt="b">0, 1, 2</button>
+            <button data-opt="c">0, 1, 2, 3</button>
+          </div>
+          <p class="q-explain">range starts at 0 and the stop value is excluded — three numbers, but not the number three. This off-by-one convention is why "n turns counted from one" is written <code>range(1, n + 1)</code>.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. You need to keep polling a job's status until it reports "finished", and you have no idea how long that will take. Which loop fits?</p>
+          <div class="q-opts">
+            <button data-opt="a">A while loop — the repetition count is unknown in advance</button>
+            <button data-opt="b">A for loop over the job — for loops handle everything</button>
+            <button data-opt="c">Neither — Python cannot wait for external events</button>
+          </div>
+          <p class="q-explain"><code>for</code> walks a known collection; <code>while</code> repeats until a condition changes. "Until it finishes" is a condition, not an itinerary — so it is a while (with a sensible attempt cap, so it cannot spin forever).</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. You have a list of tool names and a separate list of their run times, and you want to print them side by side. Which helper is built for this?</p>
+          <div class="q-opts">
+            <button data-opt="a">enumerate — it pairs things up</button>
+            <button data-opt="b">range — loop over the positions and index both lists</button>
+            <button data-opt="c">zip — it walks both lists in lockstep</button>
+          </div>
+          <p class="q-explain"><code>zip(names, times)</code> pairs first with first, second with second. enumerate pairs each item with its <em>position</em>, not with another list — and while the range-and-index approach works, zip says the same thing in half the ink.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>All control flow is three moves: fork (<code>if</code>/<code>elif</code>/<code>else</code>), walk a collection (<code>for</code>), repeat until a condition changes (<code>while</code>). Everything else is an accessory.</li>
+          <li>An if/elif chain is checked top to bottom and the first true condition wins — exactly one branch runs, and the rest are skipped.</li>
+          <li>Truthiness: empty and zero things count as no (<code>None</code>, <code>0</code>, <code>""</code>, <code>[]</code>, <code>{}</code>); everything else counts as yes. Use <code>is not None</code> when zero is a legitimate value.</li>
+          <li><code>for</code> is "for each item", not a counter. <code>range</code> manufactures numbers (stop excluded), <code>enumerate</code> adds positions, <code>zip</code> pairs lists in lockstep.</li>
+          <li><code>break</code> leaves the loop entirely; <code>continue</code> skips just the current pass. Both usually ride behind an <code>if</code>.</li>
+          <li>Every honest <code>while</code> loop contains a line that pushes its condition toward false — without one, you have an infinite loop, and with a paid API inside, an expensive one.</li>
+          <li>When a loop confuses you, trace it by hand: track each variable, one iteration at a time, and predict the output before running. The gap between prediction and reality is exactly where the misunderstanding lives.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

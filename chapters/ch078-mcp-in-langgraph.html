@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP inside LangChain and LangGraph — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch078">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IX · MCP and Agent Protocols</div>
+        <h1>MCP inside LangChain and LangGraph</h1>
+        <p class="ch-tagline">Three lines of adapter code turn any MCP server into ordinary agent tools — and one strategic idea turns your toolbox into an asset that no framework migration can ever take away from you.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 79 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Meera runs an equipment-hire house for film crews. For years, her warehouse was a museum of incompatibility: every camera brand had its own battery mount, so a crew that switched from one brand to another had to re-buy an entire wall of batteries, chargers, and rigs. Her capital was locked to whichever brand she had bet on.</p>
+        <p>Then the industry quietly standardised on one battery mount. Today her single shelf of batteries powers every camera that comes through the door. When a crew arrives with a body she has never seen, they clip on a thin adapter plate — thirty seconds, no rewiring — and her whole inventory just works. Crews now switch camera brands the way you change shoes, because the expensive part, the powered toolbox, no longer cares which body it feeds.</p>
+        <p>Your MCP servers are that shelf of batteries. LangChain, LangGraph, Claude Code, a hand-rolled loop — those are camera bodies, and they will come and go. This chapter is about the thin adapter plate: <strong>langchain-mcp-adapters</strong>, the package that clips your standard toolbox onto the LangChain mount. And about why, once you own the batteries, you stop fearing the bodies.</p>
+      </section>
+
+      <h2>The problem the adapter solves</h2>
+      <p>In the previous chapter you built an MCP server with <code>FastMCP</code>: a handful of Python functions decorated with <code>@mcp.tool()</code>, served over stdio or streamable HTTP, callable by anything that speaks the protocol. You proved it works from an MCP client. Lovely. But your working agents are not generic MCP clients — they are LangChain agents built with <a href="ch054-create-agent.html"><code>create_agent</code></a> and LangGraph graphs built with <a href="ch058-stategraph-anatomy.html"><code>StateGraph</code></a>. Those expect tools the LangChain way: the <code>@tool</code>-decorated Python functions you met in <a href="ch053-langchain-tools.html">the LangChain tools chapter</a>, with a name, a description, and an argument schema.</p>
+      <p>So there is a gap. On one side, a server speaking MCP's wire protocol. On the other, a harness expecting a list of tool objects. An <dfn>adapter</dfn> — a small piece of code that translates between two interfaces that mean the same thing but speak differently — closes that gap. The official one for this ecosystem is the <code>langchain-mcp-adapters</code> package, and its whole public surface fits in a sentence: give <code>MultiServerMCPClient</code> a dictionary of server configs, call <code>get_tools()</code>, and pass the result anywhere LangChain tools go.</p>
+      <p>Why does this matter beyond convenience? Count the integrations. If every harness needs custom glue for every toolbox, m harnesses and n toolboxes cost you m times n integrations — every combination hand-wired. With one protocol in the middle, each harness implements MCP once and each toolbox implements MCP once: m plus n. That arithmetic is the entire business case for MCP, and the adapter is where LangChain pays its share of it.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">harness</span><span class="flip-back">The machinery that runs the agent loop — LangChain, LangGraph, Claude Code, or your own fifty lines. The camera body in the story.</span></button>
+        <button class="flip" type="button"><span class="flip-front">MCP server</span><span class="flip-back">A separate program exposing tools (and prompts, and resources) over the Model Context Protocol. The standard battery in the story.</span></button>
+        <button class="flip" type="button"><span class="flip-front">adapter</span><span class="flip-back">Code that translates one interface into another. langchain-mcp-adapters turns MCP tool listings into ordinary LangChain tool objects.</span></button>
+        <button class="flip" type="button"><span class="flip-front">transport</span><span class="flip-back">How client and server physically talk: stdio for a subprocess on your machine, streamable HTTP for a server across the network.</span></button>
+        <button class="flip" type="button"><span class="flip-front">tool schema</span><span class="flip-back">The name, description, and argument shape a server advertises for each tool. It is what the model reads to decide what to call.</span></button>
+        <button class="flip" type="button"><span class="flip-front">code execution with MCP</span><span class="flip-back">A 2026-era efficiency pattern: instead of loading every schema into context, present servers as importable code APIs and let the model write a script that calls them in a sandbox.</span></button>
+      </div>
+
+      <h2>Three lines between your server and your agent</h2>
+      <p>Here is the whole bridge, in real code. One server runs locally over stdio (the invoice server you could have built last chapter); another is a shared team server reached over streamable HTTP. Read it once, then click through the annotated version below it.</p>
+
+      <div class="code-title">agent_with_mcp.py</div>
+      <pre><code class="language-python">from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain.agents import create_agent
+
+client = MultiServerMCPClient(
+    {
+        "invoices": {
+            "command": "python",
+            "args": ["invoice_server.py"],
+            "transport": "stdio",
+        },
+        "docs": {
+            "url": "http://localhost:8000/mcp/",
+            "transport": "streamable_http",
+        },
+    }
+)
+
+tools = await client.get_tools()
+
+agent = create_agent(
+    "anthropic:claude-sonnet-4-5",
+    tools,
+    system_prompt="You are a billing assistant.",
+)
+
+result = await agent.ainvoke(
+    {"messages": [{"role": "user", "content": "Total for invoice 42?"}]}
+)</code></pre>
+
+      <div class="walkthrough">
+        <div class="wl-head">agent_with_mcp.py — annotated</div>
+        <div class="wl-line"><code>from langchain_mcp_adapters.client import MultiServerMCPClient</code>
+          <div class="wl-note">The adapter lives in its own package — <code>pip install langchain-mcp-adapters</code>. It is deliberately small: its job is translation, not orchestration.</div></div>
+        <div class="wl-line"><code>from langchain.agents import create_agent</code>
+          <div class="wl-note">The exact same import you used in <a href="ch054-create-agent.html">the create_agent chapter</a>. Nothing about the harness changes in this file — that is the point.</div></div>
+        <div class="wl-line"><code>client = MultiServerMCPClient(</code>
+          <div class="wl-note">One client, many servers. You hand it a dictionary mapping a nickname you choose to that server's connection config — the same shape of config block you have seen in tools like Claude Code.</div></div>
+        <div class="wl-line"><code>    "invoices": {</code></div>
+        <div class="wl-line"><code>        "command": "python",</code>
+          <div class="wl-note"><code>command</code> plus <code>args</code> means: launch this program as a subprocess. The adapter starts your server for you and talks to it over its stdin and stdout pipes.</div></div>
+        <div class="wl-line"><code>        "args": ["invoice_server.py"],</code></div>
+        <div class="wl-line"><code>        "transport": "stdio",</code>
+          <div class="wl-note">The local transport. Perfect for tools that need your machine: your files, your scripts, your local database.</div></div>
+        <div class="wl-line"><code>    },</code></div>
+        <div class="wl-line"><code>    "docs": {</code></div>
+        <div class="wl-line"><code>        "url": "http://localhost:8000/mcp/",</code>
+          <div class="wl-note">No command here — nothing to launch. This server is already running somewhere, and we just know its address.</div></div>
+        <div class="wl-line"><code>        "transport": "streamable_http",</code>
+          <div class="wl-note">The network transport. This is how a whole team shares one toolbox: the server runs once, centrally, and every agent in the company connects to it.</div></div>
+        <div class="wl-line"><code>    },</code></div>
+        <div class="wl-line"><code>)</code></div>
+        <div class="wl-line"><code>tools = await client.get_tools()</code>
+          <div class="wl-note">The most important line in the chapter. The client connects to every server, asks each one "what tools do you offer?", and wraps every answer as an ordinary LangChain tool object. It is <code>await</code>-ed because it does network and subprocess I/O — the <a href="ch039-async-await.html">async chapter</a> pattern in the wild.</div></div>
+        <div class="wl-line"><code>agent = create_agent(</code>
+          <div class="wl-note">From here down, the code has no idea MCP exists. <code>tools</code> is just a list of tools, identical in kind to ones you wrote with <code>@tool</code>.</div></div>
+        <div class="wl-line"><code>    "anthropic:claude-sonnet-4-5",</code></div>
+        <div class="wl-line"><code>    tools,</code>
+          <div class="wl-note">MCP-backed tools and plain Python tools can sit in this list side by side. The model cannot tell them apart, because by now there is nothing to tell apart.</div></div>
+        <div class="wl-line"><code>    system_prompt="You are a billing assistant.",</code></div>
+        <div class="wl-line"><code>)</code></div>
+        <div class="wl-line"><code>result = await agent.ainvoke(</code>
+          <div class="wl-note"><code>ainvoke</code> is the async twin of <code>invoke</code>. When the model picks an MCP tool, the adapter quietly routes the call to the owning server over its transport and brings the result back as a normal tool message.</div></div>
+        <div class="wl-line"><code>    {"messages": [{"role": "user", "content": "Total for invoice 42?"}]}</code></div>
+        <div class="wl-line"><code>)</code></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Two housekeeping details. First, <code>await</code> only works inside an async function, so in a script you wrap this in <code>async def main()</code> and run it with <code>asyncio.run(main())</code>. Second, older tutorials show <code>MultiServerMCPClient</code> used as an <code>async with</code> context manager — current versions let you simply create it and call <code>get_tools()</code>, as above. The package can also load MCP <em>prompts</em> and <em>resources</em>, but tools are the headline act.</p></div>
+
+      <p>And LangGraph? By the time <code>get_tools()</code> returns, the adapter's work is finished and you are holding ordinary LangChain tools. So everything you already know applies unchanged: bind them to a model with <code>bind_tools(tools)</code> inside a hand-built <a href="ch058-stategraph-anatomy.html">StateGraph</a>, route on tool calls with <a href="ch059-conditional-edges.html">conditional edges</a>, or hand the same list to <a href="ch067-create-deep-agent-anatomy.html"><code>create_deep_agent</code></a>. One toolbox, and every harness in this course — plus the ones outside it — can hold it.</p>
+
+      <h2>What actually happens, step by step</h2>
+      <p>The code above hides a small choreography. Watch it once in slow motion, because when an MCP integration misbehaves in production, the failure is almost always in one of these five steps.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Config">
+          <h3>1. The client reads its map</h3>
+          <div class="diagram">
+            <div class="d-box hot">MultiServerMCPClient<small>invoices: stdio · docs: http</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">invoice_server.py<small>not running yet</small></div>
+            <div class="d-box dim">docs server<small>:8000</small></div>
+          </div>
+          <p class="step-cap">Nothing has connected yet. The client just knows two nicknames and how each server likes to be reached.</p>
+        </div>
+        <div class="step" data-title="Handshake">
+          <h3>2. Connect and ask: what do you offer?</h3>
+          <div class="diagram">
+            <div class="d-box">Client<small>list tools?</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">invoice_server.py<small>launched as subprocess</small></div>
+            <div class="d-box hot">docs server<small>HTTP session opened</small></div>
+          </div>
+          <p class="step-cap"><code>get_tools()</code> starts the stdio server as a child process and opens an HTTP session to the remote one, then asks each for its tool list — names, descriptions, argument schemas.</p>
+        </div>
+        <div class="step" data-title="Wrap">
+          <h3>3. Each schema becomes a LangChain tool</h3>
+          <div class="diagram">
+            <div class="d-box">MCP schema<small>get_total(invoice_id)</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Adapter<small>wraps it</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">LangChain tool<small>looks hand-written</small></div>
+          </div>
+          <p class="step-cap">This is the adapter plate clicking on. Each wrapped tool remembers which server owns it, but shows the harness a perfectly ordinary face.</p>
+        </div>
+        <div class="step" data-title="Call">
+          <h3>4. The agent loop calls a tool</h3>
+          <div class="diagram">
+            <div class="d-box">LLM<small>call get_total(42)</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Adapter<small>routes to "invoices"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">invoice_server.py<small>runs the real function</small></div>
+          </div>
+          <p class="step-cap">Mid-conversation, the model requests a tool exactly as in <a href="ch045-react-loop-by-hand.html">your hand-built loop</a>. The wrapper forwards the call across the transport to the owning server, which executes the real Python.</p>
+        </div>
+        <div class="step" data-title="Return">
+          <h3>5. The result rejoins the loop</h3>
+          <div class="diagram">
+            <div class="d-box">invoice_server.py<small>"1500.00"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Tool message<small>into the history</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">LLM<small>writes the answer</small></div>
+          </div>
+          <p class="step-cap">The server's answer comes back over the wire, lands in the transcript as a tool result, and the loop continues. Think, act, observe — the heartbeat from chapter 45, with a longer arm.</p>
+        </div>
+      </div>
+
+      <h2>Prove it: one toolbox, two harnesses</h2>
+      <p>The claim on the tin is that the same toolbox serves <em>any</em> harness. Let's prove it in miniature. The runnable below builds two tiny "MCP servers", one adapter function that does what <code>get_tools()</code> does, and then feeds the identical toolbox to two completely different harnesses: a ReAct-style loop and a graph-style pipeline. As always in this course, the model is a scripted <code>fake_llm</code> stand-in so the whole thing runs in your browser. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="One toolbox, two harnesses — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- The MCP "servers": one shared toolbox ---------------
+# A real MCP server is a separate process speaking a wire
+# protocol. Here each is a tiny class with the two moves the
+# protocol defines: list your tools, run a tool.
+
+class MathServer:
+    def list_tools(self):
+        return [{"name": "add", "desc": "Add two numbers"},
+                {"name": "multiply", "desc": "Multiply two numbers"}]
+    def call_tool(self, name, args):
+        a, b = args["a"], args["b"]
+        return a + b if name == "add" else a * b
+
+class WeatherServer:
+    def list_tools(self):
+        return [{"name": "get_weather", "desc": "Weather for a city"}]
+    def call_tool(self, name, args):
+        return f"28 C and clear in {args['city']}"
+
+# ---- The adapter: what langchain-mcp-adapters does -------
+# Ask every server for its tools; wrap each as a plain
+# callable; remember which server owns it.
+
+def get_tools(servers):
+    toolbox = {}
+    for server in servers.values():
+        for spec in server.list_tools():
+            def wrap(server=server, tool=spec["name"]):
+                return lambda args: server.call_tool(tool, args)
+            toolbox[spec["name"]] = wrap()
+    return toolbox
+
+SERVERS = {"math": MathServer(), "weather": WeatherServer()}
+tools = get_tools(SERVERS)
+print("Toolbox:", ", ".join(tools))
+print()
+
+# ---- Harness 1: a ReAct-style loop ------------------------
+def fake_llm(history):
+    if len(history) == 1:
+        return ("call", "multiply", {"a": 6, "b": 7})
+    return ("final", "6 times 7 is 42.")
+
+def react_harness(task, tools):
+    history = [task]
+    while True:
+        step = fake_llm(history)
+        if step[0] == "final":
+            return step[1]
+        _, name, args = step
+        result = tools[name](args)
+        history.append(f"observation: {result}")
+
+# ---- Harness 2: a graph-style pipeline ---------------------
+def graph_harness(city, tools):
+    report = tools["get_weather"]({"city": city})   # node 1
+    return f"Trip note: {report}."                  # node 2
+
+print("ReAct harness:", react_harness("what is 6 times 7?", tools))
+print("Graph harness:", graph_harness("Pune", tools))
+print()
+print("Same toolbox, two harnesses, zero rewiring.")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now extend it. Add an <code>InvoiceServer</code> with a <code>get_total</code> tool and watch it appear in the toolbox without touching either harness — that is the m-plus-n arithmetic happening under your fingers. Then rename a tool in <code>list_tools</code> but not in <code>call_tool</code>'s logic and see which side breaks. Schema drift between what a server advertises and what it executes is a real production failure you will now recognise.</p></div>
+
+      <h2>The strategic argument: your toolbox outlives your harness</h2>
+      <p>Here is the part worth repeating in a leadership meeting. Agent harnesses churn. In this course alone you have watched LangChain deprecate one agent API for another, and the wider landscape (<a href="ch090-the-contenders.html">chapter 90</a> maps it) saw two major Microsoft frameworks merge into a third. Betting your company's integrations on any single harness means rewriting them every time the framework world lurches.</p>
+      <p>But look at what your tools actually contain: access to the invoice database, the CRM query, the deployment script, the document store. That is <em>business logic</em> — the durable, expensive, audited part. The harness is just the loop around it, and you built one yourself in fifty lines. MCP's quiet trick is to move the durable part out of the framework and into servers that you own, speak a public protocol, and answer to any client. The harness stops being a marriage and becomes a rental.</p>
+
+      <div class="tbl"><table>
+        <tr><th>When you migrate harnesses…</th><th>What happens to it</th></tr>
+        <tr><td>MCP servers (the toolbox)</td><td>Unchanged. Not one line.</td></tr>
+        <tr><td>Tool schemas, auth, audit logging in the servers</td><td>Unchanged.</td></tr>
+        <tr><td>Adapter wiring (<code>get_tools()</code> call)</td><td>Swapped for the new harness's MCP client — a few lines.</td></tr>
+        <tr><td>Agent loop, prompts, graph shape</td><td>Rewritten — but this was always the cheap part.</td></tr>
+      </table></div>
+
+      <p>This also reorganises teams. A platform group can own the servers — one hardened invoice server, one CRM server, centrally deployed over streamable HTTP — while every product team picks whatever harness suits them. The same battery shelf, many camera bodies. When someone asks "should we build our tools as LangChain tools or MCP servers?", the honest answer is: build anything shared or long-lived as an MCP server, and keep <code>@tool</code> functions for glue that genuinely belongs to one agent.</p>
+
+      <h2>The 2026 efficiency turn: code execution with MCP</h2>
+      <p>Success created MCP's next problem. Once connecting servers became trivial, agents started carrying <em>dozens</em> of them — and suddenly hundreds of tool schemas were being stuffed into the model's context before it read the user's first word. Worse, remember from <a href="ch041-tokens-and-cost.html">the tokens-and-cost chapter</a> that every tool result flows through the context too: ask a spreadsheet tool for a 2,000-row sheet so you can find five rows, and all 2,000 rows ride through the model — billed, slow, and distracting. You met the same pain from another angle in <a href="ch071-the-token-bill.html">the token bill</a>.</p>
+      <p>The pattern the field converged on — Anthropic's engineering team wrote it up in late 2025, and 2026 made it mainstream — is <dfn>code execution with MCP</dfn>: instead of loading every tool schema into context and making the model request calls one at a time, present each server as a small <em>code API</em> — a folder of thin wrapper functions — and let the model write a short script that imports and calls them inside a sandbox. Three things improve at once:</p>
+      <ul>
+        <li><strong>Progressive disclosure.</strong> The model reads only the wrapper files it actually needs, instead of every schema from every server up front.</li>
+        <li><strong>Results stay out of context.</strong> The 2,000 rows live inside the sandbox as a variable; only the five filtered rows return to the model.</li>
+        <li><strong>Control flow moves into code.</strong> Loops, retries, and if-this-then-that happen in the script — one round trip instead of a chain of model turns.</li>
+      </ul>
+
+      <div data-bars data-title="Tokens through the model's context, one document-processing task (Anthropic's published example)" data-unit="tokens"
+           data-note="Round, published illustrative figures: presenting servers as code APIs cut one real workflow from about 150,000 context tokens to about 2,000.">
+        <div class="bar" data-label="Classic tool calling" data-value="150000"></div>
+        <div class="bar" data-label="Code execution with MCP" data-value="2000"></div>
+      </div>
+
+      <p>Feel the difference yourself. The runnable below simulates both patterns against the same 2,000-row "sales sheet" server and counts how many tokens pass through the model's context in each. The token counter is a crude characters-divided-by-four estimate — the standard back-of-envelope from chapter 41 — but the shape of the result is exactly what production teams see.</p>
+
+      <div class="pyrun" data-title="Classic tool calling vs code execution — count the tokens">
+<textarea class="py-src" spellcheck="false">
+# One "MCP server" tool that returns a big result: 2,000 rows.
+ROWS = [{"id": i,
+         "region": "south" if i % 4 == 0 else "north",
+         "amount": (i * 37) % 900} for i in range(2000)]
+
+def sheet_read():
+    return ROWS
+
+def tokens(x):
+    # crude estimate: about 4 characters per token
+    return max(1, len(str(x)) // 4)
+
+# ---- Pattern A: classic tool calling ----------------------
+# Every intermediate result flows THROUGH the model context.
+context_a = 0
+result = sheet_read()
+context_a += tokens(result)     # model reads ALL 2,000 rows
+south = [r for r in result if r["region"] == "south"]
+top5 = sorted(south, key=lambda r: -r["amount"])[:5]
+context_a += tokens(top5)       # and then the answer
+
+# ---- Pattern B: code execution with MCP -------------------
+# The model writes a short script. The script runs in a
+# sandbox NEXT TO the data; only the answer enters context.
+script = """rows = sheet_read()
+south = [r for r in rows if r['region'] == 'south']
+top5 = sorted(south, key=lambda r: -r['amount'])[:5]"""
+context_b = tokens(script)      # the model wrote this much
+rows = sheet_read()             # runs in the sandbox, free
+south_b = [r for r in rows if r["region"] == "south"]
+top5_b = sorted(south_b, key=lambda r: -r["amount"])[:5]
+context_b += tokens(top5_b)     # only the answer comes back
+
+print(f"Pattern A (classic):        ~{context_a:,} tokens through context")
+print(f"Pattern B (code execution): ~{context_b:,} tokens through context")
+print(f"Reduction: {round(100 * (1 - context_b / context_a), 1)}%")
+print()
+print("Same task, same data, same answer -- the difference is")
+print("WHERE the intermediate result lived.")
+</textarea>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Code execution buys efficiency by running <em>model-written code</em>, and that is never free. The script must run in a real sandbox — isolated, resource-limited, with no credentials lying around — because you are now executing whatever the model chose to write. The next chapter, on MCP security and governance, treats this properly. For now, hold one rule: never adopt the code-execution pattern on infrastructure you would not let an intern run arbitrary scripts on.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will spot this chapter everywhere once you know its shapes. In a Python repo, <code>langchain-mcp-adapters</code> in <code>requirements.txt</code> and a <code>MultiServerMCPClient({...})</code> block — often in a file named <code>tools.py</code> or <code>mcp_client.py</code> — mean the team buys the decoupling argument. Config dictionaries with <code>"transport": "stdio"</code> or <code>"streamable_http"</code> are the same shape you see in a <code>.mcp.json</code> for Claude Code: one toolbox description, many harnesses reading it. In merge requests, "moved the retriever into an MCP server" or "pointed the agent at the shared docs server" is the platform-team pattern from this chapter. And when an engineering blog or an internal design doc says "we let the agent write scripts against generated tool wrappers", that is code execution with MCP — usually justified with a token-bill chart very like the one above.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What does <code>await client.get_tools()</code> actually hand back to you?</p>
+          <div class="q-opts">
+            <button data-opt="a">Raw JSON schemas that you must parse before use</button>
+            <button data-opt="b">Ordinary LangChain tool objects that route calls back to the server that owns them</button>
+            <button data-opt="c">A copy of each server's source code, imported locally</button>
+          </div>
+          <p class="q-explain">The adapter wraps every advertised MCP tool as a normal LangChain tool. The harness — and the model — cannot tell it from a hand-written <code>@tool</code> function; only the wrapper knows a server sits at the other end.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Your team migrates its agents from LangGraph to a different harness next year. What happens to the MCP servers?</p>
+          <div class="q-opts">
+            <button data-opt="a">They must be rewritten in the new framework's tool format</button>
+            <button data-opt="b">They keep working, but only over stdio</button>
+            <button data-opt="c">Nothing — the servers are harness-agnostic, and only the few lines of client wiring change</button>
+          </div>
+          <p class="q-explain">That is the strategic decoupling argument: the durable business logic lives in servers speaking a public protocol, so a harness migration touches only the thin adapter layer, not the toolbox.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. In the code-execution-with-MCP pattern, why does the token bill drop so sharply?</p>
+          <div class="q-opts">
+            <button data-opt="a">The sandbox compresses the JSON before sending it</button>
+            <button data-opt="b">Intermediate results stay inside the sandbox, and only the model's short script and the final answer pass through context</button>
+            <button data-opt="c">The model switches to a cheaper, smaller model for tool calls</button>
+          </div>
+          <p class="q-explain">Classic tool calling routes every intermediate result — all 2,000 rows — through the model's context. When the model writes a script that runs next to the data, the bulky middle stays in the sandbox and context carries only the script and the answer.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. A shared invoice server must be reachable by every agent in the company, running on a central machine. Which transport does its config need?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>"transport": "streamable_http"</code> with a <code>url</code></button>
+            <button data-opt="b"><code>"transport": "stdio"</code> with a <code>command</code></button>
+            <button data-opt="c">Either — transports are interchangeable at runtime</button>
+          </div>
+          <p class="q-explain">stdio launches a subprocess on <em>your</em> machine — fine for local tools, useless for sharing. A centrally deployed server is reached over the network, which is what streamable HTTP is for.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. Where can the tools returned by the adapter be used?</p>
+          <div class="q-opts">
+            <button data-opt="a">Only inside <code>create_agent</code></button>
+            <button data-opt="b">Only inside LangGraph graphs compiled with a checkpointer</button>
+            <button data-opt="c">Anywhere LangChain tools go — <code>create_agent</code>, <code>bind_tools</code> in a hand-built graph, or <code>create_deep_agent</code></button>
+          </div>
+          <p class="q-explain">Once wrapped, they are ordinary tools. The same list feeds a prebuilt agent, a custom StateGraph via <code>bind_tools</code>, or a deep agent — which is the one-toolbox-many-harnesses promise made good inside a single ecosystem.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li><code>langchain-mcp-adapters</code> is the bridge: <code>MultiServerMCPClient(configs)</code>, then <code>await client.get_tools()</code>, then pass the list to <code>create_agent</code> or any graph — three moves, and MCP servers become ordinary agent tools.</li>
+          <li>One client speaks to many servers at once: stdio configs (<code>command</code> + <code>args</code>) launch local subprocesses; streamable HTTP configs (<code>url</code>) reach shared servers over the network.</li>
+          <li>After <code>get_tools()</code>, the harness cannot distinguish MCP tools from hand-written ones — the adapter routes each call back to its owning server invisibly.</li>
+          <li>The strategic win is decoupling: business logic lives in harness-agnostic servers you own, so frameworks become swappable front-ends instead of marriages. m plus n integrations, not m times n.</li>
+          <li>Code execution with MCP is the 2026 efficiency direction: present servers as importable code APIs, let the model write a script in a sandbox, and keep bulky intermediate results out of context — published examples cut token flow by roughly 98 percent.</li>
+          <li>Model-written code demands a real sandbox; the security half of that story is exactly where the next chapter picks up.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

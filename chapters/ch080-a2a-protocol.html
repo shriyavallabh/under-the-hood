@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A2A: when agents talk to agents — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch080">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IX · MCP and Agent Protocols</div>
+        <h1>A2A: when agents talk to agents</h1>
+        <p class="ch-tagline">MCP gave your agent hands; A2A gives it colleagues. Agent cards, tasks, messages and artifacts — the standard for one agent hiring another it will never see the inside of.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 81 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your interior design studio just landed a hotel project. Your own team handles the drawings, the colours, the site visits — but the custom furniture needs a specialist workshop across town. You have never seen inside that workshop. You do not know their staff, their machines, or how they organise their work. You do not need to. Their brochure — published where anyone can find it — says what they make, what formats they accept ("send drawings as PDF"), and how to place an order. You place one and receive an order number. Over the next two weeks that order has a life of its own: acknowledged, in progress, then a phone call — "which fabric for the chairs?" — and everything waits until you answer. Finally a truck arrives with the furniture and a handover file of care instructions.</p>
+        <p>Notice what made this work. Not friendship. Not shared software. A standard way of doing business between two firms that stay opaque to each other: the brochure, the order number, the status calls, the delivery. <strong>A2A is exactly that standard for agents.</strong> The brochure is an agent card, the order is a task, the phone calls are messages, and what the truck delivers are artifacts.</p>
+      </section>
+
+      <h2>One protocol for tools, one for colleagues</h2>
+      <p>Quick recap of where this Act has taken you. <a href="ch074-why-mcp-exists.html">MCP exists</a> to solve the M-by-N integration explosion: an agent's client speaks one standard protocol to any <a href="ch075-mcp-architecture.html">MCP server</a>, which offers tools, resources and prompts. You <a href="ch077-build-an-mcp-server.html">built a server</a>, and in the <a href="ch079-mcp-security.html">last chapter</a> learned why plugging strangers' servers into your agent needs governance. Through all of it, one shape held: an agent on one side, <em>capabilities</em> on the other. The tool waits. The tool gets called. The tool answers in seconds and forgets you.</p>
+      <p>But another agent is not a tool. It has its own model, its own <a href="ch045-react-loop-by-hand.html">loop</a>, its own tools behind the curtain. It may take minutes or days, come back with a clarifying question halfway through, or refuse the job. Squeeze all of that behind a <a href="ch035-tool-calling.html">tool-call</a> interface — one request in, one result out — and you lose everything that makes it an agent. You would be phoning the furniture workshop and refusing to hang up until the chairs were finished.</p>
+      <p><dfn>A2A</dfn> — the Agent2Agent protocol — is the missing counterpart: an open standard for one agent to discover, hire and collaborate with another agent over the network, as a peer rather than as a tool. The two protocols are deliberately complementary, and the industry pitch is exactly one sentence long: <strong>MCP connects agents to tools; A2A connects agents to each other.</strong></p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>MCP</th><th>A2A</th></tr>
+        <tr><td>Connects an agent to</td><td>Tools, resources, data — its hands</td><td>Other agents — its colleagues</td></tr>
+        <tr><td>The far side is</td><td>A server offering passive capabilities; it waits to be called</td><td>A peer with its own model and loop; it reasons, asks back, can refuse</td></tr>
+        <tr><td>Typical exchange</td><td>A tool call — request in, result out, seconds</td><td>A task — delegated work with a lifecycle, minutes to days</td></tr>
+        <tr><td>Discovery</td><td>Client connects to a configured server and lists its tools</td><td>Fetch the agent card from a well-known URL</td></tr>
+        <tr><td>What comes back</td><td>A tool result</td><td>Messages along the way, artifacts at the end</td></tr>
+        <tr><td>Origin and home</td><td>Started by Anthropic, open standard</td><td>Started by Google, governed by the Linux Foundation</td></tr>
+      </table></div>
+
+      <h2>The agent card: a brochure at a fixed address</h2>
+      <p>Delegation starts with a question: <em>who out there can do this, and how do I reach them?</em> A2A answers with the <dfn>agent card</dfn> — a small JSON document an agent publishes to describe itself: its name, what it can do, where to send work, what formats it accepts, and how callers must authenticate. It sits at a <dfn>well-known URL</dfn> — a standardised path on a domain where machines know to look — and for A2A that path is <code>/.well-known/agent-card.json</code>.</p>
+      <p>Read one the way a client agent would. Click the annotated lines — the card is trimmed to the fields that matter (the full schema lives in the spec):</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">agent-card.json — served at https://agents.example-law.com/.well-known/agent-card.json</div>
+        <div class="wl-line"><code>{</code></div>
+        <div class="wl-line"><code>  "name": "contract-review-agent",</code>
+          <div class="wl-note">A stable identity. Your logs, dashboards and audit trails will refer to remote agents by this name, so it is machine-friendly rather than pretty.</div></div>
+        <div class="wl-line"><code>  "description": "Reviews vendor contracts and flags risky clauses.",</code>
+          <div class="wl-note">This sentence is not marketing copy for humans — it is written for the <em>calling agent's model</em> to read when deciding whom to delegate to. Exactly like a <a href="ch046-tools.html">tool description</a>, but describing a whole colleague instead of a single function.</div></div>
+        <div class="wl-line"><code>  "url": "https://agents.example-law.com/a2a/v1",</code>
+          <div class="wl-note">The service endpoint — the front door where tasks are actually sent. The brochure and the workshop are different addresses.</div></div>
+        <div class="wl-line"><code>  "version": "1.4.2",</code></div>
+        <div class="wl-line"><code>  "capabilities": { "streaming": true, "pushNotifications": true },</code>
+          <div class="wl-note">Can you watch progress live (streamed events), and can it call <em>you</em> back over a webhook when a long job finishes? Vital for tasks that outlive a single connection.</div></div>
+        <div class="wl-line"><code>  "defaultInputModes": ["text/plain", "application/pdf"],</code>
+          <div class="wl-note">Accepted formats, as media types — the workshop saying "send drawings as PDF". There is a matching <code>defaultOutputModes</code> for what it produces.</div></div>
+        <div class="wl-line"><code>  "skills": [</code>
+          <div class="wl-note">The menu. Each skill is one advertised competence with an id, a name and a model-readable description. A client picks a skill the way your agent picks a tool.</div></div>
+        <div class="wl-line"><code>    { "id": "review_contract",</code></div>
+        <div class="wl-line"><code>      "name": "Contract review",</code></div>
+        <div class="wl-line"><code>      "description": "Flags indemnity, lock-in and auto-renewal clauses." }</code></div>
+        <div class="wl-line"><code>  ],</code></div>
+        <div class="wl-line"><code>  "securitySchemes": { "bearer": { "type": "http", "scheme": "bearer" } }</code>
+          <div class="wl-note">How callers must authenticate — declared here, enforced at the endpoint. A2A reuses standard web auth (API keys, OAuth and friends) rather than inventing its own. The card <em>declares</em> the scheme; the credentials themselves are exchanged out of band, and every warning from <a href="ch079-mcp-security.html">the security chapter</a> applies doubly when the thing you are trusting is a whole opaque agent.</div></div>
+        <div class="wl-line"><code>}</code></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The card is capability <em>discovery</em>, not capability <em>proof</em>. Anyone can publish a brochure claiming to be excellent at contract review. Deciding whether to believe it — vetting, allowlists, signed cards, contracts between companies — sits outside the wire protocol, exactly like trusting an MCP server did in the previous chapter.</p></div>
+
+      <h2>Tasks: work orders with a lifecycle</h2>
+      <p>Once a client agent has read the card, it sends a message to the endpoint, and the remote agent typically opens a <dfn>task</dfn> — a unit of delegated work with its own id and its own lifecycle. This is the protocol's centre of gravity. A tool call is over in seconds; a task is a <em>work order</em>: acknowledged, progressing, sometimes paused to ask you something, eventually ended — and both sides can look up its state at any time by its id.</p>
+      <p>Three more words complete the vocabulary. A <dfn>message</dfn> is one conversational turn inside the task — from the client ("audit this invoice") or from the remote agent ("which GST rate applies?"). Messages are built from <dfn>parts</dfn> — typed chunks of content such as text, a file, or structured data — which is how one message can carry both a question and a PDF. And an <dfn>artifact</dfn> is a deliverable: the task's actual output — report, file, dataset — also built from parts, kept separate from the chit-chat so consuming the result does not mean re-reading the whole conversation.</p>
+      <p>The lifecycle states will show up in your logs and dashboards, so know them by name: <code>submitted</code>, <code>working</code>, then either the terminal states — <code>completed</code>, <code>failed</code>, <code>canceled</code>, or <code>rejected</code> (real colleagues can say no) — or the two <em>paused</em> states: <code>input-required</code>, when the remote agent needs an answer before continuing, and <code>auth-required</code>, when it needs credentials. The paused states are the protocol's superpower — a remote agent can behave like the workshop that phones you about fabric, instead of failing the whole order.</p>
+      <p>Watch one delegation end to end:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Discover">
+          <h3>1. Discover — fetch the brochure</h3>
+          <div class="diagram">
+            <div class="d-box hot">Your agent<small>needs an invoice audited</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">agent-card.json<small>skills, endpoint, auth</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Remote agent</div>
+          </div>
+          <p class="step-cap">Your agent fetches <code>/.well-known/agent-card.json</code> from the remote domain and reads the skills list. Its model decides this colleague fits the job — the same judgement it applies when picking a tool, one level up.</p>
+        </div>
+        <div class="step" data-title="Delegate">
+          <h3>2. Delegate — a task is born</h3>
+          <div class="diagram">
+            <div class="d-box">Your agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Remote agent<small>task-001 · submitted</small></div>
+          </div>
+          <p class="step-cap">Your agent sends a message ("audit invoice INV-204") to the endpoint. The remote agent opens task-001 and acknowledges. From here on, everything refers to that task id — your order number.</p>
+        </div>
+        <div class="step" data-title="Work">
+          <h3>3. Work — behind their curtain</h3>
+          <div class="diagram">
+            <div class="d-box dim">Your agent<small>polls or streams updates</small></div>
+            <div class="d-box hot">Remote agent<small>task-001 · working</small></div>
+          </div>
+          <p class="step-cap">The remote agent runs its own model, its own loop, its own tools — none of which you can see. You only see the state: <code>working</code>. Opacity is a feature: the workshop does not livestream its lathe.</p>
+        </div>
+        <div class="step" data-title="Pause">
+          <h3>4. Pause — the clarifying phone call</h3>
+          <div class="diagram">
+            <div class="d-box hot">Your agent<small>answers on the same task</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box">Remote agent<small>task-001 · input-required</small></div>
+          </div>
+          <p class="step-cap">The remote agent hits a gap — "send me the line items" — and parks the task in <code>input-required</code>. Your agent (or your human) replies with another message carrying the same task id, and work resumes.</p>
+        </div>
+        <div class="step" data-title="Deliver">
+          <h3>5. Deliver — artifacts, then done</h3>
+          <div class="diagram">
+            <div class="d-box good">Remote agent<small>task-001 · completed</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Artifact<small>audit-report</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Your agent</div>
+          </div>
+          <p class="step-cap">The task lands in a terminal state and its artifacts — the deliverables — travel back. For jobs that take hours, the card's <code>pushNotifications</code> capability means the remote side can webhook you instead of making you poll.</p>
+        </div>
+      </div>
+
+      <p>Under the hood this rides on ordinary web plumbing: JSON-RPC requests over HTTPS (with gRPC and plain REST bindings added as the spec matured), server-sent events for live streaming, webhooks for push. The core requests have names like <code>message/send</code>, <code>tasks/get</code> and <code>tasks/cancel</code> — check the current spec for the full set, but the shapes are exactly the five steps above.</p>
+
+      <p>Flip these until they feel obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">agent card</span><span class="flip-back">A JSON brochure at /.well-known/agent-card.json: name, skills, endpoint, formats, auth. How agents discover each other's capabilities.</span></button>
+        <button class="flip" type="button"><span class="flip-front">task</span><span class="flip-back">A unit of delegated work with an id and a lifecycle — submitted, working, paused, then completed, failed, canceled or rejected.</span></button>
+        <button class="flip" type="button"><span class="flip-front">message</span><span class="flip-back">One conversational turn inside a task, from either side — instructions, clarifying questions, answers.</span></button>
+        <button class="flip" type="button"><span class="flip-front">part</span><span class="flip-back">A typed chunk of content inside a message or artifact: text, a file, or structured data. One message can carry several.</span></button>
+        <button class="flip" type="button"><span class="flip-front">artifact</span><span class="flip-back">A deliverable produced by the task — report, file, dataset — kept separate from the conversation so results are easy to consume.</span></button>
+        <button class="flip" type="button"><span class="flip-front">input-required</span><span class="flip-back">The paused state: the remote agent needs an answer before it can continue. The clarifying phone call, encoded as a task state.</span></button>
+      </div>
+
+      <h2>Run the whole exchange</h2>
+      <p>Here is the entire client-to-remote conversation as runnable Python. The remote agent lives on another company's server in real life; here it is a class, so the exchange can run in your browser. Its "model" is a scripted <code>fake_llm()</code>, just like the one in <a href="ch045-react-loop-by-hand.html">your first ReAct loop</a>. Press <strong>Run</strong>, then trace the task's state changes in the output.</p>
+
+      <div class="pyrun" data-title="A2A in miniature — discover, delegate, pause, deliver">
+<textarea class="py-src" spellcheck="false">
+# ---- The remote agent: another firm's specialist ------------
+# In real A2A this runs on someone else's server. You would
+# only ever see its card, its task states, and its messages.
+
+AGENT_CARD = {
+    "name": "invoice-audit-agent",
+    "description": "Audits invoices for arithmetic and tax errors.",
+    "url": "https://audits.example.com/a2a",
+    "version": "1.0.0",
+    "capabilities": {"streaming": True},
+    "skills": [{"id": "audit_invoice",
+                "name": "Invoice audit",
+                "description": "Checks totals and tax math."}],
+}
+
+def fake_llm(prompt):
+    """Scripted stand-in for the remote agent's real model."""
+    if "line items" not in prompt.lower():
+        return "NEED_INPUT: Please send the invoice line items."
+    return ("FINDING: GST is listed as 280, but 20 percent of "
+            "1500 is 300. Tax is under-charged by 20.")
+
+class RemoteAgent:
+    def __init__(self):
+        self.tasks = {}
+
+    def agent_card(self):   # GET /.well-known/agent-card.json
+        return AGENT_CARD
+
+    def send_message(self, text, task_id=None):   # message/send
+        if task_id is None:
+            task_id = "task-%03d" % (len(self.tasks) + 1)
+            self.tasks[task_id] = {"id": task_id,
+                                   "state": "submitted",
+                                   "history": [], "artifacts": []}
+        task = self.tasks[task_id]
+        task["history"].append({"role": "user", "text": text})
+        task["state"] = "working"
+        reply = fake_llm(" ".join(m["text"] for m in task["history"]))
+        if reply.startswith("NEED_INPUT:"):
+            task["state"] = "input-required"
+            task["history"].append(
+                {"role": "agent",
+                 "text": reply.replace("NEED_INPUT: ", "")})
+        else:
+            task["artifacts"].append(
+                {"name": "audit-report",
+                 "parts": [{"kind": "text", "text": reply}]})
+            task["state"] = "completed"
+        return task
+
+# ---- Your agent: the client side -----------------------------
+remote = RemoteAgent()
+
+card = remote.agent_card()
+print("DISCOVER   ", card["name"],
+      "offers skill:", card["skills"][0]["id"])
+
+task = remote.send_message("Audit invoice INV-204 for GST errors.")
+print("DELEGATE   ", task["id"], "state:", task["state"])
+print("REMOTE ASKS:", task["history"][-1]["text"])
+
+task = remote.send_message(
+    "Line items: consulting 1500, GST at 20 percent listed as 280.",
+    task_id=task["id"])
+print("RESUME     ", task["id"], "state:", task["state"])
+print("ARTIFACT   ", task["artifacts"][0]["parts"][0]["text"])
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it, gently. Make <code>fake_llm</code> always demand input and watch the task loop in <code>input-required</code> forever — now you know why real clients cap the number of clarification rounds. Add a <code>"rejected"</code> branch for tasks mentioning "shares" and you have modelled an agent that declines work outside its remit. Every state you trigger here is one you will one day meet in a production dashboard.</p></div>
+
+      <h2>Who runs the standard — and who signed up</h2>
+      <p>Provenance matters for protocols, because a standard owned by one vendor is not really a standard. Google announced A2A in April 2025 with over fifty launch partners, then two months later handed the whole project to the <dfn>Linux Foundation</dfn> — the neutral non-profit that also stewards Linux and Kubernetes — precisely so competitors could adopt it without strengthening a rival. It worked: the backers now include Amazon, Microsoft, Cisco, SAP, Salesforce and ServiceNow, more than a hundred and fifty organisations are involved, and the big agent platforms — Google's own developer kits, Microsoft's agent services, integrations for frameworks like LangGraph — ship A2A support. After a fast-moving series of 0.x releases, the spec reached version 1.0 in 2026.</p>
+      <p>Notice the symmetry with the start of this Act: Anthropic seeded MCP, everyone's tool protocol; Google seeded A2A and gave it to a foundation to become everyone's agent protocol. Both camps pitch them as complementary layers of one stack.</p>
+
+      <h2>Do you actually need it? A2A versus a subgraph</h2>
+      <p>Here is the question that separates architecture from fashion. You already know two ways to make agents cooperate <em>without</em> any network protocol: <a href="ch063-subgraphs-multi-agent.html">subgraphs</a> — a supervisor graph invoking specialist graphs that share state in one process — and <a href="ch070-subagents.html">subagents</a> — a deep agent spinning up scoped helpers inside one harness. Both give you multi-agent behaviour with one codebase, one debugger, one trace, zero network hops.</p>
+      <p>So when does A2A earn its keep? One test: <strong>is the boundary between the agents one you could refactor away?</strong> If both agents belong to your team, live in your repo, and trust each other completely, the boundary is artificial — collapse it into a subgraph and keep life simple. A2A pays for its complexity only when the boundary is real and immovable:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Reach for a subgraph or subagent when…</th><th>Reach for A2A when…</th></tr>
+        <tr><td>All agents live in one codebase, owned by one team</td><td>The other agent belongs to a different company or department — you will never see its code</td></tr>
+        <tr><td>Agents benefit from shared state and shared tools</td><td>The agents are built on different vendors' stacks and cannot share a process</td></tr>
+        <tr><td>You want one trace and one debugger for the whole run</td><td>Work must survive across systems for hours or days, with pause-and-resume</td></tr>
+        <tr><td>Latency matters — in-process calls are effectively free</td><td>The relationship needs auth, audit and formal handoffs — a contract, not a function call</td></tr>
+      </table></div>
+
+      <p>The pattern in practice is layered, not either/or: inside each company, teams build their agents with whatever framework they like, wiring tools over MCP and internal collaborators as subgraphs. Then they expose <em>one</em> polished agent at the edge, with a card at the well-known URL — the way a firm has many employees but one reception desk.</p>
+
+      <h2>An honest maturity check</h2>
+      <p>Now the part vendor decks skip. As of mid-2026, the <em>wire protocol</em> is in decent shape — v1.0, neutral governance, official SDKs — but it got there through churn: method names were renamed between 0.x releases, transports were added, and even the brochure's filename changed (early drafts used <code>agent.json</code> before settling on <code>agent-card.json</code>). Code written against early versions needed rework. That churn has calmed, which is genuinely good news.</p>
+      <p>The <em>ecosystem</em>, though, is younger than the spec. The grand vision — your procurement agent discovering a supplier's sales agent and negotiating a purchase, cross-company — mostly does not happen yet. Public directories of agent cards are embryonic. And the hard questions are not technical: should your agent believe a stranger's brochure? Who is liable when a delegated task fails? Who pays, and how? Those are contract-and-trust problems, and they move slower than specs. Meanwhile, most "multi-agent systems" in production today remain what they were in Act VII: one team's subgraphs in one process.</p>
+      <p>So hold both truths. The concepts — cards, tasks, paused states, artifacts — are durable and worth learning now: every serious platform has adopted the vocabulary, and inside large enterprises (where departments genuinely are separate trust domains) A2A is already useful glue. But if someone proposes wrapping your team's five internal agents in A2A servers "to be standards-compliant", ask the only question that matters: which boundary here could we not refactor away?</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet A2A first in platform settings screens ("Connect an external agent — paste its agent card URL") and in architecture decks as an arrow labelled "A2A" between company boxes. In code, the tells are a <code>/.well-known/agent-card.json</code> file in a repo, an A2A SDK in the dependency list, and task ids like <code>task-7f3a…</code> threading through logs. In a merge request, "expose the research agent over A2A" means: add an HTTP endpoint, publish a card, map the agent's states onto the task lifecycle. And when an operator says a delegated job is "stuck in input-required", you now know exactly which phone call nobody has answered.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. MCP already lets your agent call capabilities over the network. What does A2A add that MCP does not cover?</p>
+          <div class="q-opts">
+            <button data-opt="a">A faster transport for the same tool calls</button>
+            <button data-opt="b">A standard for delegating work to a peer agent — with discovery, long-running tasks that can pause, and deliverables</button>
+            <button data-opt="c">A replacement for MCP servers, which are being phased out</button>
+          </div>
+          <p class="q-explain">MCP's far side is a passive capability that answers in seconds. A2A's far side is a whole agent that works over time, asks clarifying questions, and can refuse — so it needs cards, task lifecycles and artifacts. The two are complementary layers: tools below, colleagues across.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Your agent wants to know whether a remote agent can review contracts, and how to reach it. Where does it look?</p>
+          <div class="q-opts">
+            <button data-opt="a">It clones the remote agent's source repository and reads the code</button>
+            <button data-opt="b">It sends a small test task and sees what happens</button>
+            <button data-opt="c">It fetches the agent card from the well-known URL and reads the skills, endpoint and auth requirements</button>
+          </div>
+          <p class="q-explain">The card at <code>/.well-known/agent-card.json</code> is the discovery mechanism — a machine-readable brochure. Remote agents stay opaque by design; you never see their code, only their advertised capabilities and their task states.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. A task you delegated is sitting in <code>input-required</code>. What is actually happening?</p>
+          <div class="q-opts">
+            <button data-opt="a">The task failed and must be resubmitted from scratch</button>
+            <button data-opt="b">The task is paused: the remote agent asked a question and is waiting for a message on the same task before continuing</button>
+            <button data-opt="c">The remote agent is waiting for compute to become available</button>
+          </div>
+          <p class="q-explain">The paused states are the point of having a lifecycle at all: instead of failing when information is missing, the remote agent parks the task and asks — the clarifying phone call from the workshop, encoded as a state. You answer with a message carrying the same task id, and work resumes.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Your team owns five agents, all in one repo, all built on one framework, all trusting each other. Should you connect them over A2A?</p>
+          <div class="q-opts">
+            <button data-opt="a">Yes — a standard protocol is always better architecture</button>
+            <button data-opt="b">No — inside one trust boundary a subgraph shares state in-process with one debugger; A2A earns its keep across org, vendor or trust boundaries you cannot refactor away</button>
+            <button data-opt="c">Yes — subgraphs cannot support more than two agents</button>
+          </div>
+          <p class="q-explain">A network protocol between your own agents adds serialisation, auth, and distributed debugging for no gain. Use subgraphs inside the boundary, and expose one agent at the edge with a card — many employees, one reception desk.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">5. Why did Google donate A2A to the Linux Foundation just two months after announcing it?</p>
+          <div class="q-opts">
+            <button data-opt="a">Neutral governance — competitors will not build on a rival's protocol, and a standard owned by one vendor is not really a standard</button>
+            <button data-opt="b">Google decided to abandon agent-to-agent communication</button>
+            <button data-opt="c">The Linux Foundation legally owns all HTTP-based protocols</button>
+          </div>
+          <p class="q-explain">A cross-company protocol only works if every company can adopt it without strengthening a competitor. Moving A2A to a neutral foundation is what let Amazon, Microsoft, Cisco, SAP and others sign on — the same neutrality play that made Kubernetes universal.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>MCP connects agents to tools; A2A connects agents to each other — one protocol for hands, one for colleagues, deliberately complementary.</li>
+          <li>Discovery runs on agent cards: JSON brochures at <code>/.well-known/agent-card.json</code> declaring skills, endpoint, formats and auth — written for a calling model to read.</li>
+          <li>The unit of collaboration is the task: a work order with an id and a lifecycle (submitted, working, paused in input-required or auth-required, then completed, failed, canceled or rejected), carrying messages along the way and artifacts as deliverables.</li>
+          <li>Governance is neutral — Google donated A2A to the Linux Foundation in 2025, over a hundred and fifty organisations backed it, and the spec reached v1.0 in 2026 after real 0.x churn.</li>
+          <li>Reach for A2A only across boundaries you cannot refactor away — other companies, other vendors, other trust domains. Inside your own codebase, a subgraph is simpler, faster and easier to debug.</li>
+          <li>Honest status: the wire protocol is stable and the vocabulary is industry-wide, but cross-org agent ecosystems are still young — the concepts are durable even where the marketing is ahead of reality.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

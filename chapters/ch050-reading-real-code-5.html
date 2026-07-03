@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading real code: an annotated agent — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch050">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act V · Agents From Scratch</div>
+        <h1>Reading real code: an annotated agent</h1>
+        <p class="ch-tagline">Eighty-odd lines. Two tools, a memory budget, a turn cap, and error handling that turns crashes into conversation. You are going to read the whole file — first unaided, then line by line — and discover that nothing in it is new to you.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 51 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>For months, the flying instructor has drilled you one instrument at a time. Tuesdays were the altimeter. A whole fortnight on radio calls. An entire rainy afternoon on what to do when an engine coughs — not <em>if</em>, when. Each lesson felt small, almost insultingly so. Today you walk to the aircraft together as usual, you begin the pre-flight checks as usual — and then the instructor steps back onto the tarmac, closes the door from the outside, and says through the window: "Once around the pattern. You're ready."</p>
+        <p>Here is the thing nobody tells you about a first solo: the aircraft contains nothing you have not seen. Not one dial, not one switch. The victory is not that you face something new. The victory is that you look across the entire panel and <em>nothing is new</em>. That is this chapter. Below sits a complete, production-shaped agent — the real panel, every dial. You have spent all of Act V training on its parts. Time to fly it alone.</p>
+      </section>
+
+      <h2>Your victory lap, and why it is earned</h2>
+      <p>Quick recap of how you got here, because this chapter is the payoff for the whole act. In <a href="ch045-react-loop-by-hand.html">the ReAct loop chapter</a> you built the heartbeat: a for-loop that sends the transcript to a model, runs whatever action the model requests, and feeds the result back in. In <a href="ch046-tools.html">the tools chapter</a> you learned that a tool is just a plain function in a registry, advertised to the model by name and description. In <a href="ch047-memory-and-context.html">memory and context</a> you saw that an agent's "memory" is a list of messages somebody must prune, and in <a href="ch048-failure-modes.html">failure modes</a> you collected the war stories of what happens when nobody does. Then <a href="ch049-building-effective-agents.html">last chapter</a> added the builder's judgement: keep it simple, and reach for an agent only when the task genuinely needs one.</p>
+      <p>This is also the fifth chapter in the reading-real-code series — the same ritual you performed in <a href="ch010-reading-real-code-1.html">chapter 10</a> with a plain script and in <a href="ch022-reading-real-code-2.html">chapter 22</a> with a small module. The rules have not changed: read the whole file before touching anything, name each block's job in one sentence, and treat every line you cannot explain as a question, not a threat. What has changed is the file. This one is an <dfn>agent</dfn> — an LLM given tools and run in a loop until the task is done — and unlike the fifty-line teaching skeleton from chapter 45, it carries the survival gear real deployments carry: two tools instead of one, a history-trimming budget, a hard turn cap, and error handling wrapped around every tool call.</p>
+      <p>One promise before we start: there is no line in this file you have not met in some earlier chapter. The only new skill is <em>reading at altitude</em> — holding the whole machine in your head at once.</p>
+
+      <h2>The map before the territory</h2>
+      <p>Good readers never start at line 1. They skim for the shape first: what are the blocks, and what does each one owe the others? This file has four blocks plus a two-line entry point. Step through the map:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The shape">
+          <h3>1. Four blocks, one file</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Config<small>MAX_TURNS, KEEP_LAST</small></div>
+              <div class="d-box">Tools<small>calculate, search_notes, TOOLS registry</small></div>
+              <div class="d-box">Model stand-in<small>SCRIPT, fake_llm</small></div>
+              <div class="d-box">Guard rails<small>trim_history, run_tool</small></div>
+              <div class="d-box">The loop<small>run_agent</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Top to bottom: two tunable numbers, the things the agent can do, the thing that decides, the things that keep it safe, and the loop that conducts them all. Most hand-rolled agent files on Earth have exactly this shape.</p>
+        </div>
+        <div class="step" data-title="Tools">
+          <h3>2. Tools: what the agent can touch</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Config</div>
+              <div class="d-box hot">Tools<small>plain functions + a dict of names</small></div>
+              <div class="d-box dim">Model stand-in</div>
+              <div class="d-box dim">Guard rails</div>
+              <div class="d-box dim">The loop</div>
+            </div>
+          </div>
+          <p class="step-cap">A calculator and a notes search — ordinary functions that return a string, or raise an exception when they cannot. The <code>TOOLS</code> dict at the end is the registry: not in the dict, not reachable. Full stop.</p>
+        </div>
+        <div class="step" data-title="Model">
+          <h3>3. The model: scripted, and honest about it</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Config</div>
+              <div class="d-box dim">Tools</div>
+              <div class="d-box hot">Model stand-in<small>canned replies, one per turn</small></div>
+              <div class="d-box dim">Guard rails</div>
+              <div class="d-box dim">The loop</div>
+            </div>
+          </div>
+          <p class="step-cap">This page cannot bill a real LLM API, so <code>fake_llm()</code> replays a script — including one deliberate mistake, so we can watch the machinery absorb it. The signature is identical to a real API call: transcript in, one reply out.</p>
+        </div>
+        <div class="step" data-title="Guard rails">
+          <h3>4. Guard rails: the production half</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Config</div>
+              <div class="d-box dim">Tools</div>
+              <div class="d-box dim">Model stand-in</div>
+              <div class="d-box hot">Guard rails<small>trim_history: memory budget<br>run_tool: crash-proof execution</small></div>
+              <div class="d-box dim">The loop</div>
+            </div>
+          </div>
+          <p class="step-cap">Two helpers the chapter-45 skeleton did not have. <code>trim_history</code> keeps the transcript inside a budget so long runs do not balloon. <code>run_tool</code> wraps every tool call in a try/except so a failing tool produces an error <em>message</em> instead of a dead agent.</p>
+        </div>
+        <div class="step" data-title="The loop">
+          <h3>5. The loop: everything, conducted</h3>
+          <div class="diagram">
+            <div class="d-box hot">run_agent<small>trim &#8594; ask model &#8594; act &#8594; observe</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">answer<small>or an honest "gave up"</small></div>
+          </div>
+          <p class="step-cap">The same heartbeat you built by hand in chapter 45, now calling the helpers: trim before every model call, execute actions through the crash-proof wrapper, stop on FINAL ANSWER or when the turn budget runs out. Sixteen lines conduct the whole orchestra.</p>
+        </div>
+      </div>
+
+      <h2>The unaided read</h2>
+      <p>Here is the complete file. Before the annotations, before running it — read it, top to bottom, the way you would read a colleague's merge request. Go slowly. For each block, say out loud (yes, actually) what it does and what would happen without it. Note anything that resists you; the walkthrough below will meet you there.</p>
+
+      <div class="code-title">annotated_agent.py — the whole thing</div>
+      <pre><code class="language-python"># annotated_agent.py
+# A complete hand-rolled agent: two tools, history trimming,
+# a turn cap, and error handling around every tool call.
+
+MAX_TURNS = 8    # hard cap on loop iterations
+KEEP_LAST = 4    # history budget -- tiny, so you can watch trimming fire
+
+# ---- 1. Tools: plain functions the loop agrees to run --------
+def calculate(expression):
+    """Evaluate simple arithmetic. Anything else is refused."""
+    if not set(expression) &lt;= set("0123456789+-*/(). "):
+        raise ValueError("only digits and + - * / ( ) allowed")
+    return str(eval(expression))
+
+NOTES = {
+    "meridian": "Invoice #482 | Meridian Traders | base amount 42000",
+    "sunrise":  "Invoice #479 | Sunrise Textiles | base amount 15500",
+}
+
+def search_notes(query):
+    """Return every note that mentions the query keyword."""
+    hits = [note for key, note in NOTES.items() if key in query.lower()]
+    if not hits:
+        raise LookupError(f"no note matches {query!r}")
+    return "; ".join(hits)
+
+TOOLS = {"calculate": calculate, "search_notes": search_notes}
+
+# ---- 2. The 'model': a scripted stand-in for a real LLM ------
+SCRIPT = [
+    "THOUGHT: I need the invoice amount before I can compute GST.\n"
+    "ACTION: search_notes(Meridian)",
+
+    "THOUGHT: Base amount is 42000, so 18% GST is 42000 * 0.18.\n"
+    "ACTION: calculate(42,000 * 0.18)",   # a deliberate slip: the comma
+
+    "THOUGHT: The comma broke the tool. Retry without it.\n"
+    "ACTION: calculate(42000 * 0.18)",
+
+    "THOUGHT: 7560.0. I have everything I need.\n"
+    "FINAL ANSWER: GST at 18% on invoice #482 (Meridian Traders) "
+    "comes to 7,560 rupees.",
+]
+STATE = {"calls": 0}   # a real model needs no counter; a script does
+
+def fake_llm(history):
+    """Stands in for a real API call: transcript in, one reply out."""
+    reply = SCRIPT[min(STATE["calls"], len(SCRIPT) - 1)]
+    STATE["calls"] += 1
+    return reply
+
+# ---- 3. Guard rails ------------------------------------------
+def trim_history(history, keep_last=KEEP_LAST):
+    """Cap the transcript: keep the task plus the newest messages."""
+    if len(history) &lt;= keep_last + 1:
+        return history
+    dropped = len(history) - (keep_last + 1)
+    print(f"[trim] dropped {dropped} old message(s) to stay in budget")
+    return [history[0]] + history[-keep_last:]
+
+def run_tool(call):
+    """Parse 'name(arg)' and run it. Errors become text, not crashes."""
+    try:
+        name = call.split("(")[0].strip()
+        arg = call[call.index("(") + 1 : call.rindex(")")].strip()
+        if name not in TOOLS:
+            return f"ERROR: unknown tool {name!r}; try one of {sorted(TOOLS)}"
+        return str(TOOLS[name](arg))
+    except Exception as exc:
+        return f"ERROR: {type(exc).__name__}: {exc}"
+
+# ---- 4. The loop: the agent itself ---------------------------
+def run_agent(task, max_turns=MAX_TURNS):
+    history = [f"TASK: {task}"]
+    for turn in range(1, max_turns + 1):
+        history = trim_history(history)
+        reply = fake_llm(history)
+        history.append(reply)
+        print(f"--- turn {turn} ---")
+        print(reply)
+        if "FINAL ANSWER:" in reply:
+            return reply.split("FINAL ANSWER:")[1].strip()
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            observation = f"OBSERVATION: {run_tool(call)}"
+            history.append(observation)
+            print(observation)
+    return "Stopped: hit max turns without a final answer."
+
+answer = run_agent("What is 18% GST on the Meridian Traders invoice?")
+print()
+print("AGENT RETURNED:", answer)</code></pre>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>How did the unaided read go? A useful self-test: could you predict what the printed run will look like before peeking at <code>SCRIPT</code>? If you spotted the comma inside the second scripted reply — and guessed which line of <code>calculate</code> will object — you are reading the way a reviewer does: forwards from the source, and backwards from the failure.</p></div>
+
+      <h2>Block by block: the annotated read</h2>
+      <p>Now the guided pass. Four walkthroughs, one per block. Click the highlighted lines; each note tells you what the line does and, more importantly, <em>why a production file bothers</em>. Every note should feel boring by the time you finish it. Boring means fluent.</p>
+
+      <h3>Block 1 — the tools and their registry</h3>
+      <div class="walkthrough">
+        <div class="wl-head">annotated_agent.py — lines 8 to 27</div>
+        <div class="wl-line"><code>def calculate(expression):</code>
+          <div class="wl-note">A tool is an ordinary function (<a href="ch007-functions.html">ch7</a>). Nothing here marks it as special — it becomes a "tool" only by being listed in the registry below. Tool-ness is membership, not magic.</div></div>
+        <div class="wl-line"><code>    if not set(expression) &lt;= set("0123456789+-*/(). "):</code>
+          <div class="wl-note">A whitelist check using set comparison (<a href="ch004-collections.html">ch4</a>): "is every character of the input inside the allowed set?" Whitelists beat blacklists — you cannot enumerate all the bad inputs a model might send, but you can enumerate the good ones.</div></div>
+        <div class="wl-line"><code>        raise ValueError("only digits and + - * / ( ) allowed")</code>
+          <div class="wl-note">The tool <em>raises</em> rather than returning a sad string (<a href="ch009-errors-and-tracebacks.html">ch9</a>). Division of labour: the tool signals failure clearly; deciding what to <em>do</em> about it belongs to the loop's guard rails.</div></div>
+        <div class="wl-line"><code>    return str(eval(expression))</code>
+          <div class="wl-note">Safe only because of the whitelist above; a production calculator would use a real expression parser. But notice the shape: string in, string out. Tools always end in text, because text is the only thing a model can read back.</div></div>
+        <div class="wl-line"><code>NOTES = {</code>
+          <div class="wl-note">A dict standing in for a real data source — a database, a CRM, a folder of files. Most tools in real agents are exactly this: a thin wrapper around something that already existed.</div></div>
+        <div class="wl-line"><code>    hits = [note for key, note in NOTES.items() if key in query.lower()]</code>
+          <div class="wl-note">A list comprehension (<a href="ch008-comprehensions.html">ch8</a>): scan every note, keep the ones whose key appears in the lowercased query. When a comprehension resists you, unroll it into a for-loop with an if and an append.</div></div>
+        <div class="wl-line"><code>        raise LookupError(f"no note matches {query!r}")</code>
+          <div class="wl-note">"Nothing found" is information the model needs, so it is raised loudly rather than returned as an empty string the model might misread as success. The <code>!r</code> puts quotes around the query so the model can spot stray spaces in what it sent.</div></div>
+        <div class="wl-line"><code>TOOLS = {"calculate": calculate, "search_notes": search_notes}</code>
+          <div class="wl-note">The registry: a dict from names to function objects (<a href="ch004-collections.html">ch4</a> — and functions are values you can store, <a href="ch007-functions.html">ch7</a>). Auditing an unfamiliar agent? Read this line first: it is everything the model can possibly touch.</div></div>
+      </div>
+
+      <h3>Block 2 — the scripted model</h3>
+      <p>The one honest lie in the file. A real deployment replaces this block with a network call; everything else stays.</p>
+      <div class="walkthrough">
+        <div class="wl-head">annotated_agent.py — lines 29 to 50</div>
+        <div class="wl-line"><code>SCRIPT = [</code>
+          <div class="wl-note">Four canned replies, one per turn. A real model would generate these; the script replays them. Everything downstream — parsing, execution, trimming — cannot tell the difference, which is why the simulation is fair.</div></div>
+        <div class="wl-line"><code>    "ACTION: calculate(42,000 * 0.18)",   # a deliberate slip: the comma</code>
+          <div class="wl-note">The planted mistake. Models genuinely do this — format numbers with thousands separators, add units, wrap arguments in quotes. The comma will fail <code>calculate</code>'s whitelist, and we get to watch the recovery machinery earn its keep.</div></div>
+        <div class="wl-line"><code>STATE = {"calls": 0}   # a real model needs no counter; a script does</code>
+          <div class="wl-note">An honesty note in code form. A real model is stateless: it infers where it is purely by reading the transcript. Our canned script cannot read, so it cheats with a counter. The transcript is the real model's only counter.</div></div>
+        <div class="wl-line"><code>def fake_llm(history):</code>
+          <div class="wl-note">Same signature as production: transcript in, one reply out. To go real, this body becomes a single API call — for example Anthropic's <code>client.messages.create(model=..., max_tokens=..., messages=history)</code> — and <em>nothing else in the file changes</em>. That one-seam property is the mark of a well-shaped agent.</div></div>
+        <div class="wl-line"><code>    reply = SCRIPT[min(STATE["calls"], len(SCRIPT) - 1)]</code>
+          <div class="wl-note">The <code>min()</code> pins the index to the last scripted reply if the loop somehow calls more times than the script covers — a cheap defensive habit that keeps an IndexError from ruining the demo. Typical of code written by someone who has been paged at 2 a.m.</div></div>
+      </div>
+
+      <h3>Block 3 — the guard rails</h3>
+      <p>This is what separates a demo from something you would let near a customer. Two helpers, and they carry most of the file's production weight.</p>
+      <div class="walkthrough">
+        <div class="wl-head">annotated_agent.py — lines 52 to 70</div>
+        <div class="wl-line"><code>def trim_history(history, keep_last=KEEP_LAST):</code>
+          <div class="wl-note">The memory policy from <a href="ch047-memory-and-context.html">ch47</a>, reduced to seven lines: when the transcript outgrows the budget, keep the task plus the newest messages and drop the middle. Real systems summarise or embed what they drop — but every one of them is a variation on this function.</div></div>
+        <div class="wl-line"><code>    if len(history) &lt;= keep_last + 1:</code>
+          <div class="wl-note">The <code>+ 1</code> accounts for the pinned task message at index 0. Off-by-one details like this are exactly what to check when reviewing someone else's trimmer.</div></div>
+        <div class="wl-line"><code>    return [history[0]] + history[-keep_last:]</code>
+          <div class="wl-note">Element 0 — the task — is always kept; the negative slice (<a href="ch004-collections.html">ch4</a>) keeps the newest tail. An agent that trims away its own mission will happily keep working on whatever the surviving messages suggest — "drifted off-task after a long run" bugs are often a trimmer missing this line.</div></div>
+        <div class="wl-line"><code>def run_tool(call):</code>
+          <div class="wl-note">The buffer zone between the model's wishes and your Python. Everything the model sends passes through here, and nothing that happens in here is allowed to kill the run.</div></div>
+        <div class="wl-line"><code>    try:</code>
+          <div class="wl-note">Everything inside is fallible: we are parsing free text written by a language model, then executing a function on its say-so. Wrapping it all is not paranoia; it is the job description.</div></div>
+        <div class="wl-line"><code>        arg = call[call.index("(") + 1 : call.rindex(")")].strip()</code>
+          <div class="wl-note">Slice between the first <code>(</code> and the last <code>)</code> — string surgery from <a href="ch003-strings-and-fstrings.html">ch3</a>. If the model forgets a bracket, <code>index</code> raises and the except below tells it so. Native tool calling (<a href="ch035-tool-calling.html">ch35</a>) removes this parsing entirely; the safety logic stays.</div></div>
+        <div class="wl-line"><code>        if name not in TOOLS:</code>
+          <div class="wl-note">Models hallucinate tool names — ask any operator. Instead of a KeyError, the reply lists the real options so the model can self-correct next turn. Error messages in agents are not for humans; they are prompts.</div></div>
+        <div class="wl-line"><code>    except Exception as exc:</code>
+          <div class="wl-note">A broad except is usually a smell (<a href="ch009-errors-and-tracebacks.html">ch9</a> warned you about silencing errors) — but here the error is not silenced. It is converted, loudly and with its type name, into the observation channel. Whatever went wrong, the loop lives and the model is told.</div></div>
+        <div class="wl-line"><code>        return f"ERROR: {type(exc).__name__}: {exc}"</code>
+          <div class="wl-note">The most production-shaped line in the file: a crash becomes data. Watch what it buys in the run — the comma fails, the model reads the error, fixes itself, and finishes. No human intervened. That self-repair is most of what people mean when they call an agent "robust".</div></div>
+      </div>
+
+      <h3>Block 4 — the loop</h3>
+      <p>You built this in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, so the walkthrough only stops at what is new: where the helpers plug in.</p>
+      <div class="walkthrough">
+        <div class="wl-head">annotated_agent.py — lines 72 to 88</div>
+        <div class="wl-line"><code>def run_agent(task, max_turns=MAX_TURNS):</code>
+          <div class="wl-note">The turn cap rides in as a default argument, sourced from the config constant at the top of the file. Configuration at the top, behaviour below — a file layout convention you will see everywhere.</div></div>
+        <div class="wl-line"><code>        history = trim_history(history)</code>
+          <div class="wl-note">The new line, and its placement is the lesson: trim immediately <em>before</em> the model call, because that is the moment the transcript is about to be sent — and, with a real API, paid for by the token (<a href="ch041-tokens-and-cost.html">ch41</a>). Trimming anywhere else protects nothing.</div></div>
+        <div class="wl-line"><code>        reply = fake_llm(history)</code>
+          <div class="wl-note">Still the only line in the whole file that talks to a model. When someone says "the agent made 6 LLM calls", they mean this line ran 6 times.</div></div>
+        <div class="wl-line"><code>        if "FINAL ANSWER:" in reply:</code>
+          <div class="wl-note">The stop condition, unchanged from chapter 45: the model decides when it is done, the loop enforces it. With native tool calling, "done" is a reply with no tool calls — different marker, same idea.</div></div>
+        <div class="wl-line"><code>            observation = f"OBSERVATION: {run_tool(call)}"</code>
+          <div class="wl-note">Compare chapter 45, where the loop called <code>TOOLS[name](arg)</code> naked. Now every execution goes through the guard rail, which <em>guarantees</em> a string comes back — success or ERROR — so the loop itself needs no try/except at all. Pushing danger into one well-tested helper is how real codebases stay readable.</div></div>
+        <div class="wl-line"><code>    return "Stopped: hit max turns without a final answer."</code>
+          <div class="wl-note">The honest exhaustion path. If the model never finishes, the agent says so instead of hanging or pretending. In production this line usually comes with a metric increment and an alert — the "agent gave up" dashboard exists in every serious shop.</div></div>
+      </div>
+
+      <h2>Run it, then break it</h2>
+      <p>Reading is half the lap. Now press <strong>Run</strong> and match the printed transcript against your prediction: watch turn 2 fail on the comma, turn 3 recover, and the trimmer fire just before turn 4 when the transcript outgrows its tiny budget.</p>
+
+      <div class="pyrun" data-title="The complete annotated agent — run me">
+<textarea class="py-src" spellcheck="false">
+# annotated_agent.py
+# A complete hand-rolled agent: two tools, history trimming,
+# a turn cap, and error handling around every tool call.
+
+MAX_TURNS = 8    # hard cap on loop iterations
+KEEP_LAST = 4    # history budget -- tiny, so you can watch trimming fire
+
+# ---- 1. Tools: plain functions the loop agrees to run --------
+def calculate(expression):
+    """Evaluate simple arithmetic. Anything else is refused."""
+    if not set(expression) &lt;= set("0123456789+-*/(). "):
+        raise ValueError("only digits and + - * / ( ) allowed")
+    return str(eval(expression))
+
+NOTES = {
+    "meridian": "Invoice #482 | Meridian Traders | base amount 42000",
+    "sunrise":  "Invoice #479 | Sunrise Textiles | base amount 15500",
+}
+
+def search_notes(query):
+    """Return every note that mentions the query keyword."""
+    hits = [note for key, note in NOTES.items() if key in query.lower()]
+    if not hits:
+        raise LookupError(f"no note matches {query!r}")
+    return "; ".join(hits)
+
+TOOLS = {"calculate": calculate, "search_notes": search_notes}
+
+# ---- 2. The 'model': a scripted stand-in for a real LLM ------
+SCRIPT = [
+    "THOUGHT: I need the invoice amount before I can compute GST.\n"
+    "ACTION: search_notes(Meridian)",
+
+    "THOUGHT: Base amount is 42000, so 18% GST is 42000 * 0.18.\n"
+    "ACTION: calculate(42,000 * 0.18)",   # a deliberate slip: the comma
+
+    "THOUGHT: The comma broke the tool. Retry without it.\n"
+    "ACTION: calculate(42000 * 0.18)",
+
+    "THOUGHT: 7560.0. I have everything I need.\n"
+    "FINAL ANSWER: GST at 18% on invoice #482 (Meridian Traders) "
+    "comes to 7,560 rupees.",
+]
+STATE = {"calls": 0}   # a real model needs no counter; a script does
+
+def fake_llm(history):
+    """Stands in for a real API call: transcript in, one reply out."""
+    reply = SCRIPT[min(STATE["calls"], len(SCRIPT) - 1)]
+    STATE["calls"] += 1
+    return reply
+
+# ---- 3. Guard rails ------------------------------------------
+def trim_history(history, keep_last=KEEP_LAST):
+    """Cap the transcript: keep the task plus the newest messages."""
+    if len(history) &lt;= keep_last + 1:
+        return history
+    dropped = len(history) - (keep_last + 1)
+    print(f"[trim] dropped {dropped} old message(s) to stay in budget")
+    return [history[0]] + history[-keep_last:]
+
+def run_tool(call):
+    """Parse 'name(arg)' and run it. Errors become text, not crashes."""
+    try:
+        name = call.split("(")[0].strip()
+        arg = call[call.index("(") + 1 : call.rindex(")")].strip()
+        if name not in TOOLS:
+            return f"ERROR: unknown tool {name!r}; try one of {sorted(TOOLS)}"
+        return str(TOOLS[name](arg))
+    except Exception as exc:
+        return f"ERROR: {type(exc).__name__}: {exc}"
+
+# ---- 4. The loop: the agent itself ---------------------------
+def run_agent(task, max_turns=MAX_TURNS):
+    history = [f"TASK: {task}"]
+    for turn in range(1, max_turns + 1):
+        history = trim_history(history)
+        reply = fake_llm(history)
+        history.append(reply)
+        print(f"--- turn {turn} ---")
+        print(reply)
+        if "FINAL ANSWER:" in reply:
+            return reply.split("FINAL ANSWER:")[1].strip()
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            observation = f"OBSERVATION: {run_tool(call)}"
+            history.append(observation)
+            print(observation)
+    return "Stopped: hit max turns without a final answer."
+
+answer = run_agent("What is 18% GST on the Meridian Traders invoice?")
+print()
+print("AGENT RETURNED:", answer)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now earn the lap by breaking it. (1) In <code>SCRIPT</code>, change <code>search_notes(Meridian)</code> to <code>lookup_notes(Meridian)</code>: the unknown-tool message coaches the model — but the canned script cannot adapt, which is exactly the gap between it and a real one. (2) Set <code>KEEP_LAST = 2</code> and watch the trimmer fire earlier and harder. (3) Delete the <code>try:</code>/<code>except</code> pair in <code>run_tool</code> (fix the indentation) and re-run: the comma turn now kills the whole run with a traceback — the crash every production agent you operate has quietly been saving you from.</p></div>
+
+      <h2>Where the lines go</h2>
+      <p>One last way to read the file: by weight. Roughly, by block (counting comments and blanks — illustrative, not gospel):</p>
+
+      <div data-bars data-title="annotated_agent.py — lines by job" data-unit="lines"
+           data-note="The loop is the smallest block in the file. The machinery around it is nearly four times its size — and that ratio only grows in production.">
+        <div class="bar" data-label="Tools + registry" data-value="20"></div>
+        <div class="bar" data-label="Model stand-in" data-value="22"></div>
+        <div class="bar" data-label="Guard rails" data-value="19"></div>
+        <div class="bar" data-label="The loop" data-value="16"></div>
+        <div class="bar" data-label="Config + entry point" data-value="12"></div>
+      </div>
+
+      <p>This is the quiet lesson of the chapter. The famous part of an agent — the loop — is its smallest part. The unglamorous parts (tool plumbing, memory policy, error conversion) outweigh it even in a teaching file, and in a production harness the ratio is more like ten to one. When people say a framework "does a lot for you", they mostly mean it ships the tall bars, not the short one.</p>
+
+      <h2>Landmarks for every agent file you will ever open</h2>
+      <p>Take the reflexes with you. Whatever the framework, orient yourself in any unfamiliar agent by finding five landmarks — flip each card:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">the registry</span><span class="flip-back">The dict (or decorated list) mapping tool names to functions. Read it first: it is the agent's entire capability surface, and therefore its entire risk surface.</span></button>
+        <button class="flip" type="button"><span class="flip-front">the one model call</span><span class="flip-back">Exactly one place talks to the LLM. Find it and you have found the loop, the cost centre, and the seam where fake_llm swaps for production.</span></button>
+        <button class="flip" type="button"><span class="flip-front">the buffer zone</span><span class="flip-back">The try/except around tool execution that converts crashes into observations. If it is missing, one bad tool call ends the run — flag it in review.</span></button>
+        <button class="flip" type="button"><span class="flip-front">the memory policy</span><span class="flip-back">Whatever decides which messages survive — trimming, summarising, or nothing at all. Check that the task itself can never be trimmed away.</span></button>
+        <button class="flip" type="button"><span class="flip-front">the exhaustion path</span><span class="flip-back">What happens when max turns run out: an honest message, an alert, a refund of the user's patience. If the loop is while True with no cap, walk away slowly.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Files shaped like this one are everywhere once you know the landmarks. The "build an agent in 100 lines" blog posts and minimal agent libraries are this file with nicer packaging. Enterprise repos hide the same shape inside <code>agent.py</code>, <code>executor.py</code>, or <code>loop.py</code> — registry near the top, one model call, a guarded dispatcher, a context budget. And merge requests now write themselves into your vocabulary: "wrap tool exec in try/except and surface errors to the model" is Block 3; "trim context to last N messages, pin the system prompt" is <code>trim_history</code>; "bump max iterations" is your turn cap. Next chapter opens the LangChain ecosystem — and every abstraction it sells maps onto a block of this file you have now read unaided.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. On turn 2, the model requests <code>calculate(42,000 * 0.18)</code> and the comma makes the tool raise a ValueError. What does this agent do?</p>
+          <div class="q-opts">
+            <button data-opt="a">The loop crashes with a traceback and the run is lost</button>
+            <button data-opt="b">The error is caught, turned into an ERROR observation, and the model corrects itself next turn</button>
+            <button data-opt="c">The loop silently retries the same call until it works</button>
+          </div>
+          <p class="q-explain"><code>run_tool</code> catches the exception and returns <code>"ERROR: ValueError: ..."</code> as a string, which enters the history as an observation. The model reads it, drops the comma, and succeeds — self-repair without a human.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Why does <code>trim_history</code> always keep <code>history[0]</code>, no matter how aggressive the trim?</p>
+          <div class="q-opts">
+            <button data-opt="a">Python lists cannot have their first element removed</button>
+            <button data-opt="b">The oldest message compresses best, so it is cheapest to keep</button>
+            <button data-opt="c">It holds the task — trim it away and the agent forgets what it is working on</button>
+          </div>
+          <p class="q-explain">Index 0 is the TASK message. A trimmer that drops it leaves the model with only recent chatter and no mission — how "the agent drifted off-task" bugs are born. Real systems pin the system prompt and task for the same reason.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. To turn this demo into a real agent calling a live LLM, what has to change?</p>
+          <div class="q-opts">
+            <button data-opt="a">The whole file — demos and production share no code</button>
+            <button data-opt="b">Only the body of <code>fake_llm</code>, which becomes one API call; everything else stays</button>
+            <button data-opt="c">The TOOLS dict must be re-registered with the API provider</button>
+          </div>
+          <p class="q-explain"><code>fake_llm</code> has the same contract as production — transcript in, reply out — so swapping its body for <code>client.messages.create(...)</code> (or any provider's equivalent) upgrades the agent without touching tools, guard rails, or loop.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. The model hallucinates a tool called <code>fetch_invoice</code>. What does this design send back?</p>
+          <div class="q-opts">
+            <button data-opt="a">An ERROR observation naming the unknown tool and listing the real ones</button>
+            <button data-opt="b">Nothing — the request is silently ignored</button>
+            <button data-opt="c">A KeyError that ends the run</button>
+          </div>
+          <p class="q-explain">The <code>if name not in TOOLS</code> branch returns <code>"ERROR: unknown tool 'fetch_invoice'; try one of [...]"</code>. In an agent, error messages are prompts: the more usable the error, the more likely the model picks a valid tool next turn.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. Why does the loop call <code>trim_history</code> immediately before the model call, rather than after it?</p>
+          <div class="q-opts">
+            <button data-opt="a">Trimming after the call would delete the model's newest reply</button>
+            <button data-opt="b">Python requires list mutation at the top of a loop body</button>
+            <button data-opt="c">The point of trimming is to shrink what is about to be sent — and, with a real API, paid for</button>
+          </div>
+          <p class="q-explain">The transcript costs tokens at exactly one moment: when it is sent to the model. Trimming right before that moment enforces the budget on every single call.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>You just read a complete, production-shaped agent unaided — and nothing in it was new. Tools are functions in a dict, the model is one call, memory is a list with a policy, and the loop conducts. That is the Act V victory lap.</li>
+          <li>Error handling around tool calls is the difference between a demo and a system: <code>run_tool</code> converts crashes into ERROR observations, and the model repairs itself by reading them.</li>
+          <li>History trimming lives immediately before the model call, and the task message is pinned at index 0 — an agent that trims its own mission drifts off-task.</li>
+          <li>The loop is the smallest block in the file; the guard rails outweigh it. Frameworks earn their keep by shipping the tall bars, not the famous short one.</li>
+          <li>A well-shaped agent has exactly one seam to reality: swap <code>fake_llm</code>'s body for a real API call and nothing else changes.</li>
+          <li>Carry the five landmarks — registry, one model call, buffer zone, memory policy, exhaustion path — into every agent file you open from now on, starting with the LangChain ecosystem next chapter.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

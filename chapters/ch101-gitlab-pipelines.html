@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipelines: .gitlab-ci.yml decoded — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch101">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>Pipelines: .gitlab-ci.yml decoded</h1>
+        <p class="ch-tagline">That intimidating CI file at the root of every repo is a YAML document you could already read three acts ago. Today you decode one keyword at a time — stages, jobs, runners, artifacts — until the whole thing is boring.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 102 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>The night before a big wedding, the head caterer tapes one laminated sheet to the kitchen wall and goes home. The sheet lists stations in strict order — CHOP, COOK, TASTE, PACK — and under each station, the tasks: dice onions, grind masala, simmer dal, taste every pot, seal two hundred boxes. Workers arrive through the night, read the sheet, and pick up whatever task their station allows. Nobody phones the caterer to ask what to do next. The sheet is the boss.</p>
+        <p>Watch the details. Chopped vegetables leave CHOP in labelled trays that are handed forward to COOK — the next station never re-chops. The masala trolley stays stocked between weddings so nobody grinds from scratch every single event. A margin note says <em>"sugar-free batch: only if the client asked"</em>. And one packer is allowed to start folding boxes at midnight, hours before cooking ends, because folding boxes only depends on the guest count, not on the dal.</p>
+        <p>That sheet is <code>.gitlab-ci.yml</code>. The stations are <strong>stages</strong>, the tasks are <strong>jobs</strong>, the workers are <strong>runners</strong>, the labelled trays are <strong>artifacts</strong>, the trolley is the <strong>cache</strong>, the margin note is a <strong>rule</strong>, and the early-starting packer is <strong>needs</strong>. You are about to read the sheet.</p>
+      </section>
+
+      <h2>You already read this language</h2>
+      <p>Back in <a href="ch005-yaml-and-json.html">the YAML chapter</a> you learned the whole grammar: indentation shows what belongs inside what, <code>key: value</code> pairs make a mapping, and lines starting with <code>-</code> make a list. You learned that YAML is just structured data — a shape, not a program — and that most configuration files in this industry are YAML wearing different hats. That chapter is the key that turns in today's lock, because a <code>.gitlab-ci.yml</code> file is nothing but one YAML mapping, sitting at the root of the repository.</p>
+      <p>Here is the smallest pipeline that does anything at all:</p>
+
+      <div class="code-title">.gitlab-ci.yml — the whole file</div>
+      <pre><code class="language-yaml">stages:
+  - test
+
+say-hello:
+  stage: test
+  script:
+    - echo "the pipeline is alive"</code></pre>
+
+      <p>Read it with your ch005 eyes. Two top-level keys. <code>stages</code> is a list with one item. <code>say-hello</code> is a mapping with two keys inside it, and <code>script</code> holds a list of one string. That is the entire trick of this chapter: GitLab reserves a handful of top-level keywords (<code>stages</code>, <code>default</code>, <code>variables</code>, <code>workflow</code>, <code>include</code>, a few more) — and <em>every other top-level key you write becomes a job</em>. You do not declare jobs inside some <code>jobs:</code> block. You just name them, the way <code>say-hello</code> is named here.</p>
+      <p>Commit this file to a repo, push, and GitLab creates a <dfn>pipeline</dfn> — one full run of the sheet, triggered by that push — with one job in it. The job prints its line, exits with code 0, and the commit gets a green tick. Every green tick you have ever seen next to a commit in GitLab was earned exactly this way.</p>
+
+      <h2>Stages and jobs: columns and cards</h2>
+      <p>A <dfn>stage</dfn> is a named phase of the pipeline — a station on the kitchen wall. The <code>stages:</code> list at the top of the file declares the stations <em>and their order</em>: lint, then test, then build, then deploy. A <dfn>job</dfn> is one unit of actual work — a named block with a <code>script:</code> — and every job says which stage it belongs to. Two rules govern everything you will ever watch in the pipeline UI:</p>
+      <ul>
+        <li>Jobs in the <em>same</em> stage run <strong>in parallel</strong>, if enough workers are free. Unit tests and type checks do not queue behind each other; they are both TEST-station tasks.</li>
+        <li>The next stage starts only when <em>every</em> job in the current stage has passed. One red job in TEST and the BUILD station never opens.</li>
+      </ul>
+      <p>The <dfn>script</dfn> is simply a list of shell commands, run top to bottom in a fresh environment — the same commands you could type in a terminal. If the last command exits with status 0, the job passes; any non-zero exit turns it red. There is no deeper magic: CI is a robot typing shell commands and reading the exit code, the same exit-code contract you met when running <a href="ch103-pytest.html">pytest</a> locally.</p>
+      <p>And <code>image:</code>? Each job runs inside a container started from that image — <code>python:3.12-slim</code> hands every job an identical, clean machine with Python pre-installed. You saw what images are made of in <a href="ch110-containers-and-images.html">the containers chapter</a>; here is where they quietly earn their keep. A fresh container per job is why "works on my machine" arguments end at the pipeline: there is no <em>my machine</em> any more.</p>
+
+      <p>Eight words carry the rest of this chapter. Flip until each back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">stage</span><span class="flip-back">A named phase of the pipeline (lint, test, build, deploy). Stages run strictly in order; a stage opens only when the previous one is fully green.</span></button>
+        <button class="flip" type="button"><span class="flip-front">job</span><span class="flip-back">One unit of work with its own script, run in its own fresh container. Jobs are the real workers; stages are just how jobs are grouped and ordered.</span></button>
+        <button class="flip" type="button"><span class="flip-front">script</span><span class="flip-back">The list of shell commands the job runs, top to bottom. The final exit code decides green or red — nothing more mystical than that.</span></button>
+        <button class="flip" type="button"><span class="flip-front">image</span><span class="flip-back">The container image the job runs inside. python:3.12-slim gives every job the same clean machine, killing "works on my machine" forever.</span></button>
+        <button class="flip" type="button"><span class="flip-front">runner</span><span class="flip-back">A separate program on a separate machine that polls GitLab asking for work, executes jobs, and streams the log back. GitLab coordinates; runners execute.</span></button>
+        <button class="flip" type="button"><span class="flip-front">artifact</span><span class="flip-back">Files a job saves after finishing — test reports, built packages. Uploaded to GitLab, passed to later stages, downloadable from the UI.</span></button>
+        <button class="flip" type="button"><span class="flip-front">cache</span><span class="flip-back">A best-effort stash that speeds up repeat runs (think pip downloads). It may be empty at any time — never rely on it for correctness.</span></button>
+        <button class="flip" type="button"><span class="flip-front">needs</span><span class="flip-back">A job's personal shortcut list: "I only wait for these jobs." Lets a job jump the stage queue instead of waiting for a whole column to finish.</span></button>
+        <button class="flip" type="button"><span class="flip-front">rules</span><span class="flip-back">Conditions evaluated when the pipeline is created, deciding whether a job exists in this run at all — and whether it starts automatically or waits for a human click.</span></button>
+      </div>
+
+      <h2>Runners: who actually does the work</h2>
+      <p>Here is the fact that unlocks the whole architecture, and it should feel familiar: <strong>the GitLab server never executes your code</strong>. GitLab is the caterer's office — it stores the sheet, decides what may start when, and displays the pretty graph. The actual cooking is done by a <dfn>runner</dfn>: a small standalone program (called GitLab Runner) installed on some machine — a virtual machine, a container host, a Kubernetes cluster — that polls the server on a loop: <em>"any jobs for me?"</em></p>
+      <p>When a job is handed over, the runner clones the repository at exactly that commit, starts a container from the job's <code>image</code>, runs the <code>script</code> lines one by one, streams the log back live (that is the black console you watch in the UI), and reports the exit code. Then it asks for more work. If this reminds you of <a href="ch045-react-loop-by-hand.html">the ReAct loop</a>, trust the feeling — the YAML file, like the model, only ever <em>describes</em> actions. Something else, standing outside, does the doing.</p>
+      <p>Runners come in flavours you will hear named in stand-ups. <em>Shared runners</em> belong to the whole GitLab instance — on gitlab.com they are the free machines everyone queues for. <em>Group</em> and <em>project runners</em> are machines your own team registered, and jobs choose them with <code>tags:</code> — a data-science team's training job might say <code>tags: [gpu]</code> so it only lands on the machine with the graphics card. When a colleague sighs "the pipeline is stuck, no runner picked it up", they mean: a job is advertised with tags no available worker carries. Nothing is broken; nobody with the right apron showed up.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>This division of labour is why CI can be trusted: the runner starts from a clean container every single time. No leftover files, no half-installed packages from Tuesday, no local hacks. Your repo plus your YAML must contain <em>everything</em> the job needs — which is precisely what makes a green pipeline meaningful.</p></div>
+
+      <h2>The pipeline graph: the sheet, live on screen</h2>
+      <p>In <a href="ch098-gitlab-tour.html">the GitLab tour</a> you found the Pipelines page under <strong>Build</strong> in the left sidebar. Click any pipeline and you get the <dfn>pipeline graph</dfn> — stages as columns, jobs as pills, exactly the kitchen wall rendered live. Step through what you would see in the minute after pushing a commit to a Python project:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Push">
+          <h3>1. You push — a pipeline is born</h3>
+          <div class="diagram">
+            <div class="d-box hot">git push<small>one commit</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box dim">ruff-lint<small>created</small></div>
+            </div>
+            <div class="d-col">
+              <div class="d-box dim">unit-tests<small>created</small></div>
+              <div class="d-box dim">type-check<small>created</small></div>
+            </div>
+            <div class="d-col">
+              <div class="d-box dim">build-package<small>created</small></div>
+            </div>
+            <div class="d-col">
+              <div class="d-box dim">deploy-uat<small>created</small></div>
+            </div>
+          </div>
+          <p class="step-cap">GitLab reads .gitlab-ci.yml at your commit, evaluates every job's rules, and lays out the graph: four stage columns — lint, test, build, deploy — with every surviving job shown as a waiting pill.</p>
+        </div>
+        <div class="step" data-title="Lint runs">
+          <h3>2. The lint stage claims a runner</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">ruff-lint<small>running…</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box dim">unit-tests<small>pending</small></div>
+              <div class="d-box dim">type-check<small>pending</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box dim">build-package<small>pending</small></div>
+            </div>
+          </div>
+          <p class="step-cap">A runner polls in, takes ruff-lint, spins up python:3.12-slim, and starts typing the script. The pill gains a spinning icon; clicking it opens the live console log.</p>
+        </div>
+        <div class="step" data-title="Tests in parallel">
+          <h3>3. Test stage: two jobs at once</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box good">ruff-lint<small>passed</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">unit-tests<small>running…</small></div>
+              <div class="d-box hot">type-check<small>running…</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box dim">build-package<small>pending</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Lint went green, so the whole test column unlocks. unit-tests and type-check run in parallel on two different runners — same stage, no queueing between them.</p>
+        </div>
+        <div class="step" data-title="Build + artifact">
+          <h3>4. Build produces a parcel</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box good">unit-tests<small>passed</small></div>
+              <div class="d-box good">type-check<small>passed</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">build-package<small>running…</small></div>
+            </div>
+            <span class="d-arrow">&#8595;</span>
+            <div class="d-box">artifact<small>dist/agent-0.1.0.whl</small></div>
+          </div>
+          <p class="step-cap">Both test jobs green — build unlocks. When build-package finishes it uploads dist/ as an artifact: the labelled tray. The UI now shows Browse and Download buttons on the job.</p>
+        </div>
+        <div class="step" data-title="Manual gate">
+          <h3>5. Deploy waits for a human</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box good">build-package<small>passed</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">deploy-uat<small>manual — press play</small></div>
+            </div>
+          </div>
+          <p class="step-cap">deploy-uat has when: manual in its rules, so it renders with a play button and the pipeline reports "passed" without it. Deployment happens when a human decides — a brake pedal, wired in YAML.</p>
+        </div>
+        <div class="step" data-title="All green">
+          <h3>6. Green tick, everywhere</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box good">ruff-lint</div>
+            </div>
+            <div class="d-col">
+              <div class="d-box good">unit-tests</div>
+              <div class="d-box good">type-check</div>
+            </div>
+            <div class="d-col">
+              <div class="d-box good">build-package</div>
+            </div>
+            <div class="d-col">
+              <div class="d-box good">deploy-uat</div>
+            </div>
+          </div>
+          <p class="step-cap">Someone pressed play; everything passed. The commit gets its tick, the merge request widget flips to "Pipeline passed", and reviewers can trust that lint, tests, types, and packaging all held.</p>
+        </div>
+      </div>
+
+      <h2>A real file, decoded line by line</h2>
+      <p>Now the centrepiece. Below is a realistic <code>.gitlab-ci.yml</code> for a small Python project — the lint, test, build, deploy pipeline the stepper just animated. Click any highlighted line and make sure its note feels obvious; as with the ReAct loop, boring means fluent.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">.gitlab-ci.yml — a Python project's full pipeline</div>
+        <div class="wl-line"><code>stages:</code>
+          <div class="wl-note">The stations, declared once, in order. Any job naming a stage not in this list is a syntax error — GitLab refuses the whole pipeline.</div></div>
+        <div class="wl-line"><code>  - lint</code></div>
+        <div class="wl-line"><code>  - test</code></div>
+        <div class="wl-line"><code>  - build</code></div>
+        <div class="wl-line"><code>  - deploy</code>
+          <div class="wl-note">Plain YAML list items — your ch005 fluency at work. Order here is execution order. If a job omits its stage entirely, GitLab quietly defaults it to test.</div></div>
+        <div class="wl-line"><code>default:</code>
+          <div class="wl-note">Settings under default apply to every job that does not override them — the house rules of the kitchen.</div></div>
+        <div class="wl-line"><code>  image: python:3.12-slim</code>
+          <div class="wl-note">Every job runs in a fresh container from this image. One job could still say image: python:3.11-slim to test an older version — job-level keys beat default.</div></div>
+        <div class="wl-line"><code>variables:</code>
+          <div class="wl-note">Environment variables visible to all jobs. GitLab also injects dozens of predefined ones — CI_COMMIT_BRANCH, CI_PROJECT_DIR, CI_DEFAULT_BRANCH — which the rules below lean on.</div></div>
+        <div class="wl-line"><code>  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"</code>
+          <div class="wl-note">Points pip's download folder inside the project directory — because that is the only place the cache system (next block) is allowed to save and restore.</div></div>
+        <div class="wl-line"><code>cache:</code>
+          <div class="wl-note">The masala trolley. Between pipelines, these paths are zipped and stashed near the runner so repeat runs skip re-downloading packages.</div></div>
+        <div class="wl-line"><code>  key:</code></div>
+        <div class="wl-line"><code>    files:</code></div>
+        <div class="wl-line"><code>      - requirements.txt</code>
+          <div class="wl-note">The cache key is derived from this file's contents: edit requirements.txt and you get a fresh cache automatically. Stale-dependency bugs, dissolved in three lines of YAML.</div></div>
+        <div class="wl-line"><code>  paths:</code></div>
+        <div class="wl-line"><code>    - .cache/pip</code>
+          <div class="wl-note">What actually gets stashed. Note what is not cached: your installed environment. Each job still runs pip install — it just hits local disk instead of the network.</div></div>
+        <div class="wl-line"><code>ruff-lint:</code>
+          <div class="wl-note">Not a reserved keyword, so it is a job — the name you will see on the pill in the graph. Naming jobs after their tool is a widely loved convention.</div></div>
+        <div class="wl-line"><code>  stage: lint</code></div>
+        <div class="wl-line"><code>  script:</code></div>
+        <div class="wl-line"><code>    - pip install ruff</code>
+          <div class="wl-note">Remember: fresh container, empty except for Python. Every job installs what it needs. Feels wasteful; it is the price of perfectly reproducible builds.</div></div>
+        <div class="wl-line"><code>    - ruff check src/</code>
+          <div class="wl-note">The linter. Exits 0 if the code is clean, non-zero if not — and that exit code alone decides whether this pill turns green or red.</div></div>
+        <div class="wl-line"><code>unit-tests:</code></div>
+        <div class="wl-line"><code>  stage: test</code>
+          <div class="wl-note">Same stage as type-check below, so the two run in parallel once lint passes — the two cooks at the TEST station.</div></div>
+        <div class="wl-line"><code>  script:</code></div>
+        <div class="wl-line"><code>    - pip install -r requirements.txt</code></div>
+        <div class="wl-line"><code>    - pytest --junitxml=report.xml</code>
+          <div class="wl-note">Runs the test suite (chapter ch103) and also writes the results as a machine-readable XML file — for the next three lines to pick up.</div></div>
+        <div class="wl-line"><code>  artifacts:</code>
+          <div class="wl-note">Declares what this job hands forward after it finishes — the labelled tray leaving the station.</div></div>
+        <div class="wl-line"><code>    when: always</code>
+          <div class="wl-note">Save the report even when tests fail — especially when tests fail. Without this, artifacts upload only on success, which is exactly when you least need a test report.</div></div>
+        <div class="wl-line"><code>    reports:</code></div>
+        <div class="wl-line"><code>      junit: report.xml</code>
+          <div class="wl-note">A special artifact flavour: GitLab parses this XML and shows failed tests by name right inside the merge request widget, so reviewers never dig through raw logs.</div></div>
+        <div class="wl-line"><code>type-check:</code></div>
+        <div class="wl-line"><code>  stage: test</code></div>
+        <div class="wl-line"><code>  script:</code></div>
+        <div class="wl-line"><code>    - pip install -r requirements.txt mypy</code></div>
+        <div class="wl-line"><code>    - mypy src/</code>
+          <div class="wl-note">Static type checking against the hints you met in ch016. A second, independent verdict on the same commit, earned in parallel with the unit tests.</div></div>
+        <div class="wl-line"><code>build-package:</code></div>
+        <div class="wl-line"><code>  stage: build</code>
+          <div class="wl-note">Only reachable when every test-stage job passed. By the time anything is packaged, it has already survived lint, tests, and types.</div></div>
+        <div class="wl-line"><code>  script:</code></div>
+        <div class="wl-line"><code>    - pip install build</code></div>
+        <div class="wl-line"><code>    - python -m build</code>
+          <div class="wl-note">Builds the wheel — the installable package format from ch020 — into dist/.</div></div>
+        <div class="wl-line"><code>  artifacts:</code></div>
+        <div class="wl-line"><code>    paths:</code></div>
+        <div class="wl-line"><code>      - dist/</code>
+          <div class="wl-note">The built wheel is uploaded to GitLab itself. Later jobs receive it automatically, and you can download it from the UI — the parcel, not the trolley.</div></div>
+        <div class="wl-line"><code>    expire_in: 1 week</code>
+          <div class="wl-note">Housekeeping: artifacts eat server storage, so give them a shelf life. A week is plenty for anything a human might want to fetch.</div></div>
+        <div class="wl-line"><code>deploy-uat:</code></div>
+        <div class="wl-line"><code>  stage: deploy</code></div>
+        <div class="wl-line"><code>  needs: ["build-package"]</code>
+          <div class="wl-note">The queue-jumper. This job waits only for build-package — not for every earlier job — and inherits its artifacts, so dist/ is already sitting in the container when the script starts.</div></div>
+        <div class="wl-line"><code>  script:</code></div>
+        <div class="wl-line"><code>    - pip install twine</code></div>
+        <div class="wl-line"><code>    - twine upload --repository-url "$UAT_INDEX_URL" dist/*</code>
+          <div class="wl-note">Pushes the wheel to the team's test package index. $UAT_INDEX_URL is a CI/CD variable set in project settings — secrets live there, never in this file, never in git.</div></div>
+        <div class="wl-line"><code>  rules:</code>
+          <div class="wl-note">The margin note. Rules are evaluated when the pipeline is created, top to bottom, first match wins — deciding whether this job exists in this run at all.</div></div>
+        <div class="wl-line"><code>    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH</code>
+          <div class="wl-note">Condition: this push landed on the default branch (usually main). On a feature branch this rule does not match, no rule remains, and the job simply is not created — no grey pill, nothing.</div></div>
+        <div class="wl-line"><code>      when: manual</code>
+          <div class="wl-note">Even on main, do not fire automatically — render a play button and wait for a human. The whole release gate for many teams is exactly this one line.</div></div>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>You never have to hand-check your YAML by pushing and praying. GitLab ships a <strong>pipeline editor</strong> (left sidebar, under Build) that validates the file as you type and previews the graph before you commit. Ten seconds there saves a red pipeline and a noisy notification to the whole team.</p></div>
+
+      <h2>Artifacts versus cache: the parcel and the trolley</h2>
+      <p>These two get confused in every team, so pin the distinction now. An <dfn>artifact</dfn> is an <em>output</em> — files a job produced that later jobs (and humans) need; GitLab guarantees delivery by storing them on the server. A <dfn>cache</dfn> is an <em>optimisation</em> — stuff worth keeping around so the next run is faster; it lives near the runners and comes with no guarantee whatsoever. The kitchen knows the difference instinctively: the tray of chopped onions must reach the next station or dinner fails; the masala trolley being restocked is merely nice.</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>Artifacts</th><th>Cache</th></tr>
+        <tr><td>Purpose</td><td>Pass a job's outputs forward</td><td>Speed up repeat runs</td></tr>
+        <tr><td>Typical contents</td><td>Built wheel, test report, coverage file</td><td>pip downloads, dependency folders</td></tr>
+        <tr><td>Guaranteed?</td><td>Yes — stored by the GitLab server</td><td>No — may be empty at any time</td></tr>
+        <tr><td>Visible in the UI?</td><td>Yes — Browse and Download buttons per job</td><td>No</td></tr>
+        <tr><td>If it vanished</td><td>The pipeline would break</td><td>The pipeline would just run slower</td></tr>
+      </table></div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The classic mistake: using cache to pass files between stages. It appears to work — until the two jobs land on different runners with different local caches, and the file "randomly" is not there. If a later job needs it, it is an artifact. No exceptions.</p></div>
+
+      <h2>needs, rules, and the ghost of only</h2>
+      <p>Two refinements complete your fluency. First, <dfn>needs</dfn> replaces the rigid stage-by-stage march with a precise dependency graph: a job listing <code>needs: ["build-package"]</code> starts the moment that one job passes, even while unrelated jobs in earlier stages are still grinding. The extreme case, <code>needs: []</code>, means "I depend on nothing — start immediately", which is how a documentation job can finish before the test suite is halfway done. Big pipelines earn minutes of wall-clock time this way.</p>
+      <p>Second, <dfn>rules</dfn> decide whether a job is created at all. Each rule can test a condition (<code>if:</code>), react to which files changed (<code>changes:</code>), and set the start behaviour (<code>when: on_success</code>, <code>manual</code>, or <code>never</code>). A pattern you will meet constantly in agent and data-science repos — run the expensive evaluation job only when prompts or model code actually changed:</p>
+
+      <div class="code-title">rules in the wild — run evals only when it matters</div>
+      <pre><code class="language-yaml">eval-agent:
+  stage: test
+  script:
+    - python -m evals.run --suite smoke
+  rules:
+    - changes:
+        - prompts/**/*
+        - src/agent/**/*
+      when: on_success</code></pre>
+
+      <p>And the ghost: older files use <code>only:</code> and <code>except:</code> — for example <code>only: [main]</code> — to do a cruder version of the same thing. They still work, but GitLab froze their development years ago and the documentation steers everyone to <code>rules</code>. Read <code>only:</code> fluently in legacy files; write <code>rules:</code> in new ones. (Evaluation pipelines for agents get their own chapter in <a href="ch104-agent-evals.html">agent evals</a>.)</p>
+
+      <h2>Run the scheduler yourself</h2>
+      <p>You now know the ordering laws: stages march in sequence, same-stage jobs run in parallel, <code>needs</code> jumps the queue, and one failure poisons everything downstream. Here is a miniature scheduler that obeys exactly those laws. Press <strong>Run</strong>, read the timeline, then follow the comment on the <code>FAIL</code> line to break the tests and watch the blast radius.</p>
+
+      <div class="pyrun" data-title="A tiny GitLab scheduler — run me, then break me">
+<textarea class="py-src" spellcheck="false">
+# A miniature GitLab scheduler. The real one lives inside the
+# GitLab server; this one follows the same ordering rules.
+
+STAGES = ["lint", "test", "build", "deploy"]
+
+JOBS = {
+    "ruff-lint":     {"stage": "lint",   "time": 1},
+    "unit-tests":    {"stage": "test",   "time": 3},
+    "type-check":    {"stage": "test",   "time": 2},
+    "build-package": {"stage": "build",  "time": 2,
+                      "artifacts": ["dist/agent-0.1.0.whl"]},
+    "docs":          {"stage": "build",  "time": 1, "needs": []},
+    "deploy-uat":    {"stage": "deploy", "time": 1,
+                      "needs": ["build-package"]},
+}
+
+FAIL = set()   # try: FAIL = {"unit-tests"}  and press Run again
+
+def prerequisites(name):
+    """Which jobs must pass before this one may start?"""
+    spec = JOBS[name]
+    if "needs" in spec:                 # explicit shortcut list
+        return list(spec["needs"])
+    earlier = STAGES[:STAGES.index(spec["stage"])]
+    return [j for j, s in JOBS.items() if s["stage"] in earlier]
+
+done, running, shelf = {}, {}, []
+tick = 0
+while len(done) &lt; len(JOBS):
+    for name in list(running):          # finish jobs whose time is up
+        running[name] -= 1
+        if running[name] == 0:
+            verdict = "FAILED" if name in FAIL else "passed"
+            done[name] = verdict
+            del running[name]
+            print(f"t={tick}  {verdict:7} {name}")
+            for a in JOBS[name].get("artifacts", []):
+                shelf.append(a)
+                print(f"        artifact saved: {a}")
+    for name, spec in JOBS.items():     # start whatever is unblocked
+        if name in done or name in running:
+            continue
+        pre = prerequisites(name)
+        if any(done.get(p) in ("FAILED", "skipped") for p in pre):
+            done[name] = "skipped"
+            print(f"t={tick}  skipped {name} (a prerequisite did not pass)")
+        elif all(done.get(p) == "passed" for p in pre):
+            running[name] = spec["time"]
+            waited = ", ".join(pre) if pre else "nothing"
+            print(f"t={tick}  start   {name}  (waited for: {waited})")
+    tick += 1
+
+status = "FAILED" if "FAILED" in done.values() else "passed"
+print()
+print(f"pipeline {status} after {tick - 1} ticks")
+print("artifacts on the shelf:", shelf if shelf else "none")
+</textarea>
+      </div>
+
+      <p>Three details to notice in the output. <code>docs</code> starts at <code>t=0</code>, alongside lint, hours (well, ticks) before its own build stage opens — that is <code>needs: []</code> doing its queue-jump. <code>deploy-uat</code> starts the instant <code>build-package</code> passes, without glancing at <code>docs</code>. And when you make <code>unit-tests</code> fail, everything downstream flips to <em>skipped</em>, not <em>failed</em> — exactly the grey pills you will see in the real UI, and exactly why one red job never wastes runner time on doomed descendants.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open the repo of any team you join and look for <code>.gitlab-ci.yml</code> in the root — it is the single most honest document about how that team really works: what they test, what they deploy, and what still needs a human's play button. In large organisations the file is often startlingly short, because an <code>include:</code> line at the top pulls in shared templates maintained by a platform team — the same decoding skills apply, just across two files. And in merge-request chatter, you can now translate fluently: "pipeline's red" (a job's script exited non-zero), "retry it, that runner is flaky" (re-run the job, blame the worker not the recipe), "just bump the cache key" (force a fresh trolley), "make it manual on main" (add the two rules lines you read today).</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. When a job's <code>script:</code> lines execute, where do they actually run?</p>
+          <div class="q-opts">
+            <button data-opt="a">On the GitLab server, next to the repository</button>
+            <button data-opt="b">On a runner — a separate machine that polls GitLab for jobs and reports back</button>
+            <button data-opt="c">On the laptop of whoever pushed the commit</button>
+          </div>
+          <p class="q-explain">GitLab only coordinates and displays. A runner — its own program on its own machine — claims the job, starts a fresh container from the job's image, types the script, and streams the log back. Same division of labour as the ReAct loop: the file describes, the runner does.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Your build job creates <code>dist/app.whl</code> and the deploy job needs that file. Artifact or cache?</p>
+          <div class="q-opts">
+            <button data-opt="a">Cache — it is faster and lives near the runner</button>
+            <button data-opt="b">Either works; they are two names for the same mechanism</button>
+            <button data-opt="c">Artifact — delivery is guaranteed; cache may be empty at any time</button>
+          </div>
+          <p class="q-explain">Artifacts are outputs stored by the GitLab server and handed to later jobs reliably. Cache is a best-effort speed-up that can vanish whenever jobs land on different runners — the classic source of "it worked yesterday" pipeline bugs.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. A deploy job declares <code>needs: ["build-package"]</code>. What does that change?</p>
+          <div class="q-opts">
+            <button data-opt="a">It may start as soon as build-package passes, even while other earlier-stage jobs are still running</button>
+            <button data-opt="b">It re-runs build-package first, to be safe</button>
+            <button data-opt="c">It must run on the same runner as build-package</button>
+          </div>
+          <p class="q-explain">needs replaces "wait for every earlier stage" with a precise dependency list — and the needed job's artifacts come along automatically. It is the queue-jump that makes big pipelines fast.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. A job's only rule is <code>if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH</code> with <code>when: manual</code>. You push to a feature branch. What happens to the job?</p>
+          <div class="q-opts">
+            <button data-opt="a">It appears in the graph with a play button, waiting</button>
+            <button data-opt="b">It does not exist in this pipeline at all</button>
+            <button data-opt="c">It runs automatically, since manual only applies on the default branch</button>
+          </div>
+          <p class="q-explain">Rules are evaluated when the pipeline is created. No rule matches on a feature branch, so the job is simply not created — no pill, no button, nothing. The manual play button appears only on default-branch pipelines, where the rule matches.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. In a <code>.gitlab-ci.yml</code> file, what makes a top-level key a job?</p>
+          <div class="q-opts">
+            <button data-opt="a">Its name must start with "job-"</button>
+            <button data-opt="b">It must be listed inside a jobs: block</button>
+            <button data-opt="c">Any top-level key that is not a reserved keyword becomes a job</button>
+          </div>
+          <p class="q-explain">There is no jobs: block. GitLab reserves a handful of keywords (stages, default, variables, workflow, include…) and treats every other top-level mapping as a job definition — which is why say-hello and ruff-lint just work.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A <code>.gitlab-ci.yml</code> file is plain YAML: a few reserved top-level keywords, and every other top-level key is a job. Your ch005 fluency reads all of it.</li>
+          <li>Stages run strictly in order; jobs inside a stage run in parallel; one red job blocks every stage after it. A job is just shell commands in a fresh container, judged by exit code.</li>
+          <li>GitLab never executes your code — runners do: separate machines that poll for jobs, clone the commit, run the script, and stream the log back. Tags decide which runner gets which job.</li>
+          <li>Artifacts are guaranteed outputs passed between stages and downloadable in the UI; cache is a best-effort speed-up that may be empty. Passing files through cache is the classic pipeline bug.</li>
+          <li><code>needs</code> turns the stage march into a precise dependency graph so independent jobs jump the queue; <code>rules</code> (successor to the older <code>only</code>/<code>except</code>) decides whether a job exists in a given pipeline and whether it waits for a human's play button.</li>
+          <li>The pipeline graph in the UI is the file rendered live — and the file itself is the most honest document about how a team actually tests and ships.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

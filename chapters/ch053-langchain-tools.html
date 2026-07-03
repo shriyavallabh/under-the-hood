@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tools and the @tool decorator — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch053">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VI · LangChain</div>
+        <h1>Tools and the @tool decorator</h1>
+        <p class="ch-tagline">One line above a plain Python function, and the model can suddenly find it, describe it, and ask for it by name. This is where the decorators of Act II stop being a party trick and start paying rent.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 54 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your neighbourhood runs a tool library — a real one, with shelves. Priya donates her tile cutter. The librarian does not just shove it on a shelf. She reads the plate riveted to its side — 230 volts, 600 watts, blade 110 mm — flips through the little manual in the box, and types up a catalogue card: what the machine is called, what it is for, and exactly which details you must fill in to borrow it. Members never wander the shelves. They browse the catalogue, pick a card, and hand in a borrow slip. If a slip arrives with the blade size missing, it bounces back at the front desk before anyone touches the machine.</p>
+        <p>One librarian, one minute per donation, and every drill, cutter, and sander in the district becomes findable, describable, and safely requestable. In this chapter, the tile cutter is your Python function. The plate on its side is its type hints. The manual in the box is its docstring. And the librarian stamping catalogue cards is a decorator called <strong>@tool</strong>.</p>
+      </section>
+
+      <h2>A decorator, earning its keep</h2>
+      <p>Back in <a href="ch017-decorators.html">the decorators chapter</a> you learned that a decorator is just a function that takes your function and hands back an upgraded version, and that the <code>@</code> line above a <code>def</code> is shorthand for <code>greet = timer(greet)</code>. You watched <code>@lru_cache</code> bolt a memory onto a function without touching its body, and you learned the three-beat rhythm: wrap, enhance, rebind the name. Nothing about the original function changes — what changes is what the <em>name</em> now points to. Hold that thought, because <code>@tool</code> may be the most consequential decorator in this whole course: it is the moment a plain Python function gets a passport into the model's world.</p>
+      <p>Here is what the librarian needs from you. A function that wants to become a tool must bring two things: <strong>type hints</strong> on its parameters (the plate on the machine — you met these in <a href="ch016-type-hints-and-pydantic.html">the type hints chapter</a>) and a <strong>docstring</strong> (the manual in the box). Given those, <code>@tool</code> can write the catalogue card entirely on its own:</p>
+
+      <div class="code-title">tools.py</div>
+      <pre><code class="language-python">from langchain_core.tools import tool
+
+LEDGER = {"INV-042": 1500.0}
+
+@tool
+def get_invoice_total(invoice_id: str) -&gt; float:
+    """Return the grand total, in rupees, of one invoice."""
+    return LEDGER[invoice_id]
+
+print(get_invoice_total.name)
+# get_invoice_total
+print(get_invoice_total.description)
+# Return the grand total, in rupees, of one invoice.
+print(get_invoice_total.args)
+# {'invoice_id': {'title': 'Invoice Id', 'type': 'string'}}</code></pre>
+
+      <p>Look closely at what happened to the name. After the decorator runs, <code>get_invoice_total</code> no longer refers to your function. It refers to a <dfn>tool object</dfn> — an instance of a LangChain class called <code>StructuredTool</code>, which is a function wrapped together with its own catalogue card. It carries a <code>.name</code> (taken from the function name), a <code>.description</code> (taken from the docstring), and an <code>.args</code> view showing the parameters it extracted from your type hints. Your original code is still in there, tucked away as <code>.func</code>, but you now run it the LangChain way, with a dictionary of arguments:</p>
+
+      <div class="code-title">running a tool yourself</div>
+      <pre><code class="language-python">get_invoice_total.invoke({"invoice_id": "INV-042"})
+# 1500.0</code></pre>
+
+      <p>Why a dictionary instead of a normal call? Because that is exactly the shape a model's request arrives in — and because the tool object <em>validates</em> that dictionary against its schema before your function ever runs. Pass an <code>invoice_id</code> of the wrong type, or forget it entirely, and the borrow slip bounces at the front desk. Your function body never sees malformed input.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Leave the docstring off and <code>@tool</code> refuses the function on the spot, with an error the moment the module loads. This feels strict until you realise what the docstring has become: it is the <em>only</em> thing the model will ever read about your tool when deciding whether to use it. A tool with no description is a machine in the catalogue with a blank card — worse than useless, because it still takes up space in the context window.</p></div>
+
+      <h2>The journey from def to tool call</h2>
+      <p>Before we go deeper, watch the whole pipeline once, end to end. This is the story the rest of the chapter unpacks:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="You write it">
+          <h3>1. You write a plain function</h3>
+          <div class="diagram">
+            <div class="d-box hot">Your function<small>type hints + docstring</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">@tool</div>
+            <div class="d-box dim">Chat model</div>
+          </div>
+          <p class="step-cap">Nothing special yet — a typed, documented Python function like any good reviewer would ask for. The hints and docstring you were writing anyway are about to become machine-readable.</p>
+        </div>
+        <div class="step" data-title="@tool inspects">
+          <h3>2. @tool reads the signature and docstring</h3>
+          <div class="diagram">
+            <div class="d-box dim">Your function</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">@tool<small>inspects hints, reads the manual</small></div>
+            <div class="d-box dim">Chat model</div>
+          </div>
+          <p class="step-cap">At import time, the decorator inspects the function: parameter names, their types, which ones have defaults, and the docstring. The librarian is reading the plate and the manual.</p>
+        </div>
+        <div class="step" data-title="Tool object">
+          <h3>3. Out comes a tool object with a schema</h3>
+          <div class="diagram">
+            <div class="d-box good">Tool object<small>name · description · args_schema</small></div>
+            <div class="d-box dim">Chat model</div>
+          </div>
+          <p class="step-cap">The result is a StructuredTool: your function plus its catalogue card. The card's formal name is a schema — a structured description of the tool's name, purpose, and parameters.</p>
+        </div>
+        <div class="step" data-title="bind_tools">
+          <h3>4. bind_tools hands the catalogue to the model</h3>
+          <div class="diagram">
+            <div class="d-box">Tool object</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Chat model<small>.bind_tools([...])</small></div>
+          </div>
+          <p class="step-cap">Binding attaches the schemas to the model, so every request now carries the catalogue. The model still cannot run anything — it can only read the cards.</p>
+        </div>
+        <div class="step" data-title="Tool call">
+          <h3>5. The model fills in a borrow slip</h3>
+          <div class="diagram">
+            <div class="d-box">Chat model</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">tool_calls<small>{name, args, id}</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Your loop<small>executes</small></div>
+          </div>
+          <p class="step-cap">When the model wants a tool, its reply carries structured tool calls — name, arguments, an id. Your code (or next chapter's packaged loop) looks the tool up and runs it. Same handshake as ch045, minus the string surgery.</p>
+        </div>
+      </div>
+
+      <h2>What the model actually sees</h2>
+      <p>This is the part worth slowing down for, because it explains half the tool-related bugs you will ever debug. The model never sees your Python. Not the body, not the variable names, not the clever caching. When your tool rides along on an API request, it has been flattened into a <dfn>schema</dfn> — a JSON description of the tool's name, its purpose, and the exact shape of its inputs. For the invoice tool above, the schema looks like this:</p>
+
+      <div class="code-title">what travels to the model (JSON, roughly)</div>
+      <pre><code class="language-json">{
+  "name": "get_invoice_total",
+  "description": "Return the grand total, in rupees, of one invoice.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "invoice_id": {"type": "string"}
+    },
+    "required": ["invoice_id"]
+  }
+}</code></pre>
+
+      <p>Three fields. The <strong>name</strong> is how the model will ask for the tool. The <strong>description</strong> is how the model decides <em>whether</em> to ask for it — this is your docstring, verbatim. The <strong>parameters</strong> block tells the model what a valid borrow slip looks like: which fields, which types, which are required. Different providers spell the outer wrapper slightly differently (Anthropic says <code>input_schema</code>, OpenAI says <code>parameters</code>), and LangChain translates for whichever model you bound — one of the small, genuinely useful services the framework provides.</p>
+      <p>Now the punchline: <strong>your docstring is prompt engineering</strong>. When an agent "keeps picking the wrong tool" or "never uses the search tool", the fix is very often not in any loop or config — it is a docstring that says <code>"Helper function."</code> where it should say what the tool does, when to use it, and what it returns. You already know from <a href="ch035-tool-calling.html">the tool-calling chapter</a> that models choose tools by reading descriptions. The <code>@tool</code> decorator is the pipe that carries your words to that decision.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Write tool docstrings for the model, not for your colleagues. Say what the tool does, when it should be preferred, and what the arguments mean — in plain sentences. "Look up ONE invoice's grand total by its id, e.g. INV-042. Use this before computing any tax." beats "Fetches invoice data." every single time, and it costs you one minute.</p></div>
+
+      <h2>Build the librarian yourself</h2>
+      <p>The fastest way to believe there is no magic here is to build a working miniature of <code>@tool</code> — in pure Python, right now. The real one leans on Pydantic and handles many more cases, but the heart of it fits in twenty lines: inspect the signature, read the docstring, attach a schema. Then we simulate <code>bind_tools</code> and one structured round trip with a scripted stand-in model, exactly like the <code>fake_llm</code> from <a href="ch045-react-loop-by-hand.html">the hand-rolled loop</a>. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A miniature @tool, built from the stdlib — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- a tiny @tool: inspect hints, read the docstring ------
+import inspect, json
+
+PY_TO_JSON = {int: "integer", float: "number",
+              str: "string", bool: "boolean"}
+
+def tool(fn):
+    if not fn.__doc__:
+        raise ValueError(f"{fn.__name__} needs a docstring!")
+    props, required = {}, []
+    for pname, p in inspect.signature(fn).parameters.items():
+        props[pname] = {"type": PY_TO_JSON.get(p.annotation, "string")}
+        if p.default is inspect.Parameter.empty:
+            required.append(pname)
+    fn.name = fn.__name__
+    fn.description = inspect.cleandoc(fn.__doc__)
+    fn.args_schema = {"type": "object", "properties": props,
+                      "required": required}
+    return fn
+
+@tool
+def gst_amount(total: float, rate: float = 0.18) -&gt; float:
+    """Compute the GST payable on an invoice total."""
+    return round(total * rate, 2)
+
+print("name:       ", gst_amount.name)
+print("description:", gst_amount.description)
+print("args_schema:", json.dumps(gst_amount.args_schema))
+print()
+
+# ---- 'bind_tools' + one structured round trip -------------
+# A real chat model would return tool_calls in exactly
+# this shape. Our scripted stand-in does the same.
+def fake_llm(question, tools):
+    print("model sees the catalogue:", [t.name for t in tools])
+    return {"tool_calls": [
+        {"name": "gst_amount",
+         "args": {"total": 1500.0},
+         "id": "call_1"}
+    ]}
+
+tools = [gst_amount]                      # bind_tools, in spirit
+tool_map = {t.name: t for t in tools}     # ch045's TOOLS dict!
+
+reply = fake_llm("GST on a 1500 rupee invoice?", tools)
+for call in reply["tool_calls"]:
+    result = tool_map[call["name"]](**call["args"])
+    print("model requested:", call["name"], call["args"])
+    print("your code ran it, result:", result)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it, gently. Delete the docstring from <code>gst_amount</code> and run — that error is the same guard the real decorator gives you. Add a second typed function, decorate it, and watch the catalogue grow. Change <code>"total": 1500.0</code> to a missing key and see the crash your validation layer would have caught. Every one of these is a production incident in miniature.</p></div>
+
+      <h2>args_schema: taking the wheel</h2>
+      <p>Here is a secret hiding in the miniature you just built: we gave our fake tool an <code>args_schema</code> attribute, and the real one has it too. Every tool made with <code>@tool</code> carries an <dfn>args_schema</dfn> — a Pydantic model, auto-generated from your type hints, that formally defines the tool's parameters and validates every incoming call. You met Pydantic in <a href="ch016-type-hints-and-pydantic.html">the type hints chapter</a>: classes that turn type annotations into enforced contracts. The decorator has been quietly writing one of those for you all along.</p>
+      <p>Auto-generation covers most tools. But sometimes you want the wheel: per-argument descriptions the model will read, tighter validation, or names that differ from your Python parameters. Then you write the Pydantic model yourself and hand it over:</p>
+
+      <div class="code-title">explicit args_schema — full control of the catalogue card</div>
+      <pre><code class="language-python">from pydantic import BaseModel, Field
+from langchain_core.tools import tool
+
+class GstArgs(BaseModel):
+    total: float = Field(description="Invoice grand total in rupees")
+    rate: float = Field(default=0.18,
+                        description="GST rate as a fraction, e.g. 0.18")
+
+@tool(args_schema=GstArgs)
+def gst_amount(total: float, rate: float = 0.18) -&gt; float:
+    """Compute the GST payable on an invoice total."""
+    return round(total * rate, 2)</code></pre>
+
+      <p>Those <code>Field(description=...)</code> strings travel into the parameters block of the schema, so the model now gets guidance on <em>each argument</em>, not just the tool as a whole. That is often the difference between a model passing <code>rate=18</code> and a model passing <code>rate=0.18</code>. A lighter-touch alternative: <code>@tool(parse_docstring=True)</code> reads a Google-style <code>Args:</code> section out of your docstring and turns it into per-argument descriptions — documentation you probably wrote anyway, promoted into the schema. And if you dislike the function's name as a tool name, <code>@tool("lookup_invoice")</code> overrides it.</p>
+
+      <h2>bind_tools: handing the model the catalogue</h2>
+      <p>A tool object sitting in a file helps nobody. The model needs to receive the catalogue — and that is one method call. <dfn>bind_tools</dfn> takes a list of tools and returns a <em>new</em> model wrapper that will include their schemas with every request:</p>
+
+      <div class="code-title">binding tools to a chat model</div>
+      <pre><code class="language-python">from langchain.chat_models import init_chat_model
+
+model = init_chat_model("anthropic:claude-sonnet-4-5")
+model_with_tools = model.bind_tools([get_invoice_total, gst_amount])
+
+reply = model_with_tools.invoke("How much GST on invoice INV-042?")
+print(reply.tool_calls)
+# [{'name': 'get_invoice_total',
+#   'args': {'invoice_id': 'INV-042'},
+#   'id': 'toolu_01Ab...', 'type': 'tool_call'}]</code></pre>
+
+      <p>Read that output with <a href="ch052-messages-and-models.html">last chapter's</a> eyes. The reply is an <code>AIMessage</code>, and instead of prose it carries a <code>tool_calls</code> list: for each request, the tool's <strong>name</strong>, a dictionary of <strong>args</strong>, and an <strong>id</strong> so the eventual result can be matched back to the question that asked for it. This is the structured version of ch045's <code>ACTION: calculate(1500 * 0.20)</code> line — already parsed, already typed, no <code>split("(")</code> in sight.</p>
+      <p>Now notice what did <em>not</em> happen. No invoice was looked up. No GST was computed. <code>bind_tools</code> attaches the catalogue; the model fills in a borrow slip; and executing the tool is still, always, your code's job. Running the requested tool and sending the result back (as a <code>ToolMessage</code>, keyed by that <code>id</code>) is the loop — the one you hand-rolled in ch045, and the one <a href="ch054-create-agent.html">next chapter's <code>create_agent</code></a> packages up for you.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>A pleasant modern shortcut: invoke a tool with the <em>whole</em> tool-call dictionary — <code>get_invoice_total.invoke(reply.tool_calls[0])</code> — and it hands back a ready-made <code>ToolMessage</code>, result and matching id included, ready to append to the conversation. The plumbing between "model asked" and "model sees the answer" shrinks to one line.</p></div>
+
+      <h2>The whole file, one line at a time</h2>
+      <p>Here is everything from this chapter as one small, real program — the shape you will find in a thousand repositories. Click the annotated lines; the goal, as always, is for each one to be boring to you.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">invoice_agent_tools.py — the real thing</div>
+        <div class="wl-line"><code>from langchain_core.tools import tool</code>
+          <div class="wl-note">The decorator lives in <code>langchain_core</code> — the small foundation package the whole framework stands on. You will also see it re-exported as <code>from langchain.tools import tool</code>; same object.</div></div>
+        <div class="wl-line"><code>from langchain.chat_models import init_chat_model</code></div>
+        <div class="wl-line"><code>@tool</code>
+          <div class="wl-note">The librarian. At import time she reads the plate and the manual on the function below and rebinds its name to a StructuredTool — exactly the wrap-enhance-rebind move from the decorators chapter.</div></div>
+        <div class="wl-line"><code>def get_invoice_total(invoice_id: str) -&gt; float:</code>
+          <div class="wl-note">The type hint <code>invoice_id: str</code> is not decoration here — it is read by the decorator and becomes <code>{"type": "string"}</code> in the schema the model receives. Hints are now load-bearing.</div></div>
+        <div class="wl-line"><code>    """Return the grand total, in rupees, of one invoice."""</code>
+          <div class="wl-note">The single most important line in the file. This sentence is everything the model will ever know about when to use this tool. Editing it changes the agent's behaviour — a docstring diff is a behaviour diff.</div></div>
+        <div class="wl-line"><code>    return LEDGER[invoice_id]</code>
+          <div class="wl-note">The body stays ordinary Python and stays invisible to the model. Only your code ever runs it — the security boundary from ch045 has not moved an inch.</div></div>
+        <div class="wl-line"><code>tools = [get_invoice_total, gst_amount]</code></div>
+        <div class="wl-line"><code>model = init_chat_model("anthropic:claude-sonnet-4-5")</code>
+          <div class="wl-note">One initialiser, any provider — the string names the provider and model. Swap it for another provider's model and every tool in this file still works, because LangChain translates the schema dialects.</div></div>
+        <div class="wl-line"><code>model_with_tools = model.bind_tools(tools)</code>
+          <div class="wl-note">Returns a NEW model wrapper; the original is untouched. From now on, every call through <code>model_with_tools</code> ships the catalogue of schemas alongside your messages.</div></div>
+        <div class="wl-line"><code>reply = model_with_tools.invoke("How much GST on INV-042?")</code>
+          <div class="wl-note">One model call. If the model decides a tool is needed, <code>reply.tool_calls</code> is a non-empty list. If it can answer directly, <code>tool_calls</code> is empty and <code>reply.content</code> has prose — that emptiness is the loop's stop signal, as you will see next chapter.</div></div>
+        <div class="wl-line"><code>tool_map = {t.name: t for t in tools}</code>
+          <div class="wl-note">Look familiar? This is ch045's <code>TOOLS</code> dict, reborn — except the names come from the tool objects themselves, so they can never drift out of sync with the schema the model saw.</div></div>
+        <div class="wl-line"><code>for call in reply.tool_calls:</code></div>
+        <div class="wl-line"><code>    msg = tool_map[call["name"]].invoke(call)</code>
+          <div class="wl-note">Look up the requested tool, run it with the whole tool call, get back a ToolMessage carrying the result and the matching id. Append it to the conversation, call the model again — and you have rebuilt the loop. Which is precisely what create_agent does for you next chapter.</div></div>
+      </div>
+
+      <h2>Your ch045 loop, before and after</h2>
+      <p>In <a href="ch045-react-loop-by-hand.html">the hand-rolled loop</a> you built every part of this yourself: a <code>TOOLS</code> dict where you typed each name, a system prompt where you described each tool by hand, and string parsing to fish <code>ACTION:</code> lines out of the model's prose. Nothing was wrong with any of it — and now you can see exactly which of those jobs the decorator absorbed:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Hand-rolled (ch045)</th><th>With @tool and bind_tools</th></tr>
+        <tr><td><code>TOOLS = {"calculate": calculate}</code> — name typed twice, can drift</td><td><code>{t.name: t for t in tools}</code> — the name lives on the tool itself</td></tr>
+        <tr><td>Tool menu described by hand in the system prompt</td><td>Schema generated from hints + docstring, sent as structured data</td></tr>
+        <tr><td><code>ACTION:</code> parsed with <code>split("(")</code> and hope</td><td><code>reply.tool_calls</code> arrives pre-parsed: name, args, id</td></tr>
+        <tr><td>Arguments arrive as one raw string, unchecked</td><td>Args validated against <code>args_schema</code> before your function runs</td></tr>
+        <tr><td>The loop — written by you</td><td>Still written by you. That falls next chapter.</td></tr>
+      </table></div>
+
+      <p>Keep the last row in mind. <code>@tool</code> and <code>bind_tools</code> upgrade the <em>edges</em> of the loop — how tools are described and how requests come back — but the loop itself is still yours to write. That is deliberate pedagogy on LangChain's part and on ours: you now know precisely what remains for <code>create_agent</code> to package, and it is pleasingly little.</p>
+
+      <p>Five terms from this chapter are worth locking in before the quiz:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">tool object</span><span class="flip-back">Your function wrapped with its catalogue card: a StructuredTool carrying name, description, and args_schema, run via .invoke({...}).</span></button>
+        <button class="flip" type="button"><span class="flip-front">schema</span><span class="flip-back">The JSON description of a tool — name, description, parameters — that travels to the model. The model sees this, never your code.</span></button>
+        <button class="flip" type="button"><span class="flip-front">args_schema</span><span class="flip-back">The Pydantic model defining a tool's parameters. Auto-generated from type hints; pass your own for per-argument descriptions and stricter validation.</span></button>
+        <button class="flip" type="button"><span class="flip-front">bind_tools</span><span class="flip-back">model.bind_tools([...]) returns a new model wrapper that includes the tool schemas with every request. Attaches the catalogue; executes nothing.</span></button>
+        <button class="flip" type="button"><span class="flip-front">tool_calls</span><span class="flip-back">The structured requests on an AIMessage: a list of {name, args, id}. The pre-parsed replacement for ch045's ACTION: string surgery.</span></button>
+        <button class="flip" type="button"><span class="flip-front">docstring-as-prompt</span><span class="flip-back">A tool's docstring becomes its description in the schema — the only basis the model has for choosing it. Editing a docstring changes agent behaviour.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any LangChain-based repository and look for a file named <code>tools.py</code> — you will find a column of <code>@tool</code>-decorated functions, and you can now read each one as name-description-parameters at a glance. In merge requests, watch for diffs that touch only a docstring or a <code>Field(description=...)</code>: reviewers who have not read this chapter wave them through as "just docs", but you know they are behaviour changes to a live agent and deserve a test. The same pattern has spread well beyond LangChain: MCP servers register tools with <code>@mcp.tool()</code> from <code>FastMCP</code>, and every provider's native tool-calling API consumes the same name-description-parameters triple underneath. Once you can read one catalogue card, you can read them all.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. What does <code>@tool</code> read from your function to build the schema?</p>
+          <div class="q-opts">
+            <button data-opt="a">The function body, line by line</button>
+            <button data-opt="b">The comments and variable names</button>
+            <button data-opt="c">The type hints on its parameters and its docstring</button>
+          </div>
+          <p class="q-explain">The decorator inspects the signature (names, hint types, defaults) and takes the docstring as the description. The body is never analysed — and never shown to the model.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. When your tool travels to the model in an API request, what does the model receive?</p>
+          <div class="q-opts">
+            <button data-opt="a">Your Python source code, so it can reason about it</button>
+            <button data-opt="b">Only the schema: name, description, and parameter shapes</button>
+            <button data-opt="c">A compiled copy of the function it can execute itself</button>
+          </div>
+          <p class="q-explain">The model sees the catalogue card, never the machine. It picks tools by reading names and descriptions, requests them with structured arguments, and your code alone executes anything.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. After <code>model_with_tools = model.bind_tools([get_invoice_total])</code>, what has actually happened?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model can now run the invoice lookup on its own</button>
+            <button data-opt="b">A new model wrapper exists that sends the tool's schema with every request — nothing has executed</button>
+            <button data-opt="c">The invoice tool ran once, to check it works</button>
+          </div>
+          <p class="q-explain">bind_tools attaches the catalogue and returns a new wrapper. Execution only ever happens when your code (or create_agent's loop, next chapter) reads reply.tool_calls and invokes the matching tool.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. Why does <code>@tool</code> refuse a function that has no docstring?</p>
+          <div class="q-opts">
+            <button data-opt="a">The docstring becomes the tool's description — the model's only basis for choosing it</button>
+            <button data-opt="b">Python cannot decorate undocumented functions</button>
+            <button data-opt="c">It is a style rule with no runtime effect</button>
+          </div>
+          <p class="q-explain">No description means the model has nothing to go on when deciding whether this tool fits the task. The decorator fails fast at import time rather than shipping a blank catalogue card into production.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. Your agent keeps calling a tool with <code>rate=18</code> instead of <code>rate=0.18</code>. Which fix attacks the root cause?</p>
+          <div class="q-opts">
+            <button data-opt="a">Raise max_turns so the agent gets more retries</button>
+            <button data-opt="b">Rename the function to something shorter</button>
+            <button data-opt="c">Give the argument a description — an explicit args_schema Field or a parsed docstring saying "a fraction, e.g. 0.18"</button>
+          </div>
+          <p class="q-explain">The model fills in arguments based on what the schema tells it. Per-argument descriptions via args_schema Fields (or parse_docstring=True) are exactly the channel for this guidance; retries and renames leave the model just as uninformed.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li><code>@tool</code> is a decorator in the exact ch017 sense: it wraps your function and rebinds the name to a StructuredTool — the function plus a machine-readable catalogue card.</li>
+          <li>The schema is built from things you write anyway: type hints become the parameters block, the docstring becomes the description. Both are now load-bearing, and a docstring edit is a behaviour change.</li>
+          <li>The model only ever sees name, description, and parameters — never your code. It chooses tools by reading descriptions, so write docstrings for the model.</li>
+          <li><code>args_schema</code> is the tool's Pydantic contract: auto-generated by default, replaceable with your own model when you need per-argument descriptions or stricter validation.</li>
+          <li><code>bind_tools</code> attaches the catalogue to a chat model and returns a new wrapper; the model replies with structured <code>tool_calls</code>, and executing them remains your code's job.</li>
+          <li>Compared with ch045's hand-rolled version, the framework replaced the hand-written tool menu, the string parsing, and the unchecked arguments — the loop itself is still yours, until <code>create_agent</code> next chapter.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

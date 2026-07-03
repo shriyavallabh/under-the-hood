@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why text broke classical ML — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch028">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act III · The Data Scientist's World</div>
+        <h1>Why text broke classical ML</h1>
+        <p class="ch-tagline">Spreadsheets have columns; sentences have meaning. This is the decade of clever, doomed workarounds — counting words, weighting words, mapping words, reading words one at a time — that made 2017's transformer land like a thunderclap.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 28 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A loan officer at a district bank has a laminated scorecard. Income, age, years in the current job, existing EMIs, credit score — ten boxes, each worth points. Add the points, cross the threshold, approve. Machines adore this job: every applicant is a row, every question is a column, every cell is a number. The branch's little scoring model has hummed along happily for years.</p>
+        <p>Then head office adds one requirement: <em>"Also consider the letter each applicant writes explaining why they need the loan."</em> The officer freezes. Where does a letter go on a scorecard? One letter is two lines; another is three pages. <em>"I have never missed a payment"</em> and <em>"I have never made a payment"</em> share almost every word and mean opposite things. There is no column for meaning, no cell for tone, no formula for a story.</p>
+        <p>That freeze — a system built for rows and columns colliding with language — is precisely what happened to machine learning through the 2000s and early 2010s. This chapter is the story of every trick the field tried, why each one fell short, and why the eventual fix hit like a bomb.</p>
+      </section>
+
+      <h2>The comfortable world: data that sits in columns</h2>
+      <p>The last chapter gave you the data scientist's vocabulary: features in, model in the middle, prediction out. Everything in that world assumed one quiet convention — <dfn>tabular data</dfn>, meaning data that fits a table with a fixed set of columns, one example per row. A loan applicant is 25 numbers. A house is 40 numbers. A suspicious transaction is 60 numbers. Always the same numbers, in the same order, for every row.</p>
+      <p>Classical models — logistic regression, decision trees, gradient boosting — are machines for eating exactly this shape. They are brilliant at it. Fraud detection, churn prediction, credit scoring, demand forecasting: the greatest hits of classical machine learning are all tabular, and they still run banks and retailers today. If a colleague opens a notebook full of pandas dataframes and hands a <code>model.pkl</code> to production, odds are it is one of these.</p>
+      <p>Notice what makes the table shape so easy. The number of columns never changes. The <em>order</em> of columns carries no meaning — swap the income column with the age column everywhere and nothing changes. And each cell means the same thing in every row: column 3 is always monthly income. The model never has to figure out what a number <em>means</em>; the schema did that already.</p>
+      <p>Language violates every one of those comforts at once.</p>
+
+      <h2>Text refuses to behave</h2>
+      <p>Try to lay the loan letters into a table and you hit four walls, one after another.</p>
+      <p><strong>Length.</strong> Rows must have a fixed number of cells; letters have any number of words. A two-line letter and a three-page letter must somehow become the same shape.</p>
+      <p><strong>Order.</strong> In a table, column order is meaningless. In a sentence, order <em>is</em> the meaning. "The dog bit the man" and "The man bit the dog" contain identical words; only their order tells you who needs stitches.</p>
+      <p><strong>Vocabulary.</strong> A loan model has 25 features. English has hundreds of thousands of words, plus names, typos, slang, and new coinages arriving daily. Whatever scheme you invent must survive words it has never seen.</p>
+      <p><strong>Context.</strong> "Bank" means one thing beside "river" and another beside "loan". A cell in a spreadsheet means one fixed thing; a word means something slightly different every time it is used. Meanwhile, models can only do arithmetic — they need numbers, and words are not numbers.</p>
+
+      <div class="viz-tiles">
+        <div class="tile"><div class="tile-label">Columns in a loan model</div>
+          <div class="tile-value">~25</div><div class="tile-delta">fixed, hand-chosen, always in order</div></div>
+        <div class="tile"><div class="tile-label">Distinct words in a year of customer emails</div>
+          <div class="tile-value">~40,000</div><div class="tile-delta">open-ended, growing daily (illustrative)</div></div>
+        <div class="tile"><div class="tile-label">Word order kept by a bag-of-words</div>
+          <div class="tile-value">0%</div><div class="tile-delta">"dog bites man" = "man bites dog"</div></div>
+        <div class="tile"><div class="tile-label">Numbers per word in word2vec</div>
+          <div class="tile-value">~300</div><div class="tile-delta">meaning as a position in space</div></div>
+      </div>
+
+      <p>The field did not give up. It spent roughly fifteen years inventing progressively cleverer ways to force language into numbers. Each trick fixed the previous trick's worst flaw — and exposed a new one. Walk through them in order, because each one still lives on inside systems you operate today.</p>
+
+      <h2>Trick one: tear the letter into a bag of words</h2>
+      <p>The first idea is almost insultingly simple. Take the letter, tear it into individual words, drop them all into a bag, and count. <dfn>Bag-of-words</dfn> is a representation of text that records how many times each word appears and deliberately throws away the order. Every document becomes a row after all: one column per word in the vocabulary, each cell a count. Most cells are zero, but the shape is fixed — the spreadsheet people can breathe again.</p>
+      <p>In Python this is a dictionary of counts — the <code>Counter</code> you met in <a href="ch004-collections.html">the collections chapter</a>, fed by <code>.split()</code> from <a href="ch003-strings-and-fstrings.html">the strings chapter</a>. Run it, and watch the famous failure appear in the last two lines.</p>
+
+      <div class="pyrun" data-title="Bag-of-words — and its famous blind spot">
+<textarea class="py-src" spellcheck="false">
+# ---- Turn a sentence into a bag of words ------------------
+from collections import Counter
+
+def bag_of_words(text):
+    words = text.lower().replace(".", "").replace(",", "").split()
+    return Counter(words)
+
+a = bag_of_words("The dog bit the man.")
+b = bag_of_words("The man bit the dog.")
+print("A:", dict(a))
+print("B:", dict(b))
+print("Same bag?", a == b)
+print()
+
+# ---- Two loan letters, one word apart, opposite meanings --
+p = bag_of_words("I have never missed a payment.")
+q = bag_of_words("I have never made a payment.")
+shared = sum((p &amp; q).values())   # words in common
+total  = sum((p | q).values())   # words in either
+print("Letters share", shared, "of", total, "words.")
+print("A word-counting model sees them as almost identical.")
+</textarea>
+      </div>
+
+      <p>Two sentences with opposite meanings, one identical bag. Two letters — one meaning "safe borrower", the other meaning "run" — nearly the same counts. And yet bag-of-words <em>worked</em>, commercially, for years. Spam filters were mostly bags of words ("free", "winner", "urgent" pile up in spam). Early search engines matched query bags against page bags. When you only need topic-level signal, counts genuinely carry information. The bag was the field's first proof that text could be forced into numbers at all.</p>
+
+      <h2>Trick two: TF-IDF — not every word deserves the same vote</h2>
+      <p>The bag has a second, subtler problem: it counts "the" with the same enthusiasm as "surgery". In a stack of loan letters, the words "need", "loan" and "for" appear in every single one — they identify nothing. But "surgery" in one letter tells you almost everything about it.</p>
+      <p><dfn>TF-IDF</dfn> — term frequency times inverse document frequency — is a weighting scheme that scores each word by how often it appears in <em>this</em> document, discounted by how many documents it appears in overall. A word common here and rare everywhere else gets a big score; a word common everywhere scores near zero. It is the mathematical version of a librarian's instinct: the interesting words are the ones this document does not share with the whole shelf.</p>
+      <p>The whole idea fits in a dozen lines — the dictionary comprehension is the one from <a href="ch008-comprehensions.html">the comprehensions chapter</a>. Run it and read the scores.</p>
+
+      <div class="pyrun" data-title="TF-IDF in twelve lines">
+<textarea class="py-src" spellcheck="false">
+import math
+from collections import Counter
+
+docs = {
+    "letter1": "need loan for daughter wedding gold jewellery",
+    "letter2": "need loan for shop stock festival season",
+    "letter3": "need loan for urgent heart surgery hospital",
+    "letter4": "need loan for new tractor farm harvest",
+}
+
+# term frequency: how often each word appears in ONE letter
+tf = {name: Counter(text.split()) for name, text in docs.items()}
+
+# document frequency: how many letters contain the word at all
+df = Counter()
+for words in tf.values():
+    df.update(set(words))
+
+def tfidf(word, name):
+    idf = math.log(len(docs) / df[word])   # rare word = big idf
+    return tf[name][word] * idf
+
+name = "letter3"
+print(f"What makes {name} distinctive?")
+scores = {w: tfidf(w, name) for w in tf[name]}
+for word, score in sorted(scores.items(), key=lambda kv: -kv[1]):
+    print(f"  {word:10s} {score:.2f}")
+</textarea>
+      </div>
+
+      <p>"Need", "loan" and "for" score exactly zero — they appear in all four letters, so the logarithm of 4/4 is 0. "Surgery", "urgent" and "hospital" rise to the top. This one formula quietly ran the information world for two decades: search engines, spam filters, document clustering, plagiarism detection. Its descendants (BM25 and friends) still rank results inside search systems today.</p>
+      <p>But look at what TF-IDF is underneath: a bag with better arithmetic. Order is still gone. "Missed a payment" and "made a payment" still look like near-twins. And every word is still its own isolated column — the model has no idea that "doctor" and "physician" are related, because they are just two different strings in two different columns. Synonyms are strangers.</p>
+
+      <h2>Trick three: word2vec — words become points on a map</h2>
+      <p>The 2013 breakthrough attacked that last flaw with a beautiful idea borrowed from a 1950s linguist: <em>you shall know a word by the company it keeps.</em> "Doctor" and "physician" appear in the same kinds of sentences — near "hospital", "patient", "prescribed". So instead of giving each word its own column, give each word a <em>position on a map</em>, and learn the positions so that words keeping similar company end up close together.</p>
+      <p>That position is an <dfn>embedding</dfn> — a list of numbers (a <dfn>vector</dfn>, in maths speak: just an ordered list of numbers) that represents a word's meaning as coordinates in space. word2vec learned roughly 300 numbers per word by playing a simple game across billions of sentences: hide a word, predict it from its neighbours, and nudge the coordinates a little whenever the guess was wrong. No human labelled anything. Meaning emerged from the statistics of company.</p>
+      <p>And then came the party trick that made the whole field sit up: the map had <em>directions</em>. The displacement from "man" to "king" was nearly the same as from "woman" to "queen" — so vector arithmetic like <em>king − man + woman</em> landed you next to <em>queen</em>. Try it below with tiny hand-made vectors (real word2vec learns its 300 dimensions from data; ours are four hand-set numbers so you can watch the arithmetic with your own eyes).</p>
+
+      <div class="pyrun" data-title="king - man + woman = ?">
+<textarea class="py-src" spellcheck="false">
+# Toy embeddings: 4 hand-made numbers per word.
+# (Real word2vec learns ~300 numbers per word from billions
+#  of sentences. The arithmetic below is exactly the same.)
+words = {
+    #         royalty male  female fruit
+    "king":   [0.9,   0.9,  0.1,   0.0],
+    "queen":  [0.9,   0.1,  0.9,   0.0],
+    "man":    [0.1,   0.9,  0.1,   0.0],
+    "woman":  [0.1,   0.1,  0.9,   0.0],
+    "mango":  [0.0,   0.0,  0.0,   0.9],
+}
+
+def sub(a, b): return [x - y for x, y in zip(a, b)]
+def add(a, b): return [x + y for x, y in zip(a, b)]
+
+def cosine(a, b):
+    """Similarity of direction: 1.0 = same meaning-direction."""
+    dot = sum(x * y for x, y in zip(a, b))
+    na  = sum(x * x for x in a) ** 0.5
+    nb  = sum(y * y for y in b) ** 0.5
+    return dot / (na * nb)
+
+target = add(sub(words["king"], words["man"]), words["woman"])
+
+print("Which word is closest to (king - man + woman)?")
+for w, vec in words.items():
+    print(f"  {w:6s} similarity: {cosine(target, vec):.3f}")
+</textarea>
+      </div>
+
+      <p>Queen wins, king trails, mango is nowhere — and suddenly synonyms are neighbours instead of strangers. Embeddings were a genuine revolution, and they never left: the vectors inside every modern retrieval system, vector database and RAG pipeline are this idea's direct descendants.</p>
+      <p>But word2vec had two stubborn limits. First, each word got exactly <em>one</em> frozen vector — so "bank" carried a single position averaged between river and money, wrong for both sentences. Meaning depends on context, and the map ignored context. Second, to represent a whole sentence, the standard trick was to average its word vectors — which is a bag of words all over again, just a smarter bag. "Missed a payment" and "made a payment" still land in nearly the same spot.</p>
+
+      <h2>Trick four: RNNs — a clerk reading one word at a time</h2>
+      <p>To respect word order, the field turned to a different machine. A <dfn>recurrent neural network</dfn> (RNN) is a model that reads a sequence one item at a time, left to right, keeping a running summary that it updates after every word. Picture a clerk reading a letter aloud while maintaining a single small sticky note: after each word, the clerk rewrites the note to hold "everything that matters so far". The note is the RNN's <dfn>hidden state</dfn> — its entire memory of what it has read.</p>
+      <p>Order finally matters! "Dog bites man" and "man bites dog" produce different notes, because the note evolves differently through different word orders. Around 2014 to 2016, RNNs — mostly an upgraded flavour called the <dfn>LSTM</dfn>, long short-term memory, an RNN with learned gates deciding what to keep and forget — powered the first genuinely impressive language systems: machine translation, autocomplete, early voice assistants.</p>
+      <p>Then the sticky note ran out of room. Step through what happens on one perfectly ordinary sentence.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Words 1-2">
+          <h3>1. The clerk starts reading</h3>
+          <div class="diagram">
+            <div class="d-box hot">Reads<small>"The keys..."</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Sticky note<small>subject = KEYS (plural)</small></div>
+          </div>
+          <p class="step-cap">The RNN reads word by word, keeping everything it knows on one fixed-size note — the hidden state. So far the note is crisp: the subject is "keys", plural.</p>
+        </div>
+        <div class="step" data-title="Words 3-8">
+          <h3>2. The middle of the sentence pours in</h3>
+          <div class="diagram">
+            <div class="d-box hot">Reads<small>"...that I left on the small table..."</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Sticky note<small>table... I... left... keys(?)</small></div>
+          </div>
+          <p class="step-cap">Every new word forces a rewrite of the same small note. "Table" is fresh and vivid; "keys" is now a fading scribble in the corner.</p>
+        </div>
+        <div class="step" data-title="Words 9-14">
+          <h3>3. More detail, same tiny note</h3>
+          <div class="diagram">
+            <div class="d-box hot">Reads<small>"...by the front door of the old house..."</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Sticky note<small>house, door, table... keys almost gone</small></div>
+          </div>
+          <p class="step-cap">The note has a fixed size, so information about the start of the sentence is being squeezed out by information about the middle. Nothing is stored anywhere else.</p>
+        </div>
+        <div class="step" data-title="The verb arrives">
+          <h3>4. Now: "was" or "were"?</h3>
+          <div class="diagram">
+            <div class="d-box dim">Sticky note<small>house? door? subject...?</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Must choose<small>"...___ missing." — was? were?</small></div>
+          </div>
+          <p class="step-cap">Grammar needs "were" — the subject "keys" is plural. But that fact is fourteen words behind, half-overwritten on the note. The model often guesses "was" because "house" is fresher. Multiply this by pages instead of words, and you have the long-context problem.</p>
+        </div>
+        <div class="step" data-title="The LSTM band-aid">
+          <h3>5. LSTMs: better note discipline, same note</h3>
+          <div class="diagram">
+            <div class="d-box">Gates<small>keep? forget? write?</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Sticky note<small>survives longer...</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">...but still fades<small>and still one word at a time</small></div>
+          </div>
+          <p class="step-cap">LSTM gates learn what deserves note space, stretching reliable memory from a few words to a few dozen. But it is still one bottleneck note — and the reading is strictly sequential, which brings the second, quieter problem.</p>
+        </div>
+      </div>
+
+      <p>Name both problems precisely, because the next chapter's hero is defined by solving them. The <dfn>long-context problem</dfn> is that information from early in a sequence degrades as it is relayed step by step through a fixed-size summary — like a whisper chain, every hop loses a little, and by hop fifty the message is mush. Translation systems of that era visibly drifted on long sentences for exactly this reason.</p>
+      <p>The second problem is <em>sequential processing</em>. An RNN cannot read word 15 before it has finished words 1 through 14 — each step needs the previous note. That is fine for a clerk; it is a disaster for modern hardware. GPUs — the chips that made deep learning possible — are throughput machines that want to do thousands of small computations <em>simultaneously</em>. RNNs force them to queue, so training on enormous text collections was painfully slow — quietly capping how much language these models could ever absorb.</p>
+
+      <h2>2017: the bomb drops</h2>
+      <p>So picture the field in early 2017, after a decade and a half of grinding. Bags of words: fast, order-blind. TF-IDF: sharper, still order-blind, synonyms are strangers. word2vec: meaning as geometry, but one frozen meaning per word and no good way to represent a sentence. RNNs and LSTMs: order at last, but memory that fades over distance and training that cannot be parallelised. It felt like a law of nature: with language, you may pick two of <em>meaning, order, scale</em> — never all three.</p>
+      <p>Then a short paper appeared with a swaggering title: <em>"Attention Is All You Need."</em> Its core move: throw away the relay entirely. Instead of squeezing a sentence through a sticky note one word at a time, let <em>every word look directly at every other word</em> — the word "were" can reach straight back and attend to "keys", fourteen hops away, at full strength, no whisper chain. And because no word waits for the previous word's summary, the whole sentence computes <em>at once</em>, which is exactly the shape of work GPUs devour. Meaning, order, and scale — all three, in one architecture. The transformer did not nudge the field; it detonated it. Within three years, essentially every serious language system on Earth was a transformer, and the L in LLM became possible.</p>
+      <p>How attention actually pulls this off — queries, keys, values, and why those names are less scary than they sound — is the next chapter's whole job. For now, hold the shape of the story: a decade of two-out-of-three trade-offs, then one idea that took all three.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Era</th><th>Trick</th><th>What it won</th><th>What it still could not do</th></tr>
+        <tr><td>1990s-2000s</td><td>Bag-of-words</td><td>Text becomes fixed-size counts</td><td>Order gone; all words weigh the same</td></tr>
+        <tr><td>2000s</td><td>TF-IDF</td><td>Distinctive words weigh more</td><td>Order gone; synonyms are strangers</td></tr>
+        <tr><td>2013</td><td>word2vec</td><td>Meaning as position in space</td><td>One frozen meaning per word; sentences averaged back into bags</td></tr>
+        <tr><td>2014-2016</td><td>RNN / LSTM</td><td>Order respected, word by word</td><td>Memory fades over distance; cannot train in parallel</td></tr>
+        <tr><td>2017</td><td>Transformer</td><td>Every word attends to every word, all at once</td><td>The subject of the next chapter</td></tr>
+      </table></div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>None of the old tricks actually died. TF-IDF-style scoring still ranks results inside search engines. Embeddings became the backbone of vector databases and retrieval-augmented generation. Even the humble bag of words still earns its keep in quick spam heuristics. The transformer replaced them as the <em>frontier</em>, not as the workforce.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will trip over this whole chapter in real codebases. A colleague's older notebook importing <code>CountVectorizer</code> or <code>TfidfVectorizer</code> from scikit-learn, with a logistic-regression <code>model.pkl</code> beside it, is the bag-of-words era alive and well — often routing support tickets to this day. A repository with "lstm" in old branch names or a <code>seq2seq</code> folder is a fossil of the RNN years. And every time someone says "we embed the documents and store the vectors" in a RAG design review, that is word2vec's direct descendant. Even the endless "context window" debates around modern LLMs are the long-context problem wearing a new suit — the struggle in this chapter never really ended; it just moved up a floor.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A tabular fraud model has worked beautifully for years. Why can't the team simply add a "customer email" column and feed the raw text in as a 26th feature?</p>
+          <div class="q-opts">
+            <button data-opt="a">Emails are too private to use in any model</button>
+            <button data-opt="b">Classical models eat fixed-length rows of numbers — text has no fixed length and is not numeric</button>
+            <button data-opt="c">The database column type would be too slow to query</button>
+          </div>
+          <p class="q-explain">The whole comfort of tabular ML is a fixed set of numeric columns per row. A letter is variable-length, non-numeric, and order-dependent — it must first be converted into numbers somehow, and every conversion scheme in this chapter loses something.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">2. Why does a bag-of-words model treat "The dog bit the man" and "The man bit the dog" as identical?</p>
+          <div class="q-opts">
+            <button data-opt="a">It only counts how often each word appears, deliberately discarding word order</button>
+            <button data-opt="b">The sentences genuinely mean the same thing to a statistician</button>
+            <button data-opt="c">The words are stemmed to their root forms before counting</button>
+          </div>
+          <p class="q-explain">Both sentences contain exactly the same words with the same counts, so their bags are equal. Order — the only thing distinguishing them — is precisely what the bag throws away.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">3. In TF-IDF, which word earns the highest score for a given letter?</p>
+          <div class="q-opts">
+            <button data-opt="a">The word that appears most often in the letter, whatever it is</button>
+            <button data-opt="b">The longest, most technical-looking word</button>
+            <button data-opt="c">A word frequent in this letter but rare across the rest of the collection</button>
+          </div>
+          <p class="q-explain">Term frequency rewards words common in this document; inverse document frequency punishes words common everywhere. Words like "need" and "loan" appear in every letter, so their IDF — and score — collapses to zero, while "surgery" soars.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Two words end up close together on a word2vec map. What does that closeness actually reflect?</p>
+          <div class="q-opts">
+            <button data-opt="a">They are spelled similarly</button>
+            <button data-opt="b">They tend to appear in similar contexts, so they likely have related meanings</button>
+            <button data-opt="c">They appear the same number of times in the training text</button>
+          </div>
+          <p class="q-explain">word2vec learns positions by predicting words from their neighbours, so words keeping similar company converge. That is also its weakness: "bank" keeps two kinds of company but gets only one frozen position — context is ignored.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. An LSTM translation model handles short sentences well but drifts badly on long ones. What is the root cause?</p>
+          <div class="q-opts">
+            <button data-opt="a">Long sentences contain rarer words that the model has never seen</button>
+            <button data-opt="b">Everything read so far must squeeze through one fixed-size running summary, so early words fade with distance</button>
+            <button data-opt="c">The GPU runs out of memory on longer inputs</button>
+          </div>
+          <p class="q-explain">An RNN's hidden state is a fixed-size bottleneck rewritten at every step — a whisper chain. Distant information degrades hop by hop, which is the long-context problem. Attention solved it by letting any word look directly at any other, no relay.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Classical ML thrived on tabular data — fixed columns of numbers — and text breaks every assumption that made tables easy: fixed length, irrelevant order, closed vocabulary, stable meaning.</li>
+          <li>Bag-of-words made text numeric by counting words and discarding order — good enough for spam filters and early search, blind to "dog bites man" versus "man bites dog".</li>
+          <li>TF-IDF sharpened the bag by weighting words that are frequent here but rare elsewhere; it ran search for decades and its descendants still do — but synonyms stayed strangers and order stayed lost.</li>
+          <li>word2vec turned words into positions in space (embeddings), where neighbours share meaning and directions encode analogies — but each word got one frozen vector, context be damned.</li>
+          <li>RNNs and LSTMs finally respected word order by reading sequentially with a running summary — and hit two walls: memory that fades with distance (the long-context problem) and training that cannot be parallelised.</li>
+          <li>"Attention Is All You Need" (2017) let every word attend directly to every other word, in parallel — meaning, order, and scale at once — which is why it landed like a bomb and why the next chapter is devoted to it.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

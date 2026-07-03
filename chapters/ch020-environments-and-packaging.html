@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Environments, pip, and pyproject.toml — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch020">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act II · The Engineering Layer</div>
+        <h1>Environments, pip, and pyproject.toml</h1>
+        <p class="ch-tagline">Why the same code runs perfectly on your laptop and dies on your teammate's — and the three small artefacts (a venv, a pyproject.toml, a lock file) that make a Python project reproducible on any machine on Earth.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 20 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A watch-repair shop has two benches. On bench one sits a 1962 hand-wound classic that needs gear number 7 in the old 2.1&nbsp;mm cut. On bench two sits a modern diver's watch that needs gear number 7 in the new 2.4&nbsp;mm cut. The old repairman keeps one big parts drawer for the whole shop. One afternoon he "upgrades" the drawer — throws out the old 2.1&nbsp;mm gears, stocks the new ones — and the diver's watch is fixed, beautifully. Next morning the 1962 classic, which had kept perfect time for weeks, comes back dead. Nobody touched it. The drawer changed underneath it.</p>
+        <p>His apprentice runs things differently. Every job gets its own tray: the watch, its exact parts, nothing else. Taped to each tray is a printed list — every part, every size, down to the batch number — so any bench, in any branch of the shop, can rebuild the identical tray from the warehouse.</p>
+        <p>The tray is a <strong>virtual environment</strong>. The printed list is a <strong>lock file</strong>. The warehouse is <strong>PyPI</strong>. And "it works on my bench" is the disease this whole chapter cures.</p>
+      </section>
+
+      <h2>One Python, many projects — the collision</h2>
+      <p>Recall from <a href="ch011-imports-and-modules.html">the imports chapter</a>: when your code says <code>import httpx</code>, Python walks a list of folders and, for anything you installed rather than wrote, ends up in a folder called <code>site-packages</code> — the interpreter's parts drawer. Here is the fact that causes decades of pain: <strong>one interpreter has one <code>site-packages</code>, and it can hold only one version of any given package.</strong> There is a single folder named <code>httpx</code> in there. It is version 0.27 or it is version 0.28. It cannot be both.</p>
+      <p>Now put two projects on one machine, sharing that one Python. Project A was built against an older <code>langchain</code>; project B needs the newest. The day you upgrade for B, you have silently swapped the gears under A. Nothing announces it — A breaks days later, in a project <em>you never edited</em>. That is the old repairman's drawer, and it is failure mode number one.</p>
+      <p>There is a sneakier one. Your machine's shared drawer holds fifty packages accumulated over months of experiments. Your new project uses three but you only wrote down two — the third is just <em>there</em>, so everything runs for you. On your teammate's clean machine, the first import fails. The code was never wrong; the <em>environment</em> was different. Hold that thought — it is the anatomy of "works on my machine", dissected fully in a minute.</p>
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Installing packages into the operating system's own Python is so risky (some OS tools are written in Python and depend on that drawer) that modern systems flat-out refuse, with an <code>externally-managed-environment</code> error. The tooling itself is pushing you toward the fix you are about to learn.</p></div>
+
+      <h2>A virtual environment is a private toolbox</h2>
+      <p>A <dfn>virtual environment</dfn> (a "venv") is a folder — conventionally named <code>.venv</code>, sitting inside your project — that contains a private link to a Python interpreter plus its own empty <code>site-packages</code>. Its own drawer. Anything you install while "inside" the venv lands in that drawer and nowhere else; anything installed elsewhere on the machine is invisible to it. One project, one tray.</p>
+      <p>Creating one is a single command, and the whole daily rhythm is four lines:</p>
+      <div class="code-title">terminal — the classic venv workflow</div>
+      <pre><code class="language-bash">cd invoice-agent
+python3 -m venv .venv            # create the tray (a one-time step per project)
+source .venv/bin/activate        # step up to this bench (Windows: .venv\Scripts\activate)
+pip install httpx                # parts go into THIS tray only
+deactivate                       # step away when done</code></pre>
+      <p>The word "activate" sounds mystical; it is not. Remember <a href="ch019-logging-config-env.html">environment variables</a> from the last chapter? One of them, <code>PATH</code>, is the ordered list of folders your shell searches when you type a command. Activation simply <em>prepends <code>.venv/bin</code> to <code>PATH</code></em>, so typing <code>python</code> or <code>pip</code> finds the venv's copies first. That is the entire trick — one environment variable, edited. <code>deactivate</code> puts it back.</p>
+      <p>Step through what actually happens, from creation to isolation:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Create">
+          <h3>1. python3 -m venv .venv</h3>
+          <div class="diagram">
+            <div class="d-box">System Python<small>/usr/bin/python3</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">.venv/<small>private interpreter + empty site-packages</small></div>
+          </div>
+          <p class="step-cap">Python builds a small folder inside your project: a link back to the interpreter, a <code>pyvenv.cfg</code> settings file, and — crucially — a brand-new, empty <code>site-packages</code> drawer.</p>
+        </div>
+        <div class="step" data-title="Activate">
+          <h3>2. source .venv/bin/activate</h3>
+          <div class="diagram">
+            <div class="d-box hot">PATH<small>.venv/bin now comes first</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">python, pip<small>now mean the .venv copies</small></div>
+            <div class="d-box dim">system python<small>still exists, no longer first in line</small></div>
+          </div>
+          <p class="step-cap">One environment variable is edited. Your prompt usually grows a <code>(.venv)</code> prefix as a reminder of which bench you are standing at.</p>
+        </div>
+        <div class="step" data-title="Install">
+          <h3>3. pip install httpx</h3>
+          <div class="diagram">
+            <div class="d-box">pip</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">PyPI<small>resolve versions, download wheels</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">.venv/site-packages<small>httpx + its dependencies land here</small></div>
+          </div>
+          <p class="step-cap">Because the venv's pip is the one running, packages unpack into the venv's drawer — this project's tray, nobody else's.</p>
+        </div>
+        <div class="step" data-title="Import">
+          <h3>4. python agent.py</h3>
+          <div class="diagram">
+            <div class="d-box">agent.py<small>import httpx</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">.venv site-packages<small>found here first</small></div>
+            <div class="d-box dim">system site-packages<small>not consulted</small></div>
+          </div>
+          <p class="step-cap">The import machinery from ch11 searches the venv's drawer and stops there. Whatever chaos lives in the machine's global drawer is simply out of reach.</p>
+        </div>
+        <div class="step" data-title="Isolation">
+          <h3>5. Two projects, zero interference</h3>
+          <div class="diagram">
+            <div class="d-box good">project-a/.venv<small>httpx 0.27</small></div>
+            <div class="d-box good">project-b/.venv<small>httpx 0.28</small></div>
+            <div class="d-box dim">System Python<small>untouched, pristine</small></div>
+          </div>
+          <p class="step-cap">Each project carries its own tray. Upgrading B can never break A again. And a venv is disposable: delete the <code>.venv</code> folder and rebuild it in seconds — which is exactly why it is never committed to git.</p>
+        </div>
+      </div>
+
+      <h2>pip, PyPI, and what "install" really means</h2>
+      <p><dfn>PyPI</dfn> — the Python Package Index — is the public warehouse: hundreds of thousands of packages, uploaded by their authors, free to download. <dfn>pip</dfn> is the fetcher that goes shopping there. But <code>pip install langchain</code> does four jobs, not one, and seeing them is what makes lock files click later.</p>
+      <p>First, pip asks PyPI what versions of <code>langchain</code> exist. Second, it reads the package's own requirements — packages depend on packages: <code>langchain</code> needs <code>pydantic</code> (from <a href="ch016-type-hints-and-pydantic.html">the type hints chapter</a>), which needs <code>typing-extensions</code>, and so on down the tree. A dependency of a dependency is a <dfn>transitive dependency</dfn> — you never asked for it by name, but you cannot run without it. Third, pip plays matchmaker: it must pick <em>one version of every package involved</em> that satisfies everybody at once. That job, <dfn>dependency resolution</dfn>, is genuinely hard — one package wants <code>http-lib</code> below 2.0, another wants 2.0 or newer, and the resolver must find a combination that keeps both happy or say honestly that none exists. Fourth, it downloads each winner as a <dfn>wheel</dfn> — a pre-built zip archive — and unpacks it into the active environment's <code>site-packages</code>.</p>
+      <p>This is why asking for three packages routinely installs forty. Watch a toy resolver work, right now: the fake warehouse below has three packages, you ask for two, the newest versions clash, and it must back off to the combination that works. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A toy dependency resolver — the job pip and uv do for real">
+<textarea class="py-src" spellcheck="false">
+# The "warehouse": package -> available versions -> what EACH version needs.
+INDEX = {
+    "agent-kit":  {"2.0": ["http-lib&gt;=2.0"], "1.0": ["http-lib&gt;=1.0"]},
+    "report-gen": {"1.5": ["http-lib&lt;2.0"]},
+    "http-lib":   {"2.1": [], "1.4": []},
+}
+
+REQUEST = ["agent-kit", "report-gen"]   # what YOU asked to install
+
+def parse(req):
+    for op in ("&gt;=", "&lt;"):
+        if op in req:
+            name, bound = req.split(op)
+            return name, op, float(bound)
+    return req, None, None
+
+def satisfied(version, op, bound):
+    if op is None:
+        return True
+    return float(version) &gt;= bound if op == "&gt;=" else float(version) &lt; bound
+
+from itertools import product
+
+names = list(INDEX)
+print("Resolving:", ", ".join(REQUEST))
+
+for combo in product(*[list(INDEX[n]) for n in names]):
+    picked = dict(zip(names, combo))            # one version per package
+    print("  trying:", ", ".join(f"{n} {v}" for n, v in picked.items()))
+    conflict = None
+    for name, version in picked.items():
+        for req in INDEX[name][version]:        # this version's own needs
+            dep, op, bound = parse(req)
+            if not satisfied(picked[dep], op, bound):
+                conflict = (f"{name} {version} needs {req}, "
+                            f"but we picked {dep} {picked[dep]}")
+                break
+        if conflict:
+            break
+    if conflict:
+        print("    CONFLICT:", conflict)
+        continue
+    print("    every requirement satisfied!")
+    print()
+    print("# the lock file: the exact solution, written down")
+    for name in sorted(picked):
+        print(f"{name}=={picked[name]}")
+    break
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now poke it. Change <code>REQUEST</code> to just <code>["agent-kit"]</code> and watch the newest version win with no fight. Then edit <code>report-gen</code>'s requirement to <code>"http-lib&gt;=2.0"</code> and see it succeed first try. Finally make the requirements truly impossible (change one to <code>"http-lib&lt;1.0"</code>) and watch every combination fail — the dreaded "no compatible versions" error from CI logs, reproduced in miniature.</p></div>
+
+      <p>Six words carry the rest of this chapter. Flip each card until the definitions feel obvious:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">venv</span><span class="flip-back">A per-project folder holding a private Python and its own site-packages. Disposable, rebuildable, never committed to git.</span></button>
+        <button class="flip" type="button"><span class="flip-front">PyPI</span><span class="flip-back">The Python Package Index — the public warehouse pip and uv download packages from.</span></button>
+        <button class="flip" type="button"><span class="flip-front">wheel</span><span class="flip-back">A pre-built package archive (a zip with a .whl name). Installing one is just unpacking it into site-packages.</span></button>
+        <button class="flip" type="button"><span class="flip-front">transitive dependency</span><span class="flip-back">A dependency of a dependency. You asked for 3 packages; the other 35 in your environment are these.</span></button>
+        <button class="flip" type="button"><span class="flip-front">pinning</span><span class="flip-back">Writing an exact version (httpx==0.27.2) instead of a range (httpx&gt;=0.27). Exactness buys reproducibility.</span></button>
+        <button class="flip" type="button"><span class="flip-front">lock file</span><span class="flip-back">The full solved set — every package, direct and transitive, at an exact version, often with checksums. The receipt, not the shopping list.</span></button>
+      </div>
+
+      <h2>The packing lists: requirements.txt vs pyproject.toml</h2>
+      <p>An environment is a folder on <em>your</em> disk. Your teammate does not want your folder — they want the <em>list</em> taped to the tray, so their machine can rebuild it. Python has two generations of that list, and you will meet both constantly.</p>
+      <p>The elder is <dfn>requirements.txt</dfn> — a plain text file, one requirement per line, fed to <code>pip install -r requirements.txt</code>. It has been the convention for twenty years and still works:</p>
+      <div class="code-title">requirements.txt</div>
+      <pre><code class="language-bash">langchain&gt;=1.0,&lt;2.0
+pydantic&gt;=2.7
+httpx&gt;=0.27</code></pre>
+      <p>Its weakness: it is <em>just a list</em>, used for two contradictory jobs. Some teams hand-write it loosely, like the example above — a statement of intent. Others generate it with <code>pip freeze &gt; requirements.txt</code>, which dumps <em>every</em> installed package at its exact version — direct and transitive deps jumbled together, no hint of which three you actually chose. Same filename, opposite meanings, and no other information: not the project's name, not which Python it needs, nothing.</p>
+      <p>The modern answer is <dfn>pyproject.toml</dfn> — one standardised file at the project root, the project's identity card. It is written in TOML, a third config cousin of <a href="ch005-yaml-and-json.html">YAML and JSON</a>: <code>key = value</code> lines grouped under <code>[section]</code> headers. It is usually the first file worth reading in any Python repository, so let us read one properly. Click the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">pyproject.toml — a project's identity card</div>
+        <div class="wl-line"><code>[project]</code>
+          <div class="wl-note">A TOML section header, like a heading in a form. Everything under it describes the project itself. This layout is a Python-wide standard, so every tool — pip, uv, poetry — reads the same fields.</div></div>
+        <div class="wl-line"><code>name = "invoice-agent"</code>
+          <div class="wl-note">The project's official name — what it would be called if published to PyPI, and how other code would <code>pip install</code> it.</div></div>
+        <div class="wl-line"><code>version = "0.4.2"</code>
+          <div class="wl-note">The project's own version number. When a changelog says "released 0.5.0", someone edited this line (or a tool did).</div></div>
+        <div class="wl-line"><code>requires-python = "&gt;=3.11"</code>
+          <div class="wl-note">Which interpreters this project supports. Installers refuse to proceed on an older Python instead of failing mysteriously at runtime — one whole class of "works on my machine" deleted by a single line.</div></div>
+        <div class="wl-line"><code>dependencies = [</code>
+          <div class="wl-note">The heart of the file: the packages this project directly needs. A TOML list, exactly like a Python list of strings.</div></div>
+        <div class="wl-line"><code>    "langchain&gt;=1.0,&lt;2.0",</code>
+          <div class="wl-note">A name plus a version constraint: "any 1.x, but not 2.0". Ranges here are deliberate — this file states what is <em>acceptable</em>, not what is exact. Exactness is the lock file's job, coming next.</div></div>
+        <div class="wl-line"><code>    "pydantic&gt;=2.7",</code></div>
+        <div class="wl-line"><code>    "httpx&gt;=0.27",</code></div>
+        <div class="wl-line"><code>]</code></div>
+        <div class="wl-line"><code>[project.optional-dependencies]</code>
+          <div class="wl-note">Extras that only some users need. Installing the project can opt in to a named group.</div></div>
+        <div class="wl-line"><code>dev = ["pytest&gt;=8.0", "ruff"]</code>
+          <div class="wl-note">The classic example: developers need the test runner and the linter; production servers do not. Keeping them out of the main list keeps deployments lean.</div></div>
+        <div class="wl-line"><code>[build-system]</code>
+          <div class="wl-note">Plumbing: which tool turns this folder into an installable wheel. You will rarely edit it — recognising it is enough.</div></div>
+        <div class="wl-line"><code>requires = ["hatchling"]</code></div>
+        <div class="wl-line"><code>build-backend = "hatchling.build"</code></div>
+        <div class="wl-line"><code>[tool.ruff]</code>
+          <div class="wl-note">Any tool may claim a <code>[tool.something]</code> section for its own settings — linters, formatters, test runners all park their config here. One file instead of six dotfiles littering the repo root.</div></div>
+        <div class="wl-line"><code>line-length = 100</code></div>
+      </div>
+
+      <h2>Lock files: the receipt, not the shopping list</h2>
+      <p>Look again at that dependencies list. It says <code>httpx&gt;=0.27</code> — a range. Installing today might get you 0.27.2; your teammate in three months gets 0.29.0, because the range allows it and newer is preferred. Both installs "obeyed" the file, yet your machines now differ. Ranges are the right way to state <em>intent</em> and exactly the wrong way to reproduce a machine.</p>
+      <p>Enter the <dfn>lock file</dfn>: a machine-generated record of one fully-solved installation — every package, direct <em>and transitive</em>, pinned to an exact version, usually with a checksum of the exact file downloaded. pyproject.toml is the shopping list ("some good coffee, around 500 g"); the lock file is the till receipt ("this estate, this batch, paid at 16:04"). It is the apprentice's printed list from the story — and it is simply <em>the resolver's winning answer, written down and committed to git</em>. You watched that answer get computed in the toy above.</p>
+      <div class="code-title">uv.lock (excerpt, trimmed)</div>
+      <pre><code class="language-toml">[[package]]
+name = "httpx"
+version = "0.27.2"
+dependencies = [
+    { name = "certifi" },
+    { name = "httpcore" },
+]
+
+[[package]]
+name = "certifi"
+version = "2025.1.31"</code></pre>
+      <p>Different tools name it differently — <code>uv.lock</code>, <code>poetry.lock</code>, a fully-pinned <code>requirements.txt</code> from pip-tools — and a common standard format (<code>pylock.toml</code>) has recently been agreed. The names matter less than the discipline: <strong>humans edit the intent file; tools generate the lock file; both are committed; machines install from the lock.</strong> When every laptop and CI server installs from the same lock, they end up identical — and an entire species of bug goes extinct. The checksums add a bonus: if anyone tampers with a package on the warehouse shelf, the receipt no longer matches and the install refuses.</p>
+
+      <h2>The anatomy of "works on my machine"</h2>
+      <p>You now have every organ on the dissection table. When code runs for you and fails for someone else, it is almost always one of five suspects, each with a cure you have just learnt:</p>
+      <div class="tbl"><table>
+        <tr><th>Suspect</th><th>How it bites</th><th>The cure</th></tr>
+        <tr><td>No lock file</td><td>You installed in March, they installed in June; the same ranges resolved to different versions and behaviour drifted.</td><td>Commit a lock file; everyone installs from it, never from raw ranges.</td></tr>
+        <tr><td>Different Python version</td><td>Your 3.12 accepts syntax or stdlib calls their 3.10 has never heard of.</td><td><code>requires-python</code> in pyproject.toml, plus a pinned interpreter (uv can even install it, below).</td></tr>
+        <tr><td>Undeclared dependency</td><td>A package you use sits in your global drawer by historical accident, so you never wrote it down. Their clean machine fails on the first import.</td><td>Always work inside a fresh venv — then the missing declaration fails on <em>your</em> machine first, where it is cheap.</td></tr>
+        <tr><td>Missing config or env vars</td><td>Your shell exports an API key or a path theirs does not — the <a href="ch019-logging-config-env.html">previous chapter's</a> whole territory.</td><td>A committed <code>.env.example</code>, and config that validates loudly at startup.</td></tr>
+        <tr><td>Different operating system</td><td>Path separators, case-sensitive filenames, or a compiled wheel that exists for your platform and not theirs.</td><td>Run CI on the same OS you deploy to, so the mismatch surfaces in a robot's logs instead of a customer's.</td></tr>
+      </table></div>
+      <p>Notice what the first three cures have in common: none of them is "be more careful". They are all <em>artefacts</em> — files committed to the repository that make correctness the default. That is the engineering layer's recurring move, and you will see it again with tests and CI.</p>
+
+      <h2>uv: the whole workshop in one fast tool</h2>
+      <p>Everything so far used the classic toolkit: <code>venv</code> for trays, <code>pip</code> for fetching, <code>pip freeze</code> or pip-tools for receipts. Three tools, many chances to forget a step. <dfn>uv</dfn> is the modern consolidation: one tool, from the makers of the ruff linter, that creates environments, resolves, installs, locks, and even installs Python interpreters themselves. Written in Rust (a fast systems language), it is typically orders of magnitude faster than pip — installs that took a coffee break take a blink — and since the mid-2020s it has become the default for new projects. Its daily rhythm is delightfully short:</p>
+      <div class="code-title">terminal — the uv workflow</div>
+      <pre><code class="language-bash">uv init invoice-agent        # scaffold a project with a pyproject.toml
+cd invoice-agent
+uv add httpx                 # add to pyproject, resolve, update uv.lock, install
+uv add --dev pytest          # a dev-only dependency
+uv run python agent.py       # run inside the project env - no activate dance
+uv sync                      # teammate or CI: rebuild the exact env from uv.lock</code></pre>
+      <p>Read <code>uv add httpx</code> again: it performs this chapter's whole discipline in one stroke — writes the dependency into <code>pyproject.toml</code> (intent), re-runs the resolver (the matchmaking), records the full solution in <code>uv.lock</code> (the receipt), and installs into <code>.venv</code> (the tray). Nothing to forget. <code>uv sync</code> is the other half: point it at a fresh clone and it rebuilds the identical environment from the lock file. Teams run it in CI with a flag that refuses to proceed if the lock is stale (check the uv docs for the exact flag), turning "someone forgot to re-lock" from a mystery into a loud, immediate failure.</p>
+      <div class="tbl"><table>
+        <tr><th>Task</th><th>Classic tools</th><th>uv</th></tr>
+        <tr><td>Create an environment</td><td><code>python3 -m venv .venv</code></td><td><code>uv venv</code> (or automatic)</td></tr>
+        <tr><td>Add a dependency</td><td><code>pip install httpx</code>, then remember to edit the list</td><td><code>uv add httpx</code> — file, lock, and env updated together</td></tr>
+        <tr><td>Rebuild a project's env</td><td><code>pip install -r requirements.txt</code></td><td><code>uv sync</code></td></tr>
+        <tr><td>Write down exact versions</td><td><code>pip freeze &gt; requirements.txt</code></td><td><code>uv lock</code> (kept current automatically)</td></tr>
+        <tr><td>Run code in the env</td><td>activate, then <code>python app.py</code></td><td><code>uv run python app.py</code></td></tr>
+        <tr><td>Get a Python interpreter</td><td>install it yourself, somehow</td><td><code>uv python install 3.12</code></td></tr>
+      </table></div>
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Whichever tool you use, two git rules are non-negotiable: the <code>.venv</code> folder is <em>never</em> committed (it is huge, machine-specific, and rebuildable), and the lock file is <em>always</em> committed (it is the reproducibility itself). A repo with <code>.venv</code> in its <code>.gitignore</code> and <code>uv.lock</code> in its history is a repo run by adults.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any serious Python repository and this chapter is the first thing you will see: a <code>pyproject.toml</code> at the root (read its <code>dependencies</code> list to learn what the project is built on before reading any code), a <code>uv.lock</code> or <code>poetry.lock</code> or pinned <code>requirements.txt</code> beside it, and <code>.venv</code> in <code>.gitignore</code>. CI logs open with <code>uv sync</code> before any test runs. Merge requests titled "bump langchain 1.1 to 1.2" are edits to exactly these files — the diff worth reviewing is often the lock file, where every transitive package that moved along for the ride is visible. And when an agent harness mysteriously changes behaviour after a redeploy with "no code changes", an unlocked dependency that quietly resolved newer is the first suspect a senior engineer checks.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Two projects share one machine's global Python. You upgrade a library for project B, and project A — untouched for weeks — breaks days later. What is the root cause?</p>
+          <div class="q-opts">
+            <button data-opt="a">A bug in the newer library version</button>
+            <button data-opt="b">One site-packages can hold only one version of a package, so the upgrade replaced the version A depended on</button>
+            <button data-opt="c">Project A's code was subtly wrong all along</button>
+          </div>
+          <p class="q-explain">A shared interpreter has a single parts drawer. Upgrading for B swapped the gears underneath A — the old repairman's mistake. Per-project venvs make this collision impossible.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. What does <code>source .venv/bin/activate</code> actually do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Copies your project's code into the venv</button>
+            <button data-opt="b">Reinstalls all the project's packages fresh</button>
+            <button data-opt="c">Edits shell environment variables — mainly PATH — so that python and pip now resolve to the venv's copies</button>
+          </div>
+          <p class="q-explain">Activation is just an environment-variable edit: .venv/bin is prepended to PATH. Nothing is installed or copied — which is also why deactivating is instant and harmless.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Which statement about pyproject.toml dependencies versus a lock file is true?</p>
+          <div class="q-opts">
+            <button data-opt="a">pyproject declares acceptable version ranges (intent); the lock file records the exact resolved set, including transitive dependencies</button>
+            <button data-opt="b">They contain the same information in two different formats</button>
+            <button data-opt="c">The lock file lists only the packages you asked for directly</button>
+          </div>
+          <p class="q-explain">The shopping list versus the receipt. Intent lives in pyproject as ranges a human maintains; the lock file is the resolver's full, exact, machine-generated answer — and installing from it is what makes two machines identical.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Your pyproject.toml declares 3 dependencies, but uv.lock lists 38 packages. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">uv automatically installs recommended extras</button>
+            <button data-opt="b">The lock file is bloated and should be regenerated</button>
+            <button data-opt="c">Dependencies have their own dependencies — the lock records the whole solved tree, transitive packages included</button>
+          </div>
+          <p class="q-explain">Your 3 direct picks each brought friends, and the friends brought friends. Reproducing an environment requires pinning all of them, which is exactly why the lock file — not the 3-line intent list — is the reproducibility artefact.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. A teammate clones your repo, installs your declared dependencies, and hits ModuleNotFoundError on a package that runs fine for you. Most likely explanation?</p>
+          <div class="q-opts">
+            <button data-opt="a">Their Python is too new for the package</button>
+            <button data-opt="b">You use a package you never declared, and it only works for you because it happens to sit in your machine's global site-packages</button>
+            <button data-opt="c">PyPI removed the package from the warehouse</button>
+          </div>
+          <p class="q-explain">The undeclared-dependency suspect. Had you developed inside a clean venv, the missing declaration would have failed on your machine first — the cheapest possible place to catch it.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>One interpreter has one site-packages, and it holds one version of each package — so projects sharing a Python silently break each other. A venv gives every project its own disposable drawer: <code>python3 -m venv .venv</code>.</li>
+          <li>Activation is not magic — it prepends <code>.venv/bin</code> to the PATH environment variable so <code>python</code> and <code>pip</code> mean the venv's copies. Delete the folder to delete the environment.</li>
+          <li><code>pip install</code> is really four jobs: query PyPI, gather everyone's requirements (transitive dependencies included), <em>resolve</em> one compatible version of every package, and unpack the wheels into site-packages.</li>
+          <li>pyproject.toml is the project's identity card: name, supported Pythons, and dependencies as <em>ranges</em> stating intent. requirements.txt is the older flat-list convention you will still meet everywhere.</li>
+          <li>A lock file is the resolver's exact answer written down — every package pinned, checksums included, committed to git. Installing from the lock is what makes your laptop, your teammate's, and CI byte-for-byte identical.</li>
+          <li>"Works on my machine" is not a mystery; it is five nameable suspects — unlocked versions, mismatched Pythons, undeclared dependencies, missing env vars, OS differences — each cured by an artefact, not by carefulness.</li>
+          <li>uv folds the whole workshop into one fast tool: <code>uv add</code> keeps pyproject, lock, and environment in sync in a single command, and <code>uv sync</code> rebuilds the exact environment anywhere.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

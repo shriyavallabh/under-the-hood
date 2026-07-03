@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code, dissected — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch091">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XI · The Landscape</div>
+        <h1>Claude Code, dissected</h1>
+        <p class="ch-tagline">You have operated this harness for months. Today we open the case back — loop, tools, permissions, hooks, subagents, skills, memory, compaction — and you will recognise every single part.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 92 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You have driven the same car every day for three years. You know its habits perfectly — where it hesitates on a cold morning, the exact wiggle that opens the boot — but you have never once opened the bonnet. Then a mechanic friend puts it on a lift and starts pointing. "Fuel pump. Alternator. Brake caliper — same part as in any car on this street. Nothing custom here, just very well chosen and very well fitted." And something clicks: you spent the last year at night classes learning engine parts one by one, and here they all are, bolted together inside the machine you already trust with your commute.</p>
+        <p>That is this chapter. The car is Claude Code — probably the best-known agent harness in the world, and the one you operate daily. The night classes were Acts V through X: loops, tools, subagents, skills, memory, context engineering, guardrails. Today the bonnet comes up, and the pleasure of it is that <em>nothing inside will be new</em>. Every part has a chapter behind it. The famous machine is famous not because its parts are exotic, but because of how they are fitted together.</p>
+      </section>
+
+      <h2>The machine on the lift</h2>
+      <p>Quick bearings first. In <a href="ch081-what-is-a-harness.html">the harness chapter</a> we defined a <dfn>harness</dfn> as everything wrapped around the model — loop, tools, safety rails, context plumbing — that turns a text predictor into a working agent. In <a href="ch072-deep-agents-vs-claude-code.html">the deep-agents comparison</a> we treated Claude Code as the reference point open frameworks measure themselves against. This is the promised full tour: one real product on the bench, part by part.</p>
+      <p>Here is the parts list, and where you already learned each part:</p>
+      <div class="tbl"><table>
+        <tr><th>Part of Claude Code</th><th>The chapter where you built it</th></tr>
+        <tr><td>The agentic loop</td><td><a href="ch045-react-loop-by-hand.html">Build a ReAct loop by hand</a></td></tr>
+        <tr><td>Read / Write / Edit / Bash / search tools</td><td><a href="ch046-tools.html">Tools</a> and the <a href="ch069-virtual-filesystem.html">virtual filesystem</a></td></tr>
+        <tr><td>The Task tool (subagents)</td><td><a href="ch070-subagents.html">Subagents</a></td></tr>
+        <tr><td>Permission modes and rules</td><td><a href="ch086-sandboxing.html">Sandboxing</a> and <a href="ch087-guardrails.html">guardrails</a></td></tr>
+        <tr><td>Hooks</td><td><a href="ch055-middleware.html">Middleware</a> — same idea, different spelling</td></tr>
+        <tr><td>Skills</td><td><a href="ch084-agent-skills.html">Agent skills</a></td></tr>
+        <tr><td>CLAUDE.md and auto-memory</td><td><a href="ch083-long-term-memory.html">Long-term memory</a></td></tr>
+        <tr><td>Compaction</td><td><a href="ch047-memory-and-context.html">Memory and context</a>, <a href="ch082-context-engineering.html">context engineering</a></td></tr>
+      </table></div>
+
+      <h2>The loop at the heart</h2>
+      <p>Strip everything else away and Claude Code is the fifty-line loop from <a href="ch045-react-loop-by-hand.html">chapter 45</a>, wearing a good suit. Your prompt goes into a transcript. The model replies — with tool calls or without. If with, the harness executes them, appends the results, and sends the whole transcript back to the model. If without, the loop ends and you see the answer. Think, act, observe, repeat. The model never touches your filesystem; it writes structured requests (<a href="ch035-tool-calling.html">native tool calling</a>, not the string-parsed ACTION lines of our hand-built version), and the harness — an ordinary process on your machine — does the touching.</p>
+      <p>Two refinements sit on top. First, planning: for multi-step work the model keeps a visible to-do list through a dedicated tool, ticking items off as it goes — the <code>write_todos</code> pattern from <a href="ch068-planning-and-todos.html">planning and to-dos</a>, there for the same reason: a written plan keeps a long run on the rails and the goal inside the context window. Second, statelessness: the model remembers nothing between API calls, so the growing transcript <em>is</em> the agent's working memory — and every other part in this chapter exists to protect, feed, or prune that transcript.</p>
+      <p>Watch one full turn move through the whole machine — this is the diagram to hold in your head:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Context assembles">
+          <h3>1. Your prompt arrives — and gets dressed</h3>
+          <div class="diagram">
+            <div class="d-box hot">You<small>"bump the retry count and run tests"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Context assembly<small>system prompt + CLAUDE.md + skills index + memory index</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Model</div>
+          </div>
+          <p class="step-cap">Your one line never travels alone. The harness packs it with its own system prompt, your CLAUDE.md files, a one-line index of every skill, and the memory index — the layered briefing we dissect below.</p>
+        </div>
+        <div class="step" data-title="Model proposes">
+          <h3>2. The model proposes a tool call</h3>
+          <div class="diagram">
+            <div class="d-box dim">You</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Model<small>Edit(config.yaml, "retries: 1" to "retries: 3")</small></div>
+            <div class="d-box dim">Your machine</div>
+          </div>
+          <p class="step-cap">A structured request, not an action. Exactly like your hand-built loop: nothing has happened yet — the model has written a wish and is waiting.</p>
+        </div>
+        <div class="step" data-title="Hooks fire">
+          <h3>3. Your hooks get a veto</h3>
+          <div class="diagram">
+            <div class="d-box dim">Model</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">PreToolUse hook<small>your script inspects the call</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Permission gate</div>
+          </div>
+          <p class="step-cap">Before the harness even considers the call, any PreToolUse hook you configured runs as a real shell command. It can wave the call through or block it with a reason the model will see. Deterministic policy — no persuasion involved.</p>
+        </div>
+        <div class="step" data-title="Permission gate">
+          <h3>4. The permission gate rules on it</h3>
+          <div class="diagram">
+            <div class="d-box dim">Hook</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Permission gate<small>mode + allow/deny rules; may ask you</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Tool runs</div>
+          </div>
+          <p class="step-cap">The gate checks the current permission mode and your allow/ask/deny rules. Pre-approved calls sail through; risky ones pause the loop and put a yes/no prompt in front of you — the moment you know well as the operator.</p>
+        </div>
+        <div class="step" data-title="Tool executes">
+          <h3>5. The tool runs on the real machine</h3>
+          <div class="diagram">
+            <div class="d-box dim">Gate</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Edit executes<small>config.yaml actually changes</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Result<small>appended to transcript</small></div>
+          </div>
+          <p class="step-cap">Only now does anything real happen. The result — success, file contents, an error — is appended to the transcript as an observation, and a PostToolUse hook can log or react to it.</p>
+        </div>
+        <div class="step" data-title="Loop or stop">
+          <h3>6. Around again, until the model stops asking</h3>
+          <div class="diagram">
+            <div class="d-box good">Model<small>replies with no tool calls</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">You<small>read the answer</small></div>
+          </div>
+          <p class="step-cap">The whole transcript goes back to the model and steps 2 to 5 repeat — often dozens of times. When a reply contains no tool calls, the loop ends, a Stop hook can fire, and the answer lands in your terminal.</p>
+        </div>
+      </div>
+
+      <h2>The toolbox: a handful of sharp verbs</h2>
+      <p>For all its reputation, the core toolbox is startlingly small. <code>Read</code> returns a file with line numbers. <code>Write</code> creates or replaces a file. <code>Edit</code> performs an exact string replacement — it must match the old text character for character, or it refuses. <code>Bash</code> runs a shell command. <code>Grep</code> and <code>Glob</code> search file contents and file names. And <code>Task</code> spawns a subagent, which we will open up shortly. Web access and <a href="ch074-why-mcp-exists.html">MCP servers</a> extend the set, but those seven verbs do the overwhelming majority of the work.</p>
+      <p>Notice what kind of tools these are: small, deterministic, honest about failure. <code>Edit</code> is the interesting one. A model asked to "rewrite the file" can hallucinate away code it never read; a model forced to state the exact old text and the exact new text either matches reality or gets an error it must confront. The tool's <em>design</em> compensates for the model's weaknesses — the principle from <a href="ch046-tools.html">the tools chapter</a>, applied ruthlessly. deepagents copied this toolbox almost name for name in <a href="ch069-virtual-filesystem.html">the virtual filesystem chapter</a>; the difference is that Claude Code's files are your real ones — which is precisely why the next two parts exist.</p>
+
+      <h2>The permission gate</h2>
+      <p>Everything dangerous about an agent lives at one boundary: the line between the model proposing an action and the harness executing it. You met that line in <a href="ch045-react-loop-by-hand.html">chapter 45</a> — it was the <code>TOOLS[name](arg)</code> dictionary lookup — and you fortified it in <a href="ch087-guardrails.html">guardrails</a>. Claude Code fortifies it with two mechanisms: <dfn>permission modes</dfn>, coarse dials that set the session's overall trust level, and permission rules, fine-grained allow/ask/deny lists that pre-decide specific calls.</p>
+      <p>The four modes, from most to least cautious:</p>
+      <div class="tbl"><table>
+        <tr><th>Mode</th><th>What it means</th><th>When you use it</th></tr>
+        <tr><td><code>plan</code></td><td>Read-only. The agent may explore and search, but every mutating tool is refused; it must present a plan and get your sign-off first.</td><td>Unfamiliar codebase, risky change, or "tell me what you would do first".</td></tr>
+        <tr><td>default</td><td>Reads are free; edits, shell commands, and anything risky pause the loop and ask you.</td><td>Everyday work.</td></tr>
+        <tr><td><code>acceptEdits</code></td><td>File edits are auto-approved; shell commands still ask.</td><td>You trust the direction and want fewer interruptions.</td></tr>
+        <tr><td><code>bypassPermissions</code></td><td>Nothing asks. Every proposed call executes.</td><td>Only inside a disposable sandbox — see below.</td></tr>
+      </table></div>
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>That last mode is the deal you studied in <a href="ch086-sandboxing.html">sandboxing</a>: full autonomy is only safe when the blast radius is contained by the <em>environment</em> — a container, a throwaway VM, a branch you can delete — never by the model promising to behave. Teams that run agents unattended in CI do it in exactly such sandboxes, with bypass on and credentials scoped down.</p></div>
+      <p>Below the modes sit the rules, in a file you may have scrolled past in a dozen repositories: <code>.claude/settings.json</code>. Click through the annotated lines — this small file is most of the "safety story" of any team's agent setup:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">.claude/settings.json — the gate, as configuration</div>
+        <div class="wl-line"><code>{</code></div>
+        <div class="wl-line"><code>  "permissions": {</code>
+          <div class="wl-note">The rules block, checked on every single tool call before anything executes — policy at the boundary, not in the prompt.</div></div>
+        <div class="wl-line"><code>    "allow": ["Bash(npm test:*)", "Edit(src/**)"],</code>
+          <div class="wl-note">Pre-approved calls that never interrupt you. Each rule names a tool and a pattern: any <code>npm test</code> variant may run, any file under <code>src/</code> may be edited, silently. This is how a team tunes "asks per hour" down without going full bypass.</div></div>
+        <div class="wl-line"><code>    "ask": ["Bash(git push:*)"],</code>
+          <div class="wl-note">Always pause for a human on these, whatever the mode. Pushing to a remote is a classic one-way door, so it stays behind a yes/no prompt.</div></div>
+        <div class="wl-line"><code>    "deny": ["Read(./.env)", "Read(./secrets/**)"]</code>
+          <div class="wl-note">Hard refusals — the model cannot even <em>read</em> these files, so a secret never enters the transcript at all. Recall from <a href="ch079-mcp-security.html">MCP security</a>: what never enters the context can never be exfiltrated by a prompt injection.</div></div>
+        <div class="wl-line"><code>  },</code></div>
+        <div class="wl-line"><code>  "hooks": {</code>
+          <div class="wl-note">The second mechanism: your own scripts wired into the loop's lifecycle. Read on.</div></div>
+        <div class="wl-line"><code>    "PreToolUse": [{</code>
+          <div class="wl-note">This hook fires before any matching tool call executes — step 3 of the stepper above.</div></div>
+        <div class="wl-line"><code>      "matcher": "Bash",</code>
+          <div class="wl-note">Only fire for Bash calls. Other events exist — PostToolUse after a call, Stop when the agent finishes, PreCompact before compaction.</div></div>
+        <div class="wl-line"><code>      "hooks": [{"type": "command", "command": "./check-command.sh"}]</code>
+          <div class="wl-note">A real shell script you wrote. It receives the proposed call as JSON on stdin; if it exits with code 2, the call is blocked and the model is shown your script's explanation. Deterministic veto power.</div></div>
+        <div class="wl-line"><code>    }]</code></div>
+        <div class="wl-line"><code>  }</code></div>
+        <div class="wl-line"><code>}</code></div>
+      </div>
+
+      <h2>Hooks: policy as code, not as pleading</h2>
+      <p>A <dfn>hook</dfn> is a shell command of yours that the harness runs at a fixed point in the loop's life — before a tool call, after one, when you submit a prompt, when the agent stops, before compaction. The crucial property: hooks are <em>deterministic</em>. A line in CLAUDE.md saying "never edit the .env file" is a request the model will honour ninety-something per cent of the time; a PreToolUse hook that blocks any edit touching <code>.env</code> works one hundred per cent of the time, because it is code, not persuasion. If you remember <a href="ch055-middleware.html">middleware</a> from the LangChain act — functions intercepting the loop around the model and tools — hooks are the same architectural slot, exposed as plain shell, so any team can wire in linters, audit logs, or company policy without touching the harness itself.</p>
+      <p>Time to hold all of this in your hands. Below is a miniature Claude Code — a real loop with a toolbox, a permission gate, and one hook, driven by a scripted <code>fake_llm</code> so it runs entirely in your browser. Press <strong>Run</strong>, read the transcript, then change <code>PERMISSION_MODE</code> to <code>"plan"</code> or <code>"acceptEdits"</code> and run again — the same five model requests meeting three different gates.</p>
+
+      <div class="pyrun" data-title="A miniature Claude Code — loop, gate, and one hook">
+<textarea class="py-src" spellcheck="false">
+# A tiny Claude Code: loop + tools + permission gate + one hook.
+# The "model" is scripted (fake_llm), so this runs offline.
+
+PERMISSION_MODE = "default"   # try "plan" or "acceptEdits" too
+
+FILES = {
+    "config.yaml": "retries: 1",
+    ".env": "API_KEY=sk-secret",
+}
+
+def read_file(a):
+    return FILES.get(a["path"], "ERROR: no such file")
+
+def edit_file(a):
+    body = FILES.get(a["path"])
+    if body is None or a["old"] not in body:
+        return "ERROR: old text not found"
+    FILES[a["path"]] = body.replace(a["old"], a["new"], 1)
+    return "ok, edited " + a["path"]
+
+def bash(a):
+    return "(pretend shell) ran: " + a["cmd"]
+
+TOOLS = {"Read": read_file, "Edit": edit_file, "Bash": bash}
+
+def pre_tool_use_hook(name, a):
+    # Deterministic policy: nothing touches .env, ever.
+    if name == "Edit" and a.get("path") == ".env":
+        return "BLOCKED by hook: .env is protected"
+    return "ok"
+
+def permission_gate(name, a):
+    if name == "Read":
+        return "allow"                    # reads are free
+    if PERMISSION_MODE == "plan":
+        return "deny (plan mode is read-only)"
+    if PERMISSION_MODE == "acceptEdits" and name == "Edit":
+        return "allow"                    # edits pre-approved
+    # default mode: ask the human (ours approves edits, not shell)
+    return "allow" if name == "Edit" else "deny (human said no)"
+
+SCRIPT = [
+    ("Read",  {"path": "config.yaml"}),
+    ("Edit",  {"path": ".env", "old": "sk-secret", "new": "sk-new"}),
+    ("Edit",  {"path": "config.yaml", "old": "retries: 1",
+               "new": "retries: 3"}),
+    ("Bash",  {"cmd": "pytest -q"}),
+    ("FINAL", "Raised retries to 3. Report: what got blocked, and why."),
+]
+
+def fake_llm(history):
+    return SCRIPT.pop(0)          # a real model would read history here
+
+def run(task, max_turns=8):
+    history = ["TASK: " + task]
+    for turn in range(1, max_turns + 1):
+        name, arg = fake_llm(history)
+        if name == "FINAL":
+            print("FINAL ANSWER:", arg)
+            return
+        print("turn", turn, "- model wants", name, arg)
+        verdict = pre_tool_use_hook(name, arg)
+        if verdict != "ok":
+            history.append(verdict); print("   ", verdict); continue
+        verdict = permission_gate(name, arg)
+        if verdict != "allow":
+            history.append(verdict); print("    gate:", verdict); continue
+        result = TOOLS[name](arg)
+        history.append("OBSERVATION: " + result)
+        print("    result:", result)
+
+run("bump the retry count and run the tests")
+print()
+print("config.yaml is now:", FILES["config.yaml"])
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Try the two experiments that matter. Set <code>PERMISSION_MODE = "plan"</code> and notice the file never changes — that is why plan mode is the safe way to explore. Then delete the hook's <code>.env</code> check and watch the secret get edited in default mode, because our simulated human rubber-stamps edits. Rules that depend on a distracted human are weaker than rules that are code — you have just proven the whole argument for hooks.</p></div>
+
+      <h2>Subagents: a clean room for messy work</h2>
+      <p>The <code>Task</code> tool is where the harness quietly becomes a multi-agent system. When the main agent faces a job that would flood its transcript — search the whole repository, review a huge diff, chase a failing test — it can delegate to a <dfn>subagent</dfn>: a fresh loop with its own empty context window, its own system prompt, and often a deliberately smaller toolbox. The subagent burns thousands of tokens rummaging, then returns only its conclusions. The parent pays a paragraph, not a haystack.</p>
+      <p>This is context isolation, exactly as you studied it in <a href="ch070-subagents.html">the subagents chapter</a> — the same reason LangGraph teams reach for <a href="ch063-subgraphs-multi-agent.html">subgraphs</a>. What Claude Code adds is a pattern worth stealing: subagents are <em>files</em>. Drop a markdown file in <code>.claude/agents/</code> and every session in that repository gains a specialist:</p>
+      <div class="code-title">.claude/agents/code-reviewer.md</div>
+      <pre><code class="language-yaml">---
+name: code-reviewer
+description: Reviews a diff for bugs and risky changes.
+  Use proactively after any large edit.
+tools: Read, Grep, Glob
+---
+You are a meticulous reviewer. Read the changed files,
+hunt for logic errors and unhandled edge cases, and
+report findings ranked by severity. You cannot edit
+anything - report only.</code></pre>
+      <p>Read that frontmatter with your Act X eyes. The <code>description</code> tells the <em>parent</em> model when to delegate. The <code>tools</code> line is a guardrail: this reviewer physically cannot edit files, so a review can never silently become a rewrite. Least privilege, in three lines of YAML.</p>
+
+      <h2>The layered briefing: system prompt, CLAUDE.md, skills, memory</h2>
+      <p>Now the context side of the machine — everything already inside the model's briefing before you typed a word. It comes in four layers, cheapest-first, and the layering <em>is</em> the lesson.</p>
+      <p><strong>Layer one: the built-in system prompt.</strong> Several thousand tokens, shipped with the product, identical for everyone: what the model is, how each tool works, when to be terse, what never to do. This is the vendor's context engineering, and a large share of why the same model feels sharper inside this harness than in a raw API call — a point you met in <a href="ch037-prompting-that-matters.html">prompting that matters</a>.</p>
+      <p><strong>Layer two: CLAUDE.md — your standing orders.</strong> At session start the harness reads <code>CLAUDE.md</code> from the project root (plus a global one in your home directory) and splices them into the context. Project conventions, forbidden commands, the test command: written once, obeyed in every session — including your teammates' sessions, because the file is committed to the repository. Configuration-as-prose, version-controlled like code.</p>
+      <p><strong>Layer three: skills — expertise on demand.</strong> A <dfn>skill</dfn> is a folder with a <code>SKILL.md</code> file: instructions, checklists, sometimes helper scripts for one recurring job. The design move that makes skills scale, straight from <a href="ch084-agent-skills.html">the skills chapter</a>: at startup the harness loads only each skill's <em>name and description</em> — one line apiece — and reads the full body only when a task calls for it. That is <dfn>progressive disclosure</dfn> — pay a line now, a page only when needed — and it is how a hundred-skill setup stays affordable when inlining them all would drown the context window before you said hello.</p>
+      <p><strong>Layer four: auto-memory — notes that survive the session.</strong> Each project gets a small memory directory that persists across sessions: a short index loads at startup, and the agent reads and writes notes there as it works — "this client's staging server needs the VPN", "the flaky test is a known issue". Next week's session starts already knowing. The write-your-own-notes pattern from <a href="ch083-long-term-memory.html">long-term memory</a> — and the storage is, once again, plain files you can open, edit, and audit.</p>
+
+      <h2>Compaction: when the desk overflows</h2>
+      <p>One problem remains, and you have known it since <a href="ch047-memory-and-context.html">memory and context</a>: the transcript only grows, the context window does not, and — as <a href="ch071-the-token-bill.html">the token bill</a> made painfully concrete — every turn re-sends everything. A long session would eventually hit the ceiling mid-task.</p>
+      <p>The answer is <dfn>compaction</dfn>: as the transcript nears the limit, the model writes a dense summary of the conversation so far — decisions made, files touched, current state, next steps — and the old turns are replaced by that summary, with only the recent tail kept verbatim. The loop continues as if nothing happened. You can trigger it yourself with <code>/compact</code>, and a PreCompact hook can preserve anything you refuse to lose. Compaction is lossy on purpose — fine detail from an hour ago genuinely disappears — but the design cushions the loss: files are still on disk and can be re-read, standing orders live in CLAUDE.md, durable lessons live in memory. The transcript is scratch space, not the system of record — <a href="ch082-context-engineering.html">context engineering</a>'s central teaching, implemented in shipping software.</p>
+
+      <p>Eight parts, one machine. Flip each card until every definition feels like old news:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">harness</span><span class="flip-back">Everything around the model: loop, tools, gates, hooks, context plumbing. The product is the harness; the model is a replaceable engine.</span></button>
+        <button class="flip" type="button"><span class="flip-front">permission mode</span><span class="flip-back">The session's trust dial: plan (read-only), default (ask), acceptEdits (edits pre-approved), bypassPermissions (sandbox only).</span></button>
+        <button class="flip" type="button"><span class="flip-front">hook</span><span class="flip-back">Your shell script wired into a loop event (PreToolUse, Stop...). Can block a tool call deterministically — policy as code, not pleading.</span></button>
+        <button class="flip" type="button"><span class="flip-front">subagent</span><span class="flip-back">A fresh loop with an empty context and a restricted toolbox, spawned via the Task tool. Does messy work, returns a summary.</span></button>
+        <button class="flip" type="button"><span class="flip-front">skill</span><span class="flip-back">A folder of instructions for one recurring job. Only its one-line description loads at start; the body loads on demand.</span></button>
+        <button class="flip" type="button"><span class="flip-front">CLAUDE.md</span><span class="flip-back">Standing orders spliced into every session's context — project conventions as a version-controlled prose file.</span></button>
+        <button class="flip" type="button"><span class="flip-front">auto-memory</span><span class="flip-back">A per-project notes directory that persists across sessions; the agent reads its index at startup and writes lessons as it works.</span></button>
+        <button class="flip" type="button"><span class="flip-front">compaction</span><span class="flip-back">Summarising the old transcript into a dense recap when the context window nears full, so long sessions can continue.</span></button>
+      </div>
+
+      <h2>What the dissection teaches</h2>
+      <p>Step back from the lift. Five design lessons generalise to every harness you will ever evaluate — the scorecard axes for the rest of this act:</p>
+      <p><strong>Small, honest tools beat clever ones.</strong> Seven deterministic verbs, each designed so the model fails loudly rather than plausibly. When you assess a harness, read its tool list before its marketing.</p>
+      <p><strong>Safety lives at the boundary, in code.</strong> Permission rules and hooks sit between proposal and execution, where they cannot be talked out of the way. A prompt-level "please don't" is a preference; a gate is a guarantee. Ask any harness: where is your gate, and what can it veto?</p>
+      <p><strong>Context is spent in layers.</strong> System prompt always; CLAUDE.md per project; skills and memory by one-line index; the rest fetched on demand. Progressive disclosure lets capability grow without the token bill growing with it.</p>
+      <p><strong>Isolation is the multi-agent trick that matters.</strong> Subagents exist for context hygiene first, specialisation second. A harness without fresh-context delegation will choke on large codebases.</p>
+      <p><strong>Everything is a file.</strong> Agents, skills, memory, settings, hooks — plain text, inspectable, diffable in version control. Compare that with configuration buried in a vendor dashboard and you have a genuinely useful axis for the comparisons ahead. And the quiet corollary: the model is the replaceable part; the harness is the product.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this chapter every time you open a repository with agents in its workflow. A <code>.claude/</code> folder with <code>settings.json</code>, an <code>agents/</code> directory, and a <code>skills/</code> tree; a <code>CLAUDE.md</code> at the root encoding the team's conventions; merge requests that change a deny rule or add a PreToolUse hook and get reviewed as seriously as production code — because they <em>are</em> the security model. When a colleague says "run it in plan mode first", "the hook blocked it", or "the session compacted and lost the thread", you now see the exact component behind each sentence. And when a vendor demos "our new agent platform", you can quietly ask where its gate, its layers, and its files are.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Where does Claude Code enforce that a dangerous command never runs?</p>
+          <div class="q-opts">
+            <button data-opt="a">Inside the model, which is trained to refuse dangerous tool calls</button>
+            <button data-opt="b">In CLAUDE.md, by clearly stating rules the model reads at startup</button>
+            <button data-opt="c">In the harness, at the boundary between the model proposing a call and the harness executing it</button>
+          </div>
+          <p class="q-explain">The model only ever proposes. Permission rules and hooks sit in harness code between proposal and execution, so a blocked call is blocked deterministically. CLAUDE.md instructions help the model behave, but they are persuasion, not enforcement.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. What does plan mode actually change?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model switches to a cheaper, faster variant for drafting</button>
+            <button data-opt="b">Every mutating tool is refused — the agent can read and search but must present a plan before anything can change</button>
+            <button data-opt="c">The agent writes its to-do list to a file before starting work</button>
+          </div>
+          <p class="q-explain">Plan mode is a permission mode, not a model setting: reads and searches work, edits and shell commands are denied. It is the safe way to let an agent explore an unfamiliar or high-stakes codebase before you approve any change.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why does the Task tool give a subagent a fresh, empty context window?</p>
+          <div class="q-opts">
+            <button data-opt="a">So the messy middle of a big search or review never enters the parent's transcript — the parent pays only for the returned summary</button>
+            <button data-opt="b">Because two agents cannot legally share one context window</button>
+            <button data-opt="c">To keep the subagent from learning the user's secrets</button>
+          </div>
+          <p class="q-explain">Context isolation is the point. The subagent can burn thousands of tokens rummaging through files, and all of it is discarded when it finishes — only the conclusions flow back, keeping the main transcript lean.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. A session hits the context limit and compacts. What happens to the conversation so far?</p>
+          <div class="q-opts">
+            <button data-opt="a">It is saved in full to auto-memory and reloaded next session</button>
+            <button data-opt="b">The session ends and must be restarted from scratch</button>
+            <button data-opt="c">Older turns are replaced by a model-written summary; recent turns survive, and fine detail from earlier is genuinely lost</button>
+          </div>
+          <p class="q-explain">Compaction is deliberate, lossy summarisation so the loop can continue. The design cushions the loss elsewhere: files stay on disk, conventions live in CLAUDE.md, durable lessons belong in memory — the transcript is scratch space.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. You install forty skills. Roughly what do they cost the context window at session start?</p>
+          <div class="q-opts">
+            <button data-opt="a">The full text of all forty SKILL.md files</button>
+            <button data-opt="b">About forty lines — one name-plus-description each; a skill's body is only read when a task needs it</button>
+            <button data-opt="c">Nothing at all until a skill is explicitly invoked by name</button>
+          </div>
+          <p class="q-explain">Progressive disclosure: the index of skills is always present (that is how the model knows what it could reach for), but each costs roughly a line until used. That lets capability scale without the token bill scaling with it.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Claude Code is the ReAct loop from chapter 45 in production dress: the model proposes structured tool calls, the harness executes, results return to a growing transcript, repeat until the model stops asking.</li>
+          <li>The core toolbox is seven small, deterministic verbs — Read, Write, Edit, Bash, Grep, Glob, Task — each designed so the model fails loudly rather than plausibly.</li>
+          <li>Safety is enforced at the proposal-execution boundary: permission modes set the trust dial, allow/ask/deny rules pre-decide calls, and hooks give your own scripts a deterministic veto.</li>
+          <li>Subagents are fresh-context loops with restricted toolboxes, spawned to do messy work and return a summary — context isolation as a first-class feature.</li>
+          <li>Context arrives in layers — built-in system prompt, CLAUDE.md, one-line skill index, memory index — with detail fetched only on demand; compaction prunes the transcript when it nears the limit.</li>
+          <li>The transferable lessons: sharp small tools, gates in code not prompts, layered context, isolation for scale, everything-as-inspectable-files. These are your scorecard axes for every harness ahead.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

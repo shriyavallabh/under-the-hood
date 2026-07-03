@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dunders: Python's secret handshakes — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch014">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act II · The Engineering Layer</div>
+        <h1>Dunders: Python's secret handshakes</h1>
+        <p class="ch-tagline">Every "magic" framework object — the model you call like a function, the config that prints beautifully, the session that cleans up after itself — is answering a fixed menu of double-underscore signals. Learn the menu once and the magic evaporates.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 14 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You land in a city you have never visited and walk into a branch of a hotel chain you know well. Nothing here is familiar — different building, different staff, different language on the signage — and yet everything just works. You tap the front-desk bell and someone appears. You ask "how many rooms are free tonight?" and get a straight number. You hold up two loyalty cards and the receptionist can tell you instantly whether they belong to the same member. Check-in follows the exact ritual you know from every other branch. And no matter how chaotic your stay — even if you bolt at 4 a.m. mid fire-alarm — check-out still happens: the room is released, the minibar is tallied, the bill is settled.</p>
+        <p>None of this was negotiated on the spot. The chain trains every branch to answer the same small set of standard signals: the bell, the headcount question, the card comparison, check-in, check-out. Python objects work exactly like this. The language approaches your object with a fixed set of standard signals — print it, count it, compare it, call it, enter it — and your class answers by implementing methods with strange double-underscore names. Learn the handshake list once, and every "magic" framework object becomes a hotel you already know how to use.</p>
+      </section>
+
+      <h2>From classes to handshakes</h2>
+      <p>Quick recap of <a href="ch013-classes-and-oop.html">the classes chapter</a>, because this chapter stands directly on it. A class is a blueprint for objects: it bundles data (attributes) with the functions that work on that data (methods). <code>__init__</code> is the setup method that runs when a new object is born, and <code>self</code> is simply the object itself, passed into every method so the method knows whose data it is touching. You have, in other words, already met one method with a weird double-underscore name — you just did not know it belonged to a whole family.</p>
+      <p>That family has a nickname. A <dfn>dunder</dfn> — short for <em>double underscore</em> — is any method named like <code>__something__</code>, with two underscores on each side. And here is the single most important sentence in this chapter: <strong>you write dunders, but you almost never call them. Python calls them for you, whenever you use built-in syntax.</strong></p>
+      <p>Each dunder is a hook into a <dfn>protocol</dfn> — an agreed signal-and-response, like the hotel chain's bell. When you write <code>len(toolbox)</code>, Python quietly turns around and runs <code>toolbox.__len__()</code>. When you write <code>agent(question)</code>, Python runs <code>agent.__call__(question)</code>. The pretty syntax on the left is a costume; the dunder on the right is what actually executes. Here is the translation table this chapter will teach you to read fluently:</p>
+
+      <div class="tbl"><table>
+        <tr><th>You write</th><th>Python quietly runs</th><th>The handshake</th></tr>
+        <tr><td><code>print(x)</code>, <code>f"{x}"</code></td><td><code>x.__str__()</code></td><td>"Introduce yourself to a human"</td></tr>
+        <tr><td><code>repr(x)</code>, debuggers, logs, lists showing their contents</td><td><code>x.__repr__()</code></td><td>"State your precise badge entry"</td></tr>
+        <tr><td><code>len(x)</code></td><td><code>x.__len__()</code></td><td>"How many are you holding?"</td></tr>
+        <tr><td><code>x == y</code></td><td><code>x.__eq__(y)</code></td><td>"Do these two count as the same?"</td></tr>
+        <tr><td><code>x(args)</code></td><td><code>x.__call__(args)</code></td><td>"Ring the bell — do your job"</td></tr>
+        <tr><td><code>x[key]</code></td><td><code>x.__getitem__(key)</code></td><td>"Fetch me the one labelled <em>key</em>"</td></tr>
+        <tr><td><code>with x:</code></td><td><code>x.__enter__()</code> … <code>x.__exit__(...)</code></td><td>"Check in — and guarantee check-out"</td></tr>
+        <tr><td><code>for item in x:</code></td><td><code>x.__iter__()</code></td><td>"Hand me your items one by one"</td></tr>
+      </table></div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The convention in real code is to use the syntax, never the dunder directly: write <code>len(x)</code>, not <code>x.__len__()</code>. The built-in versions do extra safety checks, and reading <code>x.__len__()</code> in a merge request is the Python equivalent of reaching over the hotel desk to ring the staff-side buzzer yourself.</p></div>
+
+      <h2>__repr__ and __str__: the two name tags</h2>
+      <p>Every hotel employee has two identities. There is the friendly spoken introduction for guests — "Hi, I'm Asha, I'll be looking after you" — and there is the precise entry in the manager's logbook: employee ID, role, shift, branch. Same person, two audiences.</p>
+      <p>Python objects carry the same pair. <code>__str__</code> is the guest-facing introduction: what <code>print()</code> shows, what an f-string stitches in (via a cousin hook called <code>__format__</code>, which defaults to the <code>__str__</code> text — remember f-strings from <a href="ch003-strings-and-fstrings.html">chapter 3</a>). <code>__repr__</code> is the logbook entry: unambiguous, developer-facing, ideally looking like the code that would recreate the object. It is what debuggers show, what error tracebacks show, and — a detail that surprises everyone once — what lists and dicts use for their <em>elements</em> when you print the whole container.</p>
+      <p>If a class defines neither, Python falls back to a default that is almost aggressively useless: something like <code>&lt;Invoice object at 0x104f2b9d0&gt;</code> — the type and a memory address. If you have ever stared at a production log full of those, you have felt the absence of a five-line <code>__repr__</code>. The practical rule: <strong>if you only write one, write <code>__repr__</code></strong>, because when <code>__str__</code> is missing, everything falls back to <code>__repr__</code> anyway.</p>
+
+      <h2>Being equal versus being the same</h2>
+      <p>One more handshake before we run code. Recall from <a href="ch002-names-and-objects.html">names and objects</a> that variables are name tags tied to objects living in memory. By default, <code>==</code> between two custom objects asks the least interesting question possible: <em>are these two name tags tied to the very same object?</em> Two invoices with identical numbers and identical amounts, created separately, compare as <code>False</code> — because they are two distinct objects in memory, like two printouts of the same document.</p>
+      <p>Defining <code>__eq__</code> is how you tell Python what equality should <em>mean</em> for your class — usually "same values in the fields that matter", the way two loyalty cards can represent one member. Watch all three handshakes work, then break them:</p>
+
+      <div class="pyrun" data-title="__repr__, __str__ and __eq__ — run me">
+<textarea class="py-src" spellcheck="false">
+class Invoice:
+    def __init__(self, number, amount):
+        self.number = number
+        self.amount = amount
+
+    def __repr__(self):
+        # Developer-facing: looks like the code to recreate it
+        return f"Invoice(number={self.number!r}, amount={self.amount})"
+
+    def __str__(self):
+        # Human-facing: what print() shows
+        return f"Invoice {self.number} for {self.amount} rupees"
+
+    def __eq__(self, other):
+        # What == should MEAN for invoices
+        return (self.number, self.amount) == (other.number, other.amount)
+
+a = Invoice("INV-2041", 15000)
+b = Invoice("INV-2041", 15000)
+
+print(a)              # print() rings __str__
+print(repr(a))        # repr() rings __repr__
+print([a, b])         # containers show their ELEMENTS via __repr__
+print("a == b?", a == b)   # __eq__: True, because we defined it
+print("a is b?", a is b)   # identity: still two separate objects
+
+# Try this: delete the __eq__ method and run again.
+# a == b becomes False -- Python falls back to "same object in memory?"
+# Then delete __str__ too and watch print(a) fall back to __repr__.
+</textarea>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>File this away for the day it bites: the moment you define <code>__eq__</code>, Python quietly stops letting your objects be dict keys or set members, unless you also define <code>__hash__</code>. You do not need the details yet — just remember "custom equality can break dict keys" so the eventual <code>TypeError: unhashable type</code> reads as an old acquaintance, not an ambush.</p></div>
+
+      <h2>__call__: objects that answer the phone like functions</h2>
+      <p>Here is the dunder that makes framework code look most magical. You know from <a href="ch007-functions.html">the functions chapter</a> that <code>def</code> creates a function object. Now the curtain-pull: parentheses are not special to functions. <code>something(args)</code> is just syntax that triggers <code>something.__call__(args)</code> — on <em>anything</em> that implements it. Functions are simply objects whose type ships with <code>__call__</code> built in.</p>
+      <p>Why do frameworks adore this? Because an object can carry configuration and memory — an API key, a retry budget, a running call count — and still be used with the clean one-word grammar of a function. When PyTorch users write <code>model(batch)</code>, <code>model</code> is a full object with millions of parameters inside; <code>__call__</code> is what lets it answer the phone that simply. The scripted fake LLM below uses the same trick — and it is exactly the pattern you will use in earnest when you build <a href="ch045-react-loop-by-hand.html">a ReAct loop by hand</a> in Act V.</p>
+      <p>While we are here, two more handshakes ride along. <code>__len__</code> lets <code>len()</code> count your object, and <code>__getitem__</code> is what square brackets ring — the exact same signal that makes the dicts and lists of <a href="ch004-collections.html">the collections chapter</a> work. Your own classes can join that club, which is why so many framework objects index like dicts without being dicts:</p>
+
+      <div class="pyrun" data-title="__call__, __len__ and __getitem__ — a mini agent turn built from handshakes">
+<textarea class="py-src" spellcheck="false">
+# A scripted stand-in for a real LLM. It is an OBJECT with state
+# (a script, a call counter) -- yet you use it like a function,
+# because of __call__.
+class FakeLLM:
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls = 0
+
+    def __call__(self, prompt):
+        self.calls += 1
+        return self.script[self.calls - 1]
+
+    def __repr__(self):
+        return f"FakeLLM(calls={self.calls})"
+
+# A toolbox that counts like a list and indexes like a dict.
+class Toolbox:
+    def __init__(self, **tools):
+        self.tools = tools
+
+    def __len__(self):
+        return len(self.tools)
+
+    def __getitem__(self, name):
+        return self.tools[name]
+
+def calculate(expr):
+    return str(eval(expr, {"__builtins__": {}}, {}))
+
+llm = FakeLLM([
+    "ACTION: calculate(1500 * 0.20)",
+    "FINAL ANSWER: GST is 300 rupees.",
+])
+tools = Toolbox(calculate=calculate)
+
+print("tools registered:", len(tools))        # __len__
+reply = llm("What is 20% GST on 1500?")       # __call__ on an object!
+print("model said:", reply)
+
+name = reply.split("(")[0].split()[-1]        # 'calculate'
+arg = reply[reply.index("(") + 1 : reply.rindex(")")]
+print("observation:", tools[name](arg))       # __getitem__, then a call
+print("model state:", llm)                    # __repr__
+print("model said:", llm("and your final answer?"))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Prove to yourself that the magic lives in the dunder: rename <code>__call__</code> to <code>call</code> and run again. The line <code>llm("What is...")</code> now fails with <em>'FakeLLM' object is not callable</em> — an error message you have almost certainly seen in a real stack trace. Now you know precisely what it means: someone used parentheses on an object that never learned that handshake.</p></div>
+
+      <p>One bonus handshake worth knowing because you will meet it in every codebase: <code>if messages:</code> on your own object rings <code>__bool__</code>, and when that is not defined Python falls back to <code>__len__</code> — empty means false. That is the entire mystery behind "why does <code>if not results:</code> work on this framework object".</p>
+
+      <h2>__enter__ and __exit__: check-in with guaranteed check-out</h2>
+      <p>The hotel's deepest promise is not the bell or the headcount — it is check-out. However your stay ends, in triumph or in a 4 a.m. fire-alarm sprint, the room gets released and the bill gets settled. Code needs the same promise constantly: files must be closed, database connections returned, locks released — <em>especially</em> when things go wrong halfway through.</p>
+      <p>That promise is the <code>with</code> statement, and the pair of dunders behind it. An object with <code>__enter__</code> and <code>__exit__</code> is called a <dfn>context manager</dfn> — an object that knows how to set something up and, crucially, is <em>guaranteed</em> the chance to tear it down. Step through what Python actually does:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Check-in">
+          <h3>1. The with line runs __enter__</h3>
+          <div class="diagram">
+            <div class="d-box hot">with Session("db") as s:<small>Python calls __enter__()</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">body<small>not started yet</small></div>
+            <div class="d-box dim">__exit__</div>
+          </div>
+          <p class="step-cap">Python calls the object's <code>__enter__</code> method — open the connection, acquire the lock, start the timer. Whatever <code>__enter__</code> returns is bound to the name after <code>as</code>.</p>
+        </div>
+        <div class="step" data-title="The stay">
+          <h3>2. The indented body runs</h3>
+          <div class="diagram">
+            <div class="d-box">__enter__<small>done</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">body<small>your code, using s</small></div>
+            <div class="d-box dim">__exit__<small>waiting</small></div>
+          </div>
+          <p class="step-cap">Your code does its work inside the block. The context manager waits in the wings, holding its promise.</p>
+        </div>
+        <div class="step" data-title="Smooth check-out">
+          <h3>3. Body finishes cleanly: __exit__ runs</h3>
+          <div class="diagram">
+            <div class="d-box dim">body<small>finished</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">__exit__(None, None, None)<small>clean check-out</small></div>
+          </div>
+          <p class="step-cap">On a clean finish, Python calls <code>__exit__</code> with three <code>None</code>s — "no incident to report". The connection closes, the lock releases.</p>
+        </div>
+        <div class="step" data-title="The fire alarm">
+          <h3>4. Body crashes mid-stay</h3>
+          <div class="diagram">
+            <div class="d-box hot">body<small>raises ValueError!</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">__exit__(type, error, traceback)<small>STILL runs</small></div>
+          </div>
+          <p class="step-cap">An exception in the body does not skip check-out. Python still calls <code>__exit__</code>, now handing it the details of what went wrong. Cleanup happens no matter what.</p>
+        </div>
+        <div class="step" data-title="Report or forgive">
+          <h3>5. __exit__ decides: let the error travel, or swallow it</h3>
+          <div class="diagram">
+            <div class="d-box">__exit__ returns False<small>error continues outward</small></div>
+            <div class="d-box good">__exit__ returns True<small>error suppressed</small></div>
+          </div>
+          <p class="step-cap">If <code>__exit__</code> returns <code>False</code> (the usual choice), the exception continues on its way after cleanup. Returning <code>True</code> means "handled — nobody else needs to know". Cleanup either way: that is the whole point.</p>
+        </div>
+      </div>
+
+      <p>Run the lifecycle yourself — including the crash:</p>
+
+      <div class="pyrun" data-title="__enter__ / __exit__ — cleanup survives a crash">
+<textarea class="py-src" spellcheck="false">
+class Session:
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        print(f"[check-in]  {self.name}")
+        return self          # this is what 'as s' receives
+
+    def __exit__(self, exc_type, exc, tb):
+        outcome = exc_type.__name__ if exc_type else "clean"
+        print(f"[check-out] {self.name} ({outcome})")
+        return False         # False = do not swallow the error
+
+# A calm, uneventful stay:
+with Session("db-connection") as s:
+    print("  working inside", s.name)
+
+print()
+
+# A stay that ends in a fire alarm -- check-out STILL happens:
+try:
+    with Session("risky-job") as s:
+        raise ValueError("boom, halfway through")
+except ValueError as e:
+    print("caught outside the block:", e)
+
+# Try this: change 'return False' to 'return True' in __exit__.
+# The error gets swallowed and 'caught outside' never prints.
+</textarea>
+      </div>
+
+      <p>This is exactly what <code>with open("trace.log") as f:</code> does — file objects are context managers, and the guaranteed <code>__exit__</code> is what closes the file even when your code explodes mid-write. Database libraries, lock objects, and test fixtures all lean on the same pair. There is a whole chapter on richer context-manager patterns waiting in <a href="ch018-context-managers.html">chapter 18</a>; today you have the mechanism.</p>
+
+      <h2>Framework magic, decoded line by line</h2>
+      <p>Now cash in. Below is a screenful of the kind of code that used to read as sorcery — an agent harness doing its morning routine. Click each annotated line and name the handshake yourself before reading the note. Every "how does that even work?" moment is one of the eight signals you now know:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">harness_startup.py — every line is a handshake</div>
+        <div class="wl-line"><code>config = AgentConfig.from_file("agent.yaml")</code>
+          <div class="wl-note">Plain method call, no dunder — included so you notice the difference. The magic starts on the next line.</div></div>
+        <div class="wl-line"><code>print(config)</code>
+          <div class="wl-note">Rings <code>__str__</code> (falling back to <code>__repr__</code>). When a config object prints as a tidy summary instead of a memory address, it is because someone wrote that method on purpose. Debuggability is a feature somebody built.</div></div>
+        <div class="wl-line"><code>if not config.tools:</code>
+          <div class="wl-note">Rings <code>__bool__</code>, falling back to <code>__len__</code> — an empty toolbox counts as <code>False</code>. That is why "truthiness" works on framework collections that are not real lists.</div></div>
+        <div class="wl-line"><code>    raise SystemExit("no tools configured")</code></div>
+        <div class="wl-line"><code>search = config.tools["search"]</code>
+          <div class="wl-note">Square brackets ring <code>__getitem__</code>. <code>config.tools</code> is not a dict — it is some custom registry class — but it joined the square-bracket protocol, so it feels like one.</div></div>
+        <div class="wl-line"><code>agent = Agent(config)</code>
+          <div class="wl-note">Two handshakes in one: calling the <em>class</em> constructs the object (which runs <code>__init__</code> from <a href="ch013-classes-and-oop.html">chapter 13</a>). Classes themselves are callable — the parentheses protocol again, one level up.</div></div>
+        <div class="wl-line"><code>answer = agent("Summarise this incident report")</code>
+          <div class="wl-note">The showstopper: <code>agent</code> is an object stuffed with configuration and history, used like a function. <code>__call__</code>. This single line is most of why framework code "looks like magic".</div></div>
+        <div class="wl-line"><code>with open("trace.log", "w") as f:</code>
+          <div class="wl-note"><code>__enter__</code> opens the door and hands <code>f</code> to the block; <code>__exit__</code> guarantees the file closes even if the write below fails.</div></div>
+        <div class="wl-line"><code>    f.write(answer)</code></div>
+        <div class="wl-line"><code>for step in agent.history:</code>
+          <div class="wl-note">The <code>for</code> loop rings <code>__iter__</code> to ask the object for its items one by one. Custom history objects, result sets, and message stores all loop like lists because they joined that protocol.</div></div>
+        <div class="wl-line"><code>    print(step)</code>
+          <div class="wl-note">And each <code>step</code> prints readably — because its author wrote a <code>__repr__</code>. The circle closes.</div></div>
+      </div>
+
+      <p>Notice what changed in you between the top of this chapter and now. The line <code>answer = agent(...)</code> is no longer "somehow the object just works". It is: <em>somewhere in that class there is a method named <code>__call__</code>, and I could go read it.</em> That sentence — "there is a dunder, and I could go read it" — is the skill. Frameworks are not hiding anything; they are speaking a handshake dialect you now understand.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Search any serious Python repo for <code>def __</code> and watch the protocol light up: <code>__repr__</code> methods on config and message classes (someone cared about readable logs), <code>__call__</code> on tools and model wrappers, <code>__enter__</code>/<code>__exit__</code> on database sessions and file-like objects. You will also meet the shortcut: a <code>@dataclass</code> line above a class means Python auto-writes <code>__init__</code>, <code>__repr__</code> and <code>__eq__</code> from the field list — a robot intern typing the boilerplate handshakes so humans do not have to. And in merge-request review comments, "can we add a repr here?" translates to: "when this object lands in a production log at 2 a.m., I would like to know what it was".</p></div>
+
+      <p>One review lap before the quiz — flip each card until the back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">dunder</span><span class="flip-back">A method named __like_this__ — double underscores both sides. You write it; Python calls it when the matching syntax is used.</span></button>
+        <button class="flip" type="button"><span class="flip-front">protocol</span><span class="flip-back">An agreed signal-and-response: implement the right dunder and your object plugs into built-in syntax like len(), ==, or with.</span></button>
+        <button class="flip" type="button"><span class="flip-front">__repr__</span><span class="flip-back">The developer-facing badge entry — shown by debuggers, logs, and containers. Ideally looks like the code to recreate the object.</span></button>
+        <button class="flip" type="button"><span class="flip-front">__str__</span><span class="flip-back">The human-facing introduction — what print() and f-strings show. Falls back to __repr__ when missing.</span></button>
+        <button class="flip" type="button"><span class="flip-front">__eq__</span><span class="flip-back">Defines what == means for your class. Without it, == only asks "same object in memory?"</span></button>
+        <button class="flip" type="button"><span class="flip-front">__call__</span><span class="flip-back">Makes obj(args) work — an object with state and config, used with function grammar. The heart of "callable" framework objects.</span></button>
+        <button class="flip" type="button"><span class="flip-front">__getitem__ / __len__</span><span class="flip-back">Square brackets and len() for your own class — how custom registries index like dicts and count like lists.</span></button>
+        <button class="flip" type="button"><span class="flip-front">__enter__ / __exit__</span><span class="flip-back">The with-statement pair: set up on entry, guaranteed cleanup on exit — even when the block crashes.</span></button>
+      </div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. You write <code>len(history)</code> and get <code>7</code>. What actually happened?</p>
+          <div class="q-opts">
+            <button data-opt="a">The len() built-in counted the items itself by looping over them</button>
+            <button data-opt="b">Python called history.__len__() and returned whatever it said</button>
+            <button data-opt="c">len() only works on real lists, so history must be a list</button>
+          </div>
+          <p class="q-explain">len() is a polite messenger: it turns around and rings the object's __len__ handshake. Any class that implements it — list or not — is countable. That is the whole protocol idea in one line.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. A production log shows <code>&lt;Invoice object at 0x104f2b9d0&gt;</code> where you needed to see which invoice failed. What is missing?</p>
+          <div class="q-opts">
+            <button data-opt="a">The logger is misconfigured — objects normally log their fields</button>
+            <button data-opt="b">An __init__ method, so the object knows its own data</button>
+            <button data-opt="c">A __repr__ method — without one, Python falls back to type-plus-memory-address</button>
+          </div>
+          <p class="q-explain">That unhelpful angle-bracket string is the default __repr__. Five lines of custom __repr__ turn 2 a.m. log archaeology into reading. Readable logs are a feature someone writes.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. In a framework you see <code>answer = model(prompt)</code>, where <code>model</code> is an object holding an API key and settings — not a function. Which handshake makes that line work?</p>
+          <div class="q-opts">
+            <button data-opt="a">__call__ — parentheses on any object ring it</button>
+            <button data-opt="b">__getitem__ — the prompt is looked up like a key</button>
+            <button data-opt="c">It cannot work; only functions accept parentheses</button>
+          </div>
+          <p class="q-explain">Parentheses are syntax, not a function-only privilege. Any object whose class defines __call__ can be invoked like a function while carrying state and configuration inside — exactly why frameworks use it everywhere.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Code inside <code>with open("trace.log", "w") as f:</code> raises an exception halfway through. What happens to the file?</p>
+          <div class="q-opts">
+            <button data-opt="a">It stays open until the program ends — the crash skips the cleanup</button>
+            <button data-opt="b">It closes only if someone wrote a try/except around the block</button>
+            <button data-opt="c">It closes anyway — __exit__ is guaranteed to run, crash or no crash</button>
+          </div>
+          <p class="q-explain">Guaranteed check-out is the entire point of the with statement: Python promises to call __exit__ whether the block finishes cleanly or explodes. That is why files, locks, and database sessions all use it.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Two separately created <code>Invoice("INV-2041", 15000)</code> objects compare as <code>False</code> with <code>==</code>. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">The amounts are stored with different precision internally</button>
+            <button data-opt="b">No __eq__ is defined, so == falls back to "are these the same object in memory?"</button>
+            <button data-opt="c">Strings inside objects can never compare equal</button>
+          </div>
+          <p class="q-explain">Default equality is identity — two printouts of the same document are still two printouts. Defining __eq__ is how you declare that invoices with the same number and amount count as equal.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A dunder is a double-underscore method you write but almost never call — Python calls it for you whenever the matching built-in syntax runs. Each one is a hook into a protocol, a fixed handshake between the language and your object.</li>
+          <li>The core translation table: <code>print(x)</code> rings __str__, logs and containers ring __repr__, <code>len(x)</code> rings __len__, <code>==</code> rings __eq__, <code>x(args)</code> rings __call__, <code>x[key]</code> rings __getitem__, and <code>with</code> rings __enter__ then a guaranteed __exit__.</li>
+          <li>If you write only one name tag, write __repr__ — everything falls back to it, and it is the difference between readable production logs and memory addresses.</li>
+          <li>Default == compares identity, not values; __eq__ is where you define what equality means for your class.</li>
+          <li>__call__ is why framework objects — models, tools, agents — get used like functions while carrying configuration and state inside.</li>
+          <li>__exit__ runs even when the block crashes; that guarantee is why files, locks, and database sessions live inside with statements.</li>
+          <li>Framework code stops looking like magic the moment you can name the handshake: "there is a dunder behind this syntax, and I could go read it."</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

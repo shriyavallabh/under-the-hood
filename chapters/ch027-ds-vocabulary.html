@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Speaking data scientist — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch027">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act III · The Data Scientist's World</div>
+        <h1>Speaking data scientist</h1>
+        <p class="ch-tagline">Train/test splits, overfitting, precision vs recall, drift — about fifteen words carry every model review on Earth. By the end of this chapter you will not just understand them; you will know which question to ask after each one.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 27 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your niece is preparing for a bank recruitment exam. She has found a book of five hundred past questions and memorised every single one — question, answer, even the page numbers. On practice tests drawn from that book she scores a perfect 100%. Her friend Meera works through the <em>concepts</em> instead, does fewer past papers, and scores a humbler 85%.</p>
+        <p>Exam day arrives, full of questions neither has ever seen. Meera scores 84% — almost exactly her practice score. Your niece scores 58%, because her perfect memory of old questions says nothing about new ones. Their tutor saw it coming: that is why she always kept one sealed mock paper nobody was allowed to practise on. Whatever you scored on <em>that</em> paper was your real level.</p>
+        <p>Everything in this chapter — held-out test sets, overfitting, cross-validation, even drift — is this one tutoring insight, wearing different hats: <strong>the only score that counts is the score on questions you have never seen.</strong></p>
+      </section>
+
+      <h2>Why data scientists hide data from their own model</h2>
+      <p>In <a href="ch026-pkl-files.html">the previous chapter</a> you opened a PKL file and found a trained model preserved inside like a pickle in a jar. Before it went into the jar, that model went through school — a school with a strict exam policy, because a model is a spectacular memoriser, exactly like your niece.</p>
+      <p>So data scientists split their labelled data — say, 10,000 past transactions, each labelled fraud or legit — into three piles before training begins. The <dfn>training set</dfn> is what the model actually learns from — its textbook and homework, usually the biggest share. The <dfn>validation set</dfn> is a held-out slice used <em>during</em> development to compare candidate models and tune settings — the mock exams. And the <dfn>test set</dfn> is the sealed paper: locked away and touched exactly once, at the end, to produce the honest number you report.</p>
+      <p>Walk through one model's schooling:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="All the data">
+          <h3>1. Start with everything you know the answer to</h3>
+          <div class="diagram">
+            <div class="d-box hot">Labelled data<small>10,000 past transactions, each marked fraud / legit</small></div>
+          </div>
+          <p class="step-cap">These labels are gold — a human (or hard experience) confirmed each answer, and every number in this chapter is only as trustworthy as they are.</p>
+        </div>
+        <div class="step" data-title="The split">
+          <h3>2. Split it before anyone trains anything</h3>
+          <div class="diagram">
+            <div class="d-box">Train<small>7,000 rows — the textbook</small></div>
+            <div class="d-box">Validation<small>1,500 rows — mock exams</small></div>
+            <div class="d-box hot">Test<small>1,500 rows — SEALED</small></div>
+          </div>
+          <p class="step-cap">Ratios vary (80/10/10 is common too); what never varies is that the test set is set aside first and nobody peeks. "Held-out data" means this.</p>
+        </div>
+        <div class="step" data-title="Training">
+          <h3>3. The model studies the training set</h3>
+          <div class="diagram">
+            <div class="d-box hot">Model<small>adjusts itself to fit the training rows</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box">Train<small>7,000 rows</small></div>
+            <div class="d-box dim">Test<small>still sealed</small></div>
+          </div>
+          <p class="step-cap">"Training" just means: nudge the model's internal numbers until its predictions on these rows stop improving. It has now seen these answers.</p>
+        </div>
+        <div class="step" data-title="Tuning">
+          <h3>4. Compare candidates on the validation set</h3>
+          <div class="diagram">
+            <div class="d-box">Model A<small>val score 82%</small></div>
+            <div class="d-box good">Model B<small>val score 91% — pick me</small></div>
+            <div class="d-box">Model C<small>val score 88%</small></div>
+          </div>
+          <p class="step-cap">Ten variants, different settings — which is best? Judge them on data none of them trained on. This is what "we tuned on validation" means.</p>
+        </div>
+        <div class="step" data-title="The final exam">
+          <h3>5. Unseal the test set — once</h3>
+          <div class="diagram">
+            <div class="d-box good">Model B<small>the chosen one</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Test set<small>opened at last: 89%</small></div>
+          </div>
+          <p class="step-cap">That 89% goes on the slide, because it was measured on questions the model never saw. A team that keeps re-tuning until the test score looks good has quietly turned the exam into another mock — and the reported number into a lie.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>For anything time-shaped — fraud, prices, demand — good teams split <em>by time</em>: train on January–September, test on October onwards. A random split would let the model train on Tuesday's data and be "tested" on the Monday before it, quietly leaking the future into the past.</p></div>
+
+      <h2>Overfitting and underfitting: the memoriser and the slacker</h2>
+      <p>Your niece has an official name in this world. <dfn>Overfitting</dfn> is when a model learns the training data too specifically — memorising quirks and noise instead of the underlying pattern — so it aces training and stumbles on anything new. Its opposite, <dfn>underfitting</dfn>, is the slacker: a model too simple (or trained too little) to capture the pattern at all, so it does badly everywhere. Between them sits the goal, <dfn>generalisation</dfn> — performance that carries over to unseen data. Generalisation is the entire game; everything else in this chapter is bookkeeping in its service.</p>
+      <p>Here is the beautiful part: you do not need to understand a model's internals to diagnose overfitting. You only need two numbers, and the gap between them.</p>
+
+      <div data-bars data-title="One model, three fits — accuracy on seen vs unseen data (illustrative numbers)" data-unit="% accuracy" data-note="The overfitting signature is the gap: brilliant on the data it studied, mediocre on data it has never seen.">
+        <div class="bar" data-label="Underfit — training data" data-value="61"></div>
+        <div class="bar" data-label="Underfit — test data" data-value="59"></div>
+        <div class="bar" data-label="Good fit — training data" data-value="88"></div>
+        <div class="bar" data-label="Good fit — test data" data-value="85"></div>
+        <div class="bar" data-label="Overfit — training data" data-value="99"></div>
+        <div class="bar" data-label="Overfit — test data" data-value="62"></div>
+      </div>
+
+      <p>So when a colleague says "training accuracy is 99 but test is 62", you can reply "so it's overfitting" and be exactly right. Bigger, fancier models have more room to memorise, which is why data scientists fight back with more data, simpler models, and <dfn>regularisation</dfn> — deliberate constraints that make memorising harder than actually learning.</p>
+
+      <h2>Cross-validation: rotating the mock papers</h2>
+      <p>One held-out slice gives one estimate — and a single slice can be lucky or unlucky, especially when data is scarce. <dfn>Cross-validation</dfn> fixes this by rotation: cut the data into, say, five equal folds and train five times, each time holding out a different fold as the exam. Every row gets one turn at being "unseen"; averaging the five scores gives a far steadier estimate, plus a spread that shows how much the score wobbles.</p>
+      <p>So when a colleague reports "5-fold CV, 87 plus or minus 2", translate: <em>we ran the exam five times with rotated papers; the model scores about 87, consistently</em>. The "plus or minus" matters — a model scoring 87, 88, 86, 87, 87 is a very different beast from one lurching between 99 and 68 on its way to the same average.</p>
+
+      <h2>Precision vs recall: a day at the fraud desk</h2>
+      <p>Accuracy has a dirty secret, and fraud is the cleanest place to see it. Suppose 1,000 payments flow through today and 10 are fraudulent — a 1% <dfn>base rate</dfn>, the background frequency of the thing you are hunting. The laziest possible "model" — predict <em>legit</em> for everything — is 99% accurate and catches zero fraud. On imbalanced problems, accuracy flatters the do-nothing strategy, which is why fraud teams barely mention it.</p>
+      <p>Instead they count four outcomes. Say the model flags 20 payments, and 8 really are fraud:</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>Actually fraud (10)</th><th>Actually legit (990)</th></tr>
+        <tr><td><strong>Flagged</strong></td><td>8 — true positives (caught)</td><td>12 — false positives (false alarms)</td></tr>
+        <tr><td><strong>Not flagged</strong></td><td>2 — false negatives (slipped through)</td><td>978 — true negatives (correctly ignored)</td></tr>
+      </table></div>
+
+      <p>That 2-by-2 grid is the <dfn>confusion matrix</dfn> — hits, false alarms, misses, correct passes. From it come the two words you will hear in every review from now on:</p>
+      <p><dfn>Precision</dfn> asks: <em>of everything we flagged, how much was real?</em> Here, 8 of 20 — 40%. It measures how clean the alarms are; low precision means the review team drowns in false alarms and starts ignoring the model. <dfn>Recall</dfn> asks: <em>of everything real, how much did we flag?</em> Here, 8 of 10 — 80%. It measures how much the net actually catches; low recall means fraud walks out undetected.</p>
+      <p>And here is the tension that makes this vocabulary matter: you can almost always buy more of one by giving up the other. The model does not really say "fraud" or "legit" — it produces a risk score, and a <dfn>threshold</dfn> decides where suspicion begins. Lower it and you flag more: recall rises, precision falls. Raise it: cleaner alarms, more fraud slips through. Choosing the threshold is a <em>business</em> decision dressed as a technical one — does a missed fraud or an annoyed customer cost you more? Run it yourself:</p>
+
+      <div class="pyrun" data-title="The fraud desk — move the threshold, watch the trade-off">
+<textarea class="py-src" spellcheck="false">
+import random
+random.seed(42)
+
+# One day at a payments company: 1,000 transactions.
+# 990 honest customers, 10 frauds. The "model" gives each a
+# risk score between roughly 0 and 1 (frauds tend higher).
+transactions = []
+for _ in range(990):
+    transactions.append(("legit", random.gauss(0.20, 0.12)))
+for _ in range(10):
+    transactions.append(("fraud", random.gauss(0.75, 0.15)))
+
+def review_at(threshold):
+    tp = fp = fn = 0
+    for kind, score in transactions:
+        flagged = score &gt;= threshold
+        if flagged and kind == "fraud":
+            tp += 1          # caught a real fraud
+        elif flagged:
+            fp += 1          # false alarm on a good customer
+        elif kind == "fraud":
+            fn += 1          # a fraud slipped through
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 0.0
+    if precision + recall:
+        f1 = 2 * precision * recall / (precision + recall)
+    return tp + fp, tp, precision, recall, f1
+
+print("threshold  flagged  caught  precision  recall    F1")
+for threshold in (0.30, 0.50, 0.70, 0.90):
+    flagged, caught, p, r, f1 = review_at(threshold)
+    print(f"   {threshold:.2f}     {flagged:4}    {caught:2}/10"
+          f"    {p:6.0%}   {r:5.0%}   {f1:.2f}")
+
+print()
+print("Lower threshold: catch more fraud (recall up), but the")
+print("review team drowns in false alarms (precision down).")
+print("Higher threshold: clean alerts, more fraud walks free.")
+print("Add your own threshold to the loop, e.g. 0.60.")
+</textarea>
+      </div>
+
+      <p>The simulation is nothing beyond week-two Python — a list of tuples from <a href="ch004-collections.html">the collections chapter</a>, printed with <a href="ch003-strings-and-fstrings.html">f-string formatting</a>. The ideas carry the weight, not the syntax.</p>
+      <p>Because precision and recall pull against each other, teams often want one combined number. <dfn>F1</dfn> is that number: the harmonic mean of precision and recall. "Harmonic" is the key word — unlike a plain average, it collapses towards the weaker of the two, so precision 100% with recall 2% earns an F1 near 0.04, not a flattering 51%. F1 is only high when <em>both</em> are. A decent single dial — but never let it hide the two numbers underneath, because the costs of false alarms and misses are rarely symmetric, and F1 pretends they are.</p>
+
+      <h2>AUC: judging the ranker, not the threshold</h2>
+      <p>Every metric so far depended on where you set the threshold. <dfn>AUC</dfn> (area under the ROC curve) deliberately does not. Its interpretation is wonderfully plain: <em>pick one random fraud and one random legit transaction — AUC is the probability the model scores the fraud higher.</em> A coin-toss model gets 0.5; a perfect ranker gets 1.0.</p>
+      <p>So AUC measures the quality of the <em>ranking</em>, across all possible thresholds at once. That makes it ideal for comparing candidate models before a threshold is chosen — and slightly dangerous on a slide, because a gorgeous AUC says nothing about the operating point you actually ship. When AUC appears in a review, the follow-up writes itself: "lovely — and at the threshold we deploy, what are precision and recall?"</p>
+
+      <h2>Calibration: when 90% should mean 90%</h2>
+      <p>One more property, subtler and often forgotten: are the model's probabilities <em>honest</em>? A model is well <dfn>calibrated</dfn> when, across all the cases where it says "90% likely fraud", roughly 90% really are fraud. Think of a weather forecaster who says "80% chance of rain" on 100 different days: trustworthy if it rained on about 80 of them, whatever any single day did.</p>
+      <p>Calibration is separate from ranking. A model can have superb AUC while its numbers are fantasy — saying "99%" when it should say "60%". Harmless if scores are only ever compared against a threshold; disastrous the moment anyone treats them as real probabilities, multiplying by transaction value to estimate expected loss or feeding a downstream system that trusts the number. If people will <em>read</em> the probability rather than merely sort by it, ask whether it has been calibrated.</p>
+
+      <h2>Drift: the world moves, the jar doesn't</h2>
+      <p>Now for the vocabulary that earns its keep <em>after</em> launch. The model you unpickled from its <a href="ch026-pkl-files.html">PKL jar</a> is frozen — a snapshot of the months it trained on. The world it operates in is not. As the gap between the two grows, performance rots quietly; data scientists call the rot <dfn>drift</dfn>.</p>
+      <p>It comes in two flavours worth distinguishing in a meeting. <dfn>Data drift</dfn> means the <em>inputs</em> have changed shape since training — a new payment method launches, a marketing push brings customers from a new region. The model is being asked questions from a syllabus it never studied. <dfn>Concept drift</dfn> is sneakier: the inputs look the same, but the <em>relationship between inputs and the answer</em> has changed. Fraudsters are the classic case — they study what gets blocked and adapt, so January's tell-tale patterns mean nothing by June. Data drift is the exam changing subjects; concept drift is the answer key being rewritten.</p>
+      <p>Neither announces itself with an error message. The model keeps returning confident scores; a <a href="ch009-errors-and-tracebacks.html">traceback</a> would almost be kinder. The only defence is <dfn>monitoring</dfn>: dashboards comparing today's input and score distributions against training-time baselines, and — once true labels arrive weeks later, when chargebacks land — tracking live precision and recall. Mature teams define retraining triggers in advance instead of waiting for a bad quarter to reveal the rot.</p>
+
+      <h2>How to ask smart questions in a model review</h2>
+      <p>You now own the vocabulary; here is how it converts into a seat at the table. Most model reviews walk through the same five slides, and each has a question that marks you as someone worth inviting back:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Accuracy slide">
+          <h3>Slide: "Accuracy is 99.2%"</h3>
+          <div class="diagram">
+            <div class="d-box">Slide<small>"Accuracy: 99.2%"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">You<small>"What's the base rate — and what would always-predicting-no score?"</small></div>
+          </div>
+          <p class="step-cap">With 1% fraud, always-predicting-no scores 99% — so 99.2% may be barely better than a doorstop. A <dfn>baseline</dfn> is the simplest strategy a model must beat; every headline metric needs one.</p>
+        </div>
+        <div class="step" data-title="Split slide">
+          <h3>Slide: "Evaluated on 20% held-out data"</h3>
+          <div class="diagram">
+            <div class="d-box">Slide<small>"80/20 split"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">You<small>"Random split, or by time? Was the test set touched during tuning?"</small></div>
+          </div>
+          <p class="step-cap">A random split on a time-shaped problem leaks the future into training; a test set consulted repeatedly has become a mock exam. Either silently inflates the reported score.</p>
+        </div>
+        <div class="step" data-title="Precision slide">
+          <h3>Slide: "Precision is 90%"</h3>
+          <div class="diagram">
+            <div class="d-box">Slide<small>"Precision: 90%"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">You<small>"At which threshold — and what's recall there?"</small></div>
+          </div>
+          <p class="step-cap">One of the pair alone is meaningless: 90% precision at 5% recall is a net that catches almost nothing, immaculately. Ask for both at the shipping threshold — and who bears the cost of each kind of error.</p>
+        </div>
+        <div class="step" data-title="AUC slide">
+          <h3>Slide: "AUC is 0.97"</h3>
+          <div class="diagram">
+            <div class="d-box">Slide<small>"AUC: 0.97"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">You<small>"Great ranking. Are the probabilities calibrated, and what operating point ships?"</small></div>
+          </div>
+          <p class="step-cap">AUC praises the ranking across all thresholds and says nothing about the one you will deploy — or whether "0.93 risk" means anything as a number. Ranking, threshold, calibration: three separate claims.</p>
+        </div>
+        <div class="step" data-title="Deploy slide">
+          <h3>Slide: "Ready to deploy"</h3>
+          <div class="diagram">
+            <div class="d-box">Slide<small>"Ship it"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">You<small>"How will we notice drift — and what triggers a retrain?"</small></div>
+          </div>
+          <p class="step-cap">Ask what is monitored (input and score distributions, live metrics once labels arrive), who gets paged, and what degradation triggers retraining. Teams with crisp answers here are the ones whose models still work in a year.</p>
+        </div>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>None of these questions requires you to have trained anything. They are all one shape: <em>"this number was measured under certain conditions — do those conditions match production?"</em> That is an operator's question, and you have asked it about deployments for years. You are not visiting this world; you live next door.</p></div>
+
+      <h2>The glossary, one card at a time</h2>
+      <p>Everything above, compressed into a revision deck. When every back feels obvious, you are meeting-ready:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">training set</span><span class="flip-back">The data the model learns from — its textbook and homework. Usually the largest share of the split.</span></button>
+        <button class="flip" type="button"><span class="flip-front">validation set</span><span class="flip-back">Held-out data used during development to compare model variants and tune settings. The mock exams.</span></button>
+        <button class="flip" type="button"><span class="flip-front">test set</span><span class="flip-back">Sealed data touched once, at the end, to produce the honest number you report. The real exam.</span></button>
+        <button class="flip" type="button"><span class="flip-front">overfitting</span><span class="flip-back">The model memorised the training data instead of learning the pattern. Signature: brilliant on train, poor on test.</span></button>
+        <button class="flip" type="button"><span class="flip-front">underfitting</span><span class="flip-back">The model is too simple to capture the pattern — bad on training AND test data. The slacker, not the memoriser.</span></button>
+        <button class="flip" type="button"><span class="flip-front">generalisation</span><span class="flip-back">Performance that carries over to data the model has never seen. The entire point of everything on this page.</span></button>
+        <button class="flip" type="button"><span class="flip-front">cross-validation</span><span class="flip-back">Rotate which slice is held out (k folds), train k times, average the scores. A steadier estimate plus a spread.</span></button>
+        <button class="flip" type="button"><span class="flip-front">confusion matrix</span><span class="flip-back">The 2-by-2 count of hits (TP), false alarms (FP), misses (FN), and correct passes (TN).</span></button>
+        <button class="flip" type="button"><span class="flip-front">precision</span><span class="flip-back">Of everything the model flagged, how much was real? Measures how clean the alarms are.</span></button>
+        <button class="flip" type="button"><span class="flip-front">recall</span><span class="flip-back">Of everything real, how much did the model flag? Measures how much the net actually catches.</span></button>
+        <button class="flip" type="button"><span class="flip-front">threshold</span><span class="flip-back">The score cut-off that turns risk scores into decisions. Moving it trades precision against recall — a business choice.</span></button>
+        <button class="flip" type="button"><span class="flip-front">F1</span><span class="flip-back">Harmonic mean of precision and recall — collapses towards the weaker one, so it is only high when both are.</span></button>
+        <button class="flip" type="button"><span class="flip-front">AUC</span><span class="flip-back">The probability a random positive scores above a random negative. Ranking quality across all thresholds; 0.5 is a coin toss.</span></button>
+        <button class="flip" type="button"><span class="flip-front">calibration</span><span class="flip-back">When the model says 90%, it is right about 90% of the time. Honest probabilities, separate from good ranking.</span></button>
+        <button class="flip" type="button"><span class="flip-front">base rate</span><span class="flip-back">How common the thing is at all (1% fraud). The context that decides whether any metric is impressive.</span></button>
+        <button class="flip" type="button"><span class="flip-front">baseline</span><span class="flip-back">The simplest strategy to beat — always predict "no", or use last month's value. A model is only good relative to one.</span></button>
+        <button class="flip" type="button"><span class="flip-front">data drift</span><span class="flip-back">The inputs change shape after launch — new customers, new payment types, changed fields. New syllabus, old student.</span></button>
+        <button class="flip" type="button"><span class="flip-front">concept drift</span><span class="flip-back">The input-to-answer relationship itself changes — fraudsters adapt. Same syllabus, rewritten answer key.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This vocabulary is everywhere once you can hear it. A merge request adding a model carries an evaluation table — precision, recall, F1, AUC — often pasted straight from scikit-learn's <code>classification_report</code>. Experiment trackers like MLflow plot train-vs-validation curves whose diverging lines are overfitting drawn as a picture. Monitoring dashboards alert on distribution shift (you may see "PSI", population stability index, as the drift alarm). And the same words follow you into LLM land: teams hold out evaluation prompts so prompt-tweaks are not graded on questions they were tuned on, worry about leaked benchmarks — overfitting's twin — and track answer-quality drift after every model upgrade. Fifteen words, an entire industry.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Why do data scientists lock away a test set before training even begins?</p>
+          <div class="q-opts">
+            <button data-opt="a">To save compute — training on less data is faster</button>
+            <button data-opt="b">Because the model would crash if it saw all the data at once</button>
+            <button data-opt="c">Because a score on data the model has seen proves memorisation, not skill — only unseen data gives an honest measure</button>
+          </div>
+          <p class="q-explain">A model is a spectacular memoriser, so its score on its own training data is nearly meaningless. The sealed test set is the exam nobody practised on — the only score that counts.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">2. Training accuracy 99%, test accuracy 62%. What is the diagnosis?</p>
+          <div class="q-opts">
+            <button data-opt="a">Overfitting — it memorised the training data and fails to generalise</button>
+            <button data-opt="b">Underfitting — the model is too simple</button>
+            <button data-opt="c">Data drift — the world changed after launch</button>
+          </div>
+          <p class="q-explain">The big train-to-test gap is the overfitting signature. Underfit models are bad on both; drift is a post-launch disease, and this model has not shipped yet.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. A missed fraud costs your bank far more than a false alarm. Which metric do you push hardest to raise?</p>
+          <div class="q-opts">
+            <button data-opt="a">Precision — cleaner alerts matter most</button>
+            <button data-opt="b">Recall — of all real fraud, catch as much as possible, even at the price of more false alarms</button>
+            <button data-opt="c">Accuracy — the overall percentage correct</button>
+          </div>
+          <p class="q-explain">Recall measures how much of the real fraud the net catches. When misses are the expensive error, you lower the threshold and deliberately trade precision away for recall.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. A model has AUC 0.97, yet when it says "90% fraud risk" only half of those cases are fraud. What is missing?</p>
+          <div class="q-opts">
+            <button data-opt="a">Recall — the model misses too much fraud</button>
+            <button data-opt="b">Calibration — it ranks well, but its probabilities are not honest numbers</button>
+            <button data-opt="c">Nothing — AUC of 0.97 means the probabilities must be right</button>
+          </div>
+          <p class="q-explain">AUC only rewards putting positives above negatives — it says nothing about whether the scores mean what they claim. Calibration is the separate, fixable property.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A fraud model performed beautifully at launch. Six months later it misses most new fraud, though the code and the model file are byte-for-byte unchanged. Most likely cause?</p>
+          <div class="q-opts">
+            <button data-opt="a">The PKL file slowly corrupted on disk</button>
+            <button data-opt="b">The test set was too large</button>
+            <button data-opt="c">Drift — fraud patterns changed while the frozen model kept looking for the old ones</button>
+          </div>
+          <p class="q-explain">The model is a snapshot of the past; fraudsters adapt (concept drift) and the customer base shifts (data drift). Nothing "breaks", no error is raised — exactly why monitoring and retraining triggers exist.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>The only score that counts is the score on unseen data: train to learn, validate to tune, test once to report — a test set that got peeked at is just another mock exam.</li>
+          <li>Overfitting is memorisation, diagnosed from two numbers: a big gap between training and test performance. Cross-validation rotates the held-out slice for a steadier measurement.</li>
+          <li>On imbalanced problems, accuracy flatters the do-nothing baseline. Ask for precision (how clean the alarms are) and recall (how much of the real thing is caught) at the threshold that ships.</li>
+          <li>F1 squeezes precision and recall into one honest-ish number; AUC scores the ranking across all thresholds; calibration asks whether "90%" is right 90% of the time. Three different claims — keep them separate.</li>
+          <li>A deployed model is frozen while the world moves: data drift changes the questions, concept drift rewrites the answer key, and only monitoring plus planned retraining catches the silent rot.</li>
+          <li>Every smart review question has one shape: "this number was measured under certain conditions — do they match production?" You have asked that your whole career; now ask it here.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

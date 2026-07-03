@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Git: the time machine — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch096">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>Git: the time machine</h1>
+        <p class="ch-tagline">Commits are photographs, branches are sticky notes, HEAD is a you-are-here pin. Once you see the graph underneath, eight commands cover 95% of your working life — and none of them will ever scare you again.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 97 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>An architect in Pune has a ritual. Every evening she photographs her entire drafting table — every sheet, exactly as it lies — prints the photo, writes <em>what changed and why</em> on the back, and clips it to yesterday's photo. Month after month, a chain of photographs grows on the studio wall. When a client sighs, "the balcony was better two weeks ago," nobody panics: walk back along the chain, find that evening's photo, and there is the balcony — exactly as it was, recoverable.</p>
+        <p>Some photos wear sticky notes: <em>approved design</em> flags one, <em>monsoon experiment</em> another. The notes copy nothing — they are labels that can be peeled off and moved. A single red clothespin marked <em>you are here</em> clips onto whichever note the team is working from today. And before each photograph she uses one more trick: a wooden tray. Only the sheets she deliberately places on the tray get photographed tonight; half-finished scribbles stay off it.</p>
+        <p>That studio is git. The photos are commits, the chain is the graph, the sticky notes are branches, the clothespin is HEAD, and the tray is the staging area. This chapter gives each its real name.</p>
+      </section>
+
+      <h2>You already drive git — now open the hood</h2>
+      <p>Back in <a href="ch021-just-enough-git.html">just enough git</a> you learned the survival kit: git is a save-point system for folders, <code>git pull</code> brings down teammates' work, <code>git add</code> and <code>git commit</code> record yours, <code>git push</code> shares it, and the golden rule is to commit early and often because a committed change is nearly impossible to lose. That kit got you through cloning repos and shipping small fixes. What it deliberately skipped was the <em>model</em> — the picture in a senior engineer's head that makes every git message self-explanatory instead of terrifying.</p>
+      <p>This chapter installs that picture: snapshots, movable labels, one pin. Everything git ever prints — "detached HEAD", "ahead of origin/main by 2 commits", "changes not staged for commit" — becomes a plain sentence once you hold it. In this Act you ship alongside data scientists as an equal; this chapter makes their git vocabulary your native language too.</p>
+
+      <h2>A commit is a photograph, not a list of changes</h2>
+      <p>The most common misconception about git is that a <dfn>commit</dfn> stores "the lines you changed". It does not. A commit is a <em>complete snapshot of every file in the project</em> at one moment — the whole drafting table, not just the sheet you touched. When git shows you a diff, it computes the difference between two photographs on demand.</p>
+      <p>Each commit also records one thing about the past: the identity of its <em>parent</em> — the commit just before it. Photo clipped to photo. Follow the parent links backwards and you can reconstruct any moment in the project's life. That is the whole time machine: nothing is overwritten; new photographs are only ever added to the front of the chain.</p>
+      <p>Every commit is named by a <dfn>hash</dfn> — a 40-character fingerprint (like <code>3f2a1c9…</code>) computed from the snapshot's content, message, author, and parent. Change any of those and the fingerprint changes, which is why a commit id is proof of exactly what it contains. Humans use the first seven characters; that is what you see all over GitLab.</p>
+      <p>A chain that only grows, where each link points to its parent, and which can fork and later rejoin — mathematicians call that a <em>graph</em>, and "the commit graph" is a phrase engineers use daily. Linear history is just the simplest graph. The next chapter, <em>Feature branches, release branches</em>, is entirely about what happens when it forks.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>"A full snapshot per commit" sounds wasteful — it is not. Git stores each file's content once, and every snapshot containing an unchanged file points at the same stored copy. You get the mental simplicity of photographs at the storage price of diffs.</p></div>
+
+      <h2>Branches are sticky notes, not copies</h2>
+      <p>Ask five people what a <dfn>branch</dfn> is and you will hear "a copy of the codebase". Wrong — and expensively wrong, because it makes branches feel heavy and scary. A branch is a <em>movable name-tag pointing at exactly one commit</em> — literally a tiny text file inside the repository whose entire content is one commit id. Creating a branch copies nothing: git writes ~41 bytes and is done, even in a ten-gigabyte repository.</p>
+      <p>The tag has one behaviour that makes everything work: <strong>when you commit while "on" a branch, that branch's tag slides forward to the new commit automatically.</strong> The sticky note rides the front of the chain. <code>main</code> is not special technology — just the note everyone agrees to treat as the trunk. Your <code>fix-totals</code> branch is a note of equal rank.</p>
+
+      <h2>HEAD — the you-are-here pin</h2>
+      <p>So which branch are you "on"? That is <dfn>HEAD</dfn>: git's single you-are-here pin. Normally HEAD points at a branch name, and the branch points at a commit — pin on note, note on photo. <code>git switch fix-totals</code> does two things: moves the pin to the <code>fix-totals</code> note, and rearranges your working folder to match the photo that note points at. That second part is the time-machine lever — your actual files on disk change to match the snapshot.</p>
+      <p>Occasionally the pin gets clipped straight onto a photo with no note in between — a state git calls <dfn>detached HEAD</dfn>: "you are viewing a specific commit, not riding any branch". It sounds like an injury; it is sightseeing. CI systems do it on purpose for every pipeline run, because a build should test one exact snapshot. One caution: commits made while detached hang on no note, so create a branch first if you intend to keep them.</p>
+
+      <p>Four zones, one pin, and a tray. Flip these until each one feels obvious:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">commit</span><span class="flip-back">A full snapshot of the whole project plus a pointer to its parent commit. A photograph clipped to the previous photograph.</span></button>
+        <button class="flip" type="button"><span class="flip-front">branch</span><span class="flip-back">A movable name-tag pointing at one commit. Slides forward automatically when you commit on it. Costs ~41 bytes to create.</span></button>
+        <button class="flip" type="button"><span class="flip-front">HEAD</span><span class="flip-back">The you-are-here pin. Usually points at a branch (which points at a commit). Determines where your next commit lands.</span></button>
+        <button class="flip" type="button"><span class="flip-front">working directory</span><span class="flip-back">The real files on your disk — the live drafting table. The only zone your editor ever touches.</span></button>
+        <button class="flip" type="button"><span class="flip-front">staging area</span><span class="flip-back">The tray. A holding zone where you compose the next snapshot, file by file, before photographing it with commit. Also called the index.</span></button>
+        <button class="flip" type="button"><span class="flip-front">origin</span><span class="flip-back">The default nickname for the remote — the shared copy of the repository on a server such as GitLab. push sends your photos there; pull brings down everyone else's.</span></button>
+      </div>
+
+      <h2>The staging area — the tray before the photograph</h2>
+      <p>Between your editor and the photo album sits git's most misunderstood feature: the <dfn>staging area</dfn> (older docs say <em>index</em>) — a holding zone where you assemble exactly what the next commit will contain. <code>git add totals.py</code> saves nothing permanently; it places that file's current content on the tray. <code>git commit</code> photographs <em>the tray</em>, not your folder.</p>
+      <p>Why the extra step? Deliberate composition. By afternoon your folder holds a genuine bug-fix, a half-finished experiment, and a forgotten debug print. The tray lets you stage only the bug-fix and commit it as one clean, reviewable unit, leaving the mess out of history — stage the fixed pipeline script, not the scratch notebook full of exploration. Three zones, then, and every file wanders between them: the <dfn>working directory</dfn> (your real files on disk), the staging area (the tray), and the <dfn>repository</dfn> (the album of committed snapshots, living inside the hidden <code>.git</code> folder).</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p><code>git add -p</code> ("patch mode") walks you through your edits chunk by chunk, asking yes/no for each — you can stage half a file. It is the fastest route to clean, single-purpose commits, and reviewers will quietly love you for it.</p></div>
+
+      <h2>Watch the graph grow</h2>
+      <p>Here is one ordinary working morning, photographed. Step through it and watch which things move — and, just as important, which things do not.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Clone">
+          <h3>1. You clone the repository</h3>
+          <div class="diagram">
+            <div class="d-box dim">A<small>snapshot</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">B<small>snapshot</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">C<small>latest snapshot</small></div>
+            <div class="d-col">
+              <div class="d-box hot">main<small>sticky note on C</small></div>
+              <div class="d-box hot">HEAD<small>pin on main</small></div>
+            </div>
+          </div>
+          <p class="step-cap"><code>git clone</code> copies the entire album — every commit ever made — onto your laptop, then pins HEAD to <code>main</code>. We draw time flowing right, but each photo's stored link points left, at its parent. History is fully local: <code>git log</code> works on a plane.</p>
+        </div>
+        <div class="step" data-title="Edit">
+          <h3>2. You edit a file</h3>
+          <div class="diagram">
+            <div class="d-box dim">A</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">B</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">C<small>main · HEAD</small></div>
+            <div class="d-box hot">working directory<small>totals.py modified</small></div>
+          </div>
+          <p class="step-cap">You fix a rounding bug in <code>totals.py</code>. Notice: the graph is untouched. Edits float in the working directory, unphotographed and unprotected. <code>git status</code> lists the file as <em>modified</em>, in red.</p>
+        </div>
+        <div class="step" data-title="Add">
+          <h3>3. git add — onto the tray</h3>
+          <div class="diagram">
+            <div class="d-box dim">C<small>main · HEAD</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">staging area<small>totals.py (as it is right now)</small></div>
+            <div class="d-box dim">working directory<small>everything else stays put</small></div>
+          </div>
+          <p class="step-cap"><code>git add totals.py</code> places the file's <em>current</em> content on the tray. Still no commit — but <code>git status</code> now shows it in green under "changes to be committed". Edit the file again afterwards and the tray keeps the older version until you re-add.</p>
+        </div>
+        <div class="step" data-title="Commit">
+          <h3>4. git commit — the photograph</h3>
+          <div class="diagram">
+            <div class="d-box dim">B</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">C</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">D<small>new snapshot</small></div>
+            <div class="d-col">
+              <div class="d-box good">main<small>slid forward to D</small></div>
+              <div class="d-box good">HEAD<small>still pinned to main</small></div>
+            </div>
+          </div>
+          <p class="step-cap"><code>git commit</code> photographs the tray into new commit D, whose parent is C. The <code>main</code> note slides forward automatically, and HEAD rides along because it points at the note, not the photo. The graph just grew by one.</p>
+        </div>
+        <div class="step" data-title="Branch">
+          <h3>5. git switch -c experiment — a new sticky note</h3>
+          <div class="diagram">
+            <div class="d-box dim">C</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">D</div>
+            <div class="d-col">
+              <div class="d-box dim">main<small>stays on D</small></div>
+              <div class="d-box hot">experiment<small>new note, also on D</small></div>
+              <div class="d-box hot">HEAD<small>pin moved to experiment</small></div>
+            </div>
+          </div>
+          <p class="step-cap"><code>git switch -c experiment</code> creates a branch and moves onto it in one stroke. Nothing was copied — two notes now sit on the same photo, and only the pin moved. Your files on disk have not changed by a single byte.</p>
+        </div>
+        <div class="step" data-title="Diverge">
+          <h3>6. Commit on the branch — the notes part ways</h3>
+          <div class="diagram">
+            <div class="d-box dim">C</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">D<small>main stays here</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">E<small>new snapshot</small></div>
+            <div class="d-col">
+              <div class="d-box good">experiment<small>slid to E</small></div>
+              <div class="d-box good">HEAD<small>riding experiment</small></div>
+            </div>
+          </div>
+          <p class="step-cap">You commit a bold redesign as E. Only the note you are riding moves: <code>experiment</code> slides to E; <code>main</code> stays safely on D. Switch back to <code>main</code> and your folder snaps back to D's snapshot — the redesign vanishes from disk, kept warm on its own note. If a teammate now commits to <code>main</code>, the chain forks: that fork, and the merge that heals it, is the next chapter.</p>
+        </div>
+        <div class="step" data-title="Push">
+          <h3>7. git push — publish the photos</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">your laptop<small>C &#8594; D &#8594; E · experiment</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">origin (GitLab)<small>now also has D, E and the note</small></div>
+            </div>
+          </div>
+          <p class="step-cap"><code>git push -u origin experiment</code> copies your new photos and the sticky note to the shared server — the remote your repo nicknames <dfn>origin</dfn>. Until now everything lived only on your laptop. <code>git pull</code> is the same river flowing the other way: fetch others' new photos, then merge them into your branch.</p>
+        </div>
+      </div>
+
+      <h2>The daily eight</h2>
+      <p>Git has well over a hundred subcommands. Working engineers live on eight moves — a couple come as pairs — and reach for the rest maybe once a month. Here they are, mapped onto the studio:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Move</th><th>Command</th><th>What it really does</th></tr>
+        <tr><td>Copy the album</td><td><code>git clone &lt;url&gt;</code></td><td>Downloads the entire history — every photo, every note — and pins HEAD to the default branch. Done once per project.</td></tr>
+        <tr><td>Where am I?</td><td><code>git status</code></td><td>Reads the pin, the tray, and the table: current branch, staged files (green), unstaged edits (red). Free, safe, run it constantly.</td></tr>
+        <tr><td>Onto the tray</td><td><code>git add &lt;file&gt;</code></td><td>Stages a file's current content for the next commit. Composition, not saving.</td></tr>
+        <tr><td>Photograph</td><td><code>git commit -m "…"</code></td><td>Snapshots the tray into a new commit; the current branch's note slides forward.</td></tr>
+        <tr><td>Get their photos</td><td><code>git pull</code></td><td>Fetches new commits from origin, then (by default) merges them into your branch. Do it before you start work.</td></tr>
+        <tr><td>Publish yours</td><td><code>git push</code></td><td>Copies your new commits and branch note up to origin so reviewers and pipelines can see them.</td></tr>
+        <tr><td>Name and move</td><td><code>git branch</code> / <code>git switch</code></td><td><code>branch</code> lists or creates sticky notes; <code>switch</code> moves the pin (and your files) to one. <code>switch -c</code> does both at once.</td></tr>
+        <tr><td>Look before you leap</td><td><code>git log</code> / <code>git diff</code></td><td><code>log</code> walks the photo chain; <code>diff</code> compares any two zones or photos line by line. Your rear-view mirror and magnifying glass.</td></tr>
+      </table></div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Older tutorials — and most colleagues who learned before 2019 — say <code>git checkout</code> where this chapter says <code>git switch</code>. Checkout still works; it is one old command wearing three hats (switch branches, restore files, detach HEAD), which is why the clearer <code>switch</code> and <code>restore</code> were introduced. Read checkout in the wild without fear; type switch yourself.</p></div>
+
+      <p>Two of the eight deserve one more sentence. <code>git diff</code> with no arguments compares working directory against tray — "what have I not yet staged?" — while <code>git diff --staged</code> compares tray against last commit — "what am I about to photograph?". And the most useful log incantation in team life is <code>git log --oneline --graph --all</code>: one line per commit, drawn as the actual graph, all branches visible — the picture this chapter has been painting, on your own screen.</p>
+
+      <h2>A working session, annotated</h2>
+      <p>Here is the terminal transcript of the morning from the stepper — the exact keystrokes, in order. Click each line and make sure nothing in it is mysterious anymore.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">Tuesday, 9:40 am — one bug-fix, start to finish</div>
+        <div class="wl-line"><code>$ git status</code>
+          <div class="wl-note">The opening move of every session: which note is the pin on, and is the table clean? Answer: "On branch main, working tree clean." Safe to proceed.</div></div>
+        <div class="wl-line"><code>$ git pull</code>
+          <div class="wl-note">Bring down whatever teammates pushed overnight before building on stale photos. Two moves fused: fetch (download their commits) then merge (weave them into your branch).</div></div>
+        <div class="wl-line"><code>$ git switch -c fix-totals</code>
+          <div class="wl-note">New sticky note on today's latest commit, pin moved onto it, one stroke. Your work now lives on its own label and <code>main</code> stays pristine — etiquette the next chapter turns into a full workflow.</div></div>
+        <div class="wl-line"><code>  …edit totals.py in your editor…</code></div>
+        <div class="wl-line"><code>$ git diff</code>
+          <div class="wl-note">Line-by-line view of working directory versus last photo: removed lines prefixed <code>-</code>, added lines <code>+</code>. Reading your own diff before staging is the cheapest code review you will ever get.</div></div>
+        <div class="wl-line"><code>$ git add totals.py</code>
+          <div class="wl-note">Onto the tray. Only this file — the half-finished scratch notebook you also touched stays off tonight's photograph.</div></div>
+        <div class="wl-line"><code>$ git status</code>
+          <div class="wl-note">Trust but verify: <code>totals.py</code> now green under "changes to be committed", the notebook still red. The tray holds exactly what you intend.</div></div>
+        <div class="wl-line"><code>$ git commit -m "Fix rounding in quarterly totals"</code>
+          <div class="wl-note">The photograph. A new commit is born pointing at its parent, and the <code>fix-totals</code> note slides onto it. Message in the imperative — "Fix", not "Fixed" — finishing the sentence "this commit will…".</div></div>
+        <div class="wl-line"><code>$ git log --oneline --graph -3</code>
+          <div class="wl-note">A rear-view glance: your new fingerprint on top, decorated <code>(HEAD -&gt; fix-totals)</code>. That decoration is this whole chapter in five characters: pin, on note, on photo.</div></div>
+        <div class="wl-line"><code>$ git push -u origin fix-totals</code>
+          <div class="wl-note">Publish the note and its photos. The <code>-u</code> links your local branch to the remote one, so tomorrow a bare <code>git push</code> or <code>pull</code> knows where home is. GitLab replies with a link to open a merge request — your cue for the next chapter.</div></div>
+      </div>
+
+      <h2>Prove it to yourself: a toy git in forty lines</h2>
+      <p>Claims like "a branch is a 41-byte pointer" deserve proof. So let us build git's core model in pure Python: commits as <a href="ch004-collections.html">dicts</a> with parent pointers, branches as a name-to-id dict, HEAD as one variable. The toy is honest — real git adds compression, the tray, and networking, but the graph underneath is exactly this.</p>
+
+      <div class="pyrun" data-title="toy_git.py — the real model, minus the plumbing">
+<textarea class="py-src" spellcheck="false">
+import hashlib
+
+objects  = {}      # commit id -&gt; commit record   (the photo album)
+branches = {}      # branch name -&gt; commit id     (the sticky notes)
+HEAD     = "main"  # which note the pin is on     (you are here)
+branches["main"] = None
+
+def commit(message, files):
+    parent = branches[HEAD]
+    raw = repr((parent, message, sorted(files.items())))
+    cid = hashlib.sha1(raw.encode()).hexdigest()[:7]
+    objects[cid] = {"parent": parent, "message": message,
+                    "files": dict(files)}
+    branches[HEAD] = cid          # the sticky note slides forward
+    print(f"committed {cid}  ({message})")
+
+def branch(name):
+    branches[name] = branches[HEAD]   # a new note on the SAME photo
+    print(f"created branch '{name}' -- copied nothing, wrote one id")
+
+def switch(name):
+    global HEAD
+    HEAD = name
+    print(f"switched to '{name}'")
+
+def log():
+    print(f"history as seen from '{HEAD}':")
+    cid = branches[HEAD]
+    while cid is not None:            # walk the parent links backwards
+        c = objects[cid]
+        tags = ", ".join(n for n, v in branches.items() if v == cid)
+        mark = f"   [{tags}]" if tags else ""
+        print(f"  * {cid} {c['message']}{mark}")
+        cid = c["parent"]
+
+# ---- one working day --------------------------------------
+commit("first draft of report", {"report.md": "v1"})
+commit("add totals table", {"report.md": "v2", "totals.csv": "Q1,Q2"})
+
+branch("experiment")
+switch("experiment")
+commit("try a bolder layout",
+       {"report.md": "v3-bold", "totals.csv": "Q1,Q2"})
+
+print()
+log()                 # experiment sees all three commits
+print()
+switch("main")
+log()                 # main never saw the experiment
+</textarea>
+      </div>
+
+      <p>Read the output slowly. From <code>experiment</code>, the log walks three photos back; from <code>main</code>, only two — same album, different starting note. Nothing was copied when the branch was created; history is simply <em>whatever you can reach by following parent links from your note</em>. Now break things: commit the same message and files twice and compare the fingerprints (they differ — the parent changed). Or add a third branch, commit to it, and predict each log before running. When your predictions hit three for three, the model is yours.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The time machine protects <em>committed</em> work only. Edits in the working directory — unphotographed — are the one thing git can genuinely lose: switching branches can overwrite them, and a careless <code>git restore</code> discards them silently. Hence the discipline: commit early, commit often, push daily. Photos in the album are close to indestructible; sheets on the table are one gust from gone.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This vocabulary is everywhere once you can hear it. A GitLab merge request page is a branch comparison: "3 commits, 14 files changed" means three photos on the source note that the target note cannot yet reach. A pipeline log opening with "checking out a4f9c2e… you are in 'detached HEAD' state" is CI photographing one exact snapshot — deliberate, not broken. A data scientist's "pull main and re-run your notebook" means "get the new photos before comparing results". And "ahead of origin/main by 2 commits" in your terminal is geometry: your note has slid two photos past the server's copy. Push, and the notes align.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What does a git commit actually store?</p>
+          <div class="q-opts">
+            <button data-opt="a">A list of the lines you changed since the previous commit</button>
+            <button data-opt="b">A complete snapshot of the project plus a pointer to its parent commit</button>
+            <button data-opt="c">Only the files you edited, zipped and sent to the server</button>
+          </div>
+          <p class="q-explain">Commits are photographs of the whole project, each clipped to its parent. Diffs are computed between snapshots on demand, and clever storage deduplicates unchanged files so the album stays small.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Your repository is 10 GB. How expensive is <code>git branch idea</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">Very — it duplicates the working directory</button>
+            <button data-opt="b">Moderate — it copies the files changed on the current branch</button>
+            <button data-opt="c">Trivial — it writes a ~41-byte file containing one commit id</button>
+          </div>
+          <p class="q-explain">A branch is a movable name-tag pointing at one commit — nothing more. That is why engineers create branches for everything: the cost is a rounding error.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. HEAD points at <code>main</code>, and <code>main</code> points at commit C. You run <code>git commit</code>. What is true afterwards?</p>
+          <div class="q-opts">
+            <button data-opt="a">HEAD detaches and points at the new commit directly</button>
+            <button data-opt="b">A new commit D is created with parent C; <code>main</code> slides to D and HEAD rides along</button>
+            <button data-opt="c">Nothing moves until you run <code>git push</code></button>
+          </div>
+          <p class="q-explain">Committing on a branch always slides that branch's note to the new photo, and HEAD follows because it points at the note, not the photo. Push only affects the server's copy later.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. Why does the staging area exist at all — why not commit the working directory directly?</p>
+          <div class="q-opts">
+            <button data-opt="a">So you can compose exactly what the next commit contains, leaving unrelated edits out</button>
+            <button data-opt="b">To back files up in case your editor crashes</button>
+            <button data-opt="c">To compress files before uploading them to the server</button>
+          </div>
+          <p class="q-explain">The tray separates "everything I touched today" from "the one clean change I want in history". Stage the bug-fix, leave the scratch notebook behind, commit a reviewable unit.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. What does <code>git pull</code> actually do, by default?</p>
+          <div class="q-opts">
+            <button data-opt="a">Uploads your local commits to the shared server</button>
+            <button data-opt="b">Downloads the whole repository again from scratch</button>
+            <button data-opt="c">Fetches new commits from origin, then merges them into your current branch</button>
+          </div>
+          <p class="q-explain">Pull is two moves fused: fetch (download the others' new photos) then merge (weave them into your branch). Push is the same river flowing the other way — and clone is the once-per-project full copy.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A commit is a complete snapshot plus a pointer to its parent — photographs clipped into a chain, never a stored list of edits. The chain is the graph, and it only ever grows.</li>
+          <li>A branch is a movable name-tag on one commit — ~41 bytes, free to create — that slides forward automatically when you commit on it. <code>main</code> is convention, not technology.</li>
+          <li>HEAD is the single you-are-here pin: normally on a branch, occasionally clipped straight onto a commit ("detached HEAD" — sightseeing, not injury).</li>
+          <li>Files live in three zones — working directory, staging area, repository — and <code>git status</code> tells you where everything sits. Commit photographs the tray, not your folder.</li>
+          <li>Eight moves cover 95% of daily work: clone, status, add, commit, pull, push, branch/switch, log/diff. Everything else is monthly at most.</li>
+          <li>Committed work is nearly indestructible; uncommitted work is the only thing git can lose. Commit early, commit often, push daily.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

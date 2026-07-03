@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anthropic's playbook: workflows vs agents — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch049">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act V · Agents From Scratch</div>
+        <h1>Anthropic's playbook: workflows vs agents</h1>
+        <p class="ch-tagline">In late 2024 Anthropic published a short essay that quietly became the most-cited text in agent engineering. Its entire message fits in one sentence — use the simplest pattern that works — and it names the five patterns. This chapter decodes all of it.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 50 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>There is a tailoring shop near a busy market. At the front counter, an assistant handles alterations. She works from a laminated card: measure, pin, cut, stitch, press. Five steps, always in that order, and after each step she checks the work against the card before moving on. She finishes forty jobs a day, every one costed to the rupee, and if a customer ever complains, the owner can point at the card and say exactly what happened at step three.</p>
+        <p>In the back room sits the master tailor. He gets the jobs nobody can write a card for: <em>"My grandfather's wedding coat — make it wearable again."</em> He opens the lining, discovers what six decades did to the seams, and decides his next move based on what he just found. Nobody can predict how long he will take or what it will cost. But no laminated card could do what he does.</p>
+        <p>The owner's hiring rule is the whole chapter: <strong>never give a card job to the craftsman, and never give a mystery job to the card.</strong> The card is a workflow. The craftsman is an agent. Everything else is detail.</p>
+      </section>
+
+      <h2>The essay everyone cites</h2>
+      <p>Quick recap before the new material. In <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> you built an agent by hand: a model, a dict of tools, and a loop that runs until the model says it is done. In <a href="ch048-failure-modes.html">the last chapter</a> you saw what that freedom costs — loops that wander, tools misused, budgets burned. Which leaves an uncomfortable question hanging: if agents are this powerful <em>and</em> this failure-prone, when should you actually build one?</p>
+      <p>In December 2024, Anthropic answered with a short essay called <em>Building Effective Agents</em>, distilled from a year of watching real teams ship LLM systems across industries. It has been cited, screenshotted, and re-taught more than any other text in this field, and its central observation was almost embarrassing: <strong>the most successful teams were not using clever frameworks. They were using simple, composable patterns</strong> — and most of them were not building agents at all.</p>
+      <p>The essay's first move is to split all "agentic systems" into two families:</p>
+      <ul>
+        <li>A <dfn>workflow</dfn> is a system where LLM calls and tools are orchestrated through <em>predefined code paths</em> — your code decides the route, in advance, like the laminated card.</li>
+        <li>An <dfn>agent</dfn> is a system where the <em>model directs its own process</em> — it decides, at run time, which tool to use next based on what the last one returned, like the craftsman under the lining.</li>
+      </ul>
+      <p>Notice what the split is really about: <strong>who owns the control flow</strong>. Not intelligence, not tool count, not model size. If a human wrote the route in code, it is a workflow — no matter how many LLM calls sit inside it. If the model picks the route as it goes, it is an agent — even if it is fifty lines of Python, which, as you proved in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, is all it takes.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">workflow</span><span class="flip-back">LLM calls arranged along a route your code fixed in advance. Predictable, auditable, costable — and inflexible.</span></button>
+        <button class="flip" type="button"><span class="flip-front">agent</span><span class="flip-back">A model-directed loop: the LLM chooses each next step from what the environment just told it. Flexible — and unpredictable.</span></button>
+        <button class="flip" type="button"><span class="flip-front">augmented LLM</span><span class="flip-back">One model call enhanced with retrieval, tools, and memory. The single building block every pattern is made of.</span></button>
+        <button class="flip" type="button"><span class="flip-front">gate</span><span class="flip-back">A plain-code check between two LLM calls in a chain. If the intermediate output is bad, the run stops there instead of compounding the error.</span></button>
+        <button class="flip" type="button"><span class="flip-front">orchestrator</span><span class="flip-back">A central model that invents subtasks at run time, delegates them to worker calls, and stitches the results together.</span></button>
+        <button class="flip" type="button"><span class="flip-front">ACI</span><span class="flip-back">Agent-computer interface — the tool names, descriptions, and formats the model sees. The essay says to craft it as carefully as a human UI.</span></button>
+      </div>
+
+      <h2>The building block: the augmented LLM</h2>
+      <p>Before naming any pattern, the essay names the atom they are all made of. The <dfn>augmented LLM</dfn> is a single model call enhanced with the three augmentations you have already met: <a href="ch042-rag.html">retrieval</a> (look relevant documents up and put them in the prompt), <a href="ch035-tool-calling.html">tools</a> (let the call request real actions), and <a href="ch047-memory-and-context.html">memory</a> (carry the right history in, and useful facts out).</p>
+
+      <div class="diagram">
+        <div class="d-box">Input<small>the task</small></div>
+        <span class="d-arrow">&#8594;</span>
+        <div class="d-col">
+          <div class="d-box dim">Retrieval</div>
+          <div class="d-box hot">LLM<small>one call</small></div>
+          <div class="d-box dim">Tools · Memory</div>
+        </div>
+        <span class="d-arrow">&#8594;</span>
+        <div class="d-box">Output</div>
+      </div>
+
+      <p>Every pattern in this chapter — and honestly, every system in the rest of this course — is just augmented LLM calls arranged differently. A workflow arranges them along a fixed route. An agent puts one inside a loop and hands it the steering wheel. Hold that picture; it makes the next section feel less like five new things and more like five arrangements of one thing.</p>
+
+      <h2>The five workflow patterns, one tour</h2>
+      <p>Here are the five named patterns from the essay. Step through them; each one is a shape you have almost certainly operated in production without knowing its name.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Prompt chaining">
+          <h3>1. Prompt chaining — a fixed assembly line</h3>
+          <div class="diagram">
+            <div class="d-box">Input</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Call 1<small>outline</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Gate<small>plain code check</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Call 2<small>draft</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Output</div>
+          </div>
+          <p class="step-cap">Break the task into a fixed sequence of small calls, each consuming the previous call's output. Between calls, ordinary code can inspect the intermediate result — a gate — and stop the run early if it looks wrong. You trade a little latency for a lot of accuracy, because each call gets one easy job instead of one hard one. Classic uses: outline a document, check the outline, then write it; generate copy, then translate it.</p>
+        </div>
+        <div class="step" data-title="Routing">
+          <h3>2. Routing — a receptionist with three doors</h3>
+          <div class="diagram">
+            <div class="d-box">Input</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Router<small>classifies</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">Refund prompt</div>
+              <div class="d-box dim">Tech prompt</div>
+              <div class="d-box dim">Sales prompt</div>
+            </div>
+          </div>
+          <p class="step-cap">A first call classifies the input; your code then dispatches to a specialised prompt — or a different model — for that category. Each downstream prompt stays clean because it only ever sees its own kind of input. Bonus economics: route easy questions to a small, fast model and save the expensive one for the hard cases. Customer-service triage is the canonical example.</p>
+        </div>
+        <div class="step" data-title="Parallelization">
+          <h3>3. Parallelization — many hands, then a tally</h3>
+          <div class="diagram">
+            <div class="d-box">Input</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">Call A</div>
+              <div class="d-box hot">Call B</div>
+              <div class="d-box hot">Call C</div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Aggregate<small>plain code</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Output</div>
+          </div>
+          <p class="step-cap">Run several calls at the same time and combine the results in code. Two flavours: <em>sectioning</em> (independent subtasks — one call answers the user while a second screens the exchange for policy problems) and <em>voting</em> (the same question asked several ways — three reviewers scan code for vulnerabilities and anything any of them flags gets a human look). Faster than a chain, and multiple perspectives beat one.</p>
+        </div>
+        <div class="step" data-title="Orchestrator-workers">
+          <h3>4. Orchestrator-workers — a foreman who invents the plan</h3>
+          <div class="diagram">
+            <div class="d-box hot">Orchestrator<small>invents subtasks</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">Worker 1<small>edit file A</small></div>
+              <div class="d-box">Worker 2<small>edit file B</small></div>
+              <div class="d-box dim">Worker n<small>as needed</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Synthesis</div>
+          </div>
+          <p class="step-cap">A central model reads the task, decides what subtasks are needed <em>this time</em>, delegates each to a worker call, and stitches the results together. It looks like parallelization, but the fan-out is not written in your code — the orchestrator invents it per task. The essay's example: a code change that touches an unpredictable set of files. This is the pattern's tell: subtasks you cannot list in advance.</p>
+        </div>
+        <div class="step" data-title="Evaluator-optimizer">
+          <h3>5. Evaluator-optimizer — a writer and a ruthless editor</h3>
+          <div class="diagram">
+            <div class="d-box">Generator<small>drafts</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Evaluator<small>grades, gives feedback</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box dim">revise and retry</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Pass</div>
+          </div>
+          <p class="step-cap">One model drafts; a second grades the draft against explicit criteria and returns feedback; the first revises. Loop until the evaluator passes it — or a budget runs out. Worth the cost only when the criteria are clear and revision measurably helps: literary translation with a critic, or search results scored for completeness. Yes, it is a loop — but <em>your code</em> owns it, with a fixed cast and a fixed exit rule, so it is still a workflow.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The evaluator-optimizer surprise generalises: what makes something a workflow is not the absence of loops or of multiple models. It is that a human decided the structure in advance. The moment the <em>model</em> starts choosing which step comes next, you have crossed into agent territory.</p></div>
+
+      <h2>Run two of the patterns right now</h2>
+      <p>Here is one job — turning a raw bank statement into a client-friendly note — passed through a prompt chain with a gate, and then polished by an evaluator-optimizer loop. As in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, the "model" is a scripted stand-in so it runs offline, but every shape is exactly what production code does. Press <strong>Run</strong> and read the trace.</p>
+
+      <div class="pyrun" data-title="Prompt chain + evaluator-optimizer — run me">
+<textarea class="py-src" spellcheck="false">
+# One job, two workflow patterns, zero frameworks.
+# Job: turn a bank statement into a client-friendly note.
+
+CALLS = 0
+
+def fake_llm(prompt):
+    """Scripted stand-in for a real chat-model API call."""
+    global CALLS
+    CALLS += 1
+    if prompt.startswith("OUTLINE"):
+        return "1) total spent 2) biggest category 3) one gentle tip"
+    if prompt.startswith("DRAFT"):
+        return ("Aggregate monthly outflows registered 42,000 INR, "
+                "with discretionary dining leading at 9,000 INR.")
+    if prompt.startswith("EVALUATE"):
+        jargon = [w for w in ("Aggregate", "outflows", "discretionary")
+                  if w in prompt]
+        if jargon:
+            return "REVISE, too much jargon: " + ", ".join(jargon)
+        return "PASS"
+    if prompt.startswith("REWRITE"):
+        return ("You spent 42,000 rupees this month. Eating out was "
+                "the biggest chunk at 9,000. A weekly cap might help.")
+    return "UNKNOWN PROMPT"
+
+# ---- Pattern 1: prompt chaining, with a gate between calls ----
+print("== prompt chain ==")
+outline = fake_llm("OUTLINE the summary")
+print("outline :", outline)
+
+if "tip" not in outline:        # the gate: plain code, not a model
+    raise SystemExit("gate failed: outline is missing the tip")
+print("gate    : passed")
+
+draft = fake_llm("DRAFT from: " + outline)
+print("draft   :", draft)
+
+# ---- Pattern 5: evaluator-optimizer loop ----------------------
+print()
+print("== evaluator-optimizer ==")
+for attempt in range(1, 4):     # a budget: never loop forever
+    verdict = fake_llm("EVALUATE: " + draft)
+    print(f"attempt {attempt}:", verdict)
+    if verdict == "PASS":
+        break
+    draft = fake_llm("REWRITE in plain words. Feedback: " + verdict)
+
+print()
+print("final   :", draft)
+print("model calls used:", CALLS, "- same number every run")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now break it on purpose. Delete the word <code>tip</code> from the OUTLINE response and watch the gate kill the run before the bad outline can poison the draft — that is a workflow refusing to compound an error, and it is exactly why auditors love gates. Then make the evaluator impossible to please (add <code>"weekly"</code> to the jargon list) and watch the <code>range(1, 4)</code> budget end the loop with dignity instead of forever.</p></div>
+
+      <p>Notice the last line of output: the call count is the same on every run. That single boring fact — <em>fixed cost, fixed path</em> — is the entire business case for workflows, and it is what agents give up.</p>
+
+      <h2>Agents: the model takes the wheel</h2>
+      <p>So what does the essay say an agent is? Almost word for word what you built in <a href="ch045-react-loop-by-hand.html">chapter 45</a>: typically <em>just an LLM using tools in a loop, guided by feedback from its environment</em>. The model plans, acts, reads what actually happened — the tool result, the test output, the error message — and decides its next move from that <strong>ground truth</strong> rather than from a script. It pauses at checkpoints for human sign-off when the stakes demand it, and it stops when the task is done or a <code>max_turns</code>-style budget runs out.</p>
+
+      <div class="diagram">
+        <div class="d-box">Human<small>gives the goal, then steps back</small></div>
+        <span class="d-arrow">&#8594;</span>
+        <div class="d-box hot">LLM<small>decides the next step</small></div>
+        <span class="d-arrow">&#8596;</span>
+        <div class="d-box">Environment<small>tools, tests, files</small></div>
+        <span class="d-arrow">&#8594;</span>
+        <div class="d-box good">Done<small>or budget spent</small></div>
+      </div>
+
+      <p>That autonomy is a straight trade: agents buy flexibility with <strong>latency, cost, and variance</strong>. The same task might take four tool calls today and nineteen tomorrow. You cannot promise a finance director what a run will cost, and you cannot promise an auditor which path it took — you saw the full catalogue of consequences in <a href="ch048-failure-modes.html">the failure-modes chapter</a>. The essay's advice is blunt: use agents for open-ended problems where you <em>cannot</em> script the path, make sure success is verifiable (tests that pass, a booking that exists), and always fit guardrails and budgets.</p>
+
+      <div data-bars data-title="Model calls to finish one task (round, illustrative numbers)" data-unit="calls"
+           data-note="The agent bar is an average of a wide range — some runs take 4 calls, some take 19. That variance, not the height, is what makes agents hard to budget.">
+        <div class="bar" data-label="Single augmented call" data-value="1"></div>
+        <div class="bar" data-label="Prompt chain" data-value="3"></div>
+        <div class="bar" data-label="Parallel + aggregate" data-value="4"></div>
+        <div class="bar" data-label="Agent (average)" data-value="12"></div>
+      </div>
+
+      <p>For the times you do build one, the essay closes with three design principles. Keep the design <strong>simple</strong> (a loop you can read in one screen). Keep it <strong>transparent</strong> (show the plan; log every thought and tool call — future-you debugging at 2 a.m. will be grateful). And craft the <dfn>ACI</dfn>, the agent-computer interface — the tool names, descriptions, and argument formats the model sees — with the same care a designer gives a human interface, because a confusing tool description is to an agent what a mislabelled button is to a user. You will watch these principles pay off when we read <a href="ch054-create-agent.html">LangChain's packaged loop</a> later.</p>
+
+      <h2>The golden rule: the simplest thing that works</h2>
+      <p>Here is the sentence the whole essay exists to deliver: <strong>find the simplest solution possible, and only add complexity when it demonstrably improves results.</strong> In practice that is a ladder, and you climb it one rung at a time, measuring at each rung:</p>
+      <ol>
+        <li><strong>One good call.</strong> A single well-crafted prompt (<a href="ch037-prompting-that-matters.html">chapter 37</a>) with retrieval and worked examples solves more problems than anyone likes to admit.</li>
+        <li><strong>One augmented call.</strong> Add tools or memory to that call before adding more calls.</li>
+        <li><strong>A workflow.</strong> If the task has knowable steps, wire them with one of the five patterns. Your code keeps the wheel.</li>
+        <li><strong>An agent.</strong> Only when the path genuinely cannot be scripted — and success can be verified — hand the model the wheel.</li>
+      </ol>
+      <p>Most teams, the essay observes, never need rung four. And the ladder explains a pattern you may have seen in real engineering organisations: mature teams often move <em>down</em> it. The prototype was an agent because nobody yet knew the steps; six months of logs revealed that ninety per cent of runs took the same path; someone froze that path into a workflow and the system got faster, cheaper, and dull. Dull is the goal. This is the same instinct as <a href="ch044-what-is-an-agent.html">chapter 44</a>'s warning about the word "agent" being fashionable: the label is not the value. Boring reliability is the value.</p>
+
+      <h2>When a workflow beats an agent in a bank</h2>
+      <p>Make it concrete. A large bank needs a system that drafts the monthly suspicious-activity summary for each flagged account: pull the transactions, extract the flagged items, classify each against typology rules, draft the memo, run a compliance-language check, and file it. Six steps, known in advance, identical for every account. Should this be an agent?</p>
+      <p>No — and for reasons that have nothing to do with model quality:</p>
+      <ul>
+        <li><strong>Auditability.</strong> When the regulator asks "why did the system say this?", a workflow lets you replay the exact path: same steps, same order, gate results on file. An agent's answer is "the model chose differently that day", which is not a sentence anyone says to a regulator twice.</li>
+        <li><strong>Predictable cost and latency.</strong> Ten thousand accounts a month times a fixed number of calls is a number a finance team can sign. Times "somewhere between four and nineteen" is not.</li>
+        <li><strong>Contained failure.</strong> If classification misfires, the gate after it stops the run — one step's blast radius, as you saw in the pyrun above. A wandering agent can carry an early mistake through every later step.</li>
+        <li><strong>No decision to delegate.</strong> The steps were fixed by policy before any code was written. There is nothing left for a model to decide — so paying an agent's variance for run-time freedom buys the bank nothing at all.</li>
+      </ul>
+      <p>Now walk down the corridor to the same bank's engineering team, staring at a build that fails only on Tuesdays. Nobody can write those steps down in advance — the next step depends on what the logs reveal — and success is machine-verifiable: the tests pass. That is agent territory, in the same building, under the same compliance regime. The boundary is not the industry. It is the shape of the task.</p>
+
+      <div class="tbl"><table>
+        <tr><th>The task in front of you</th><th>Reach for</th></tr>
+        <tr><td>Steps are knowable in advance and mostly repeat</td><td>Workflow</td></tr>
+        <tr><td>An auditor must be able to replay the decision path</td><td>Workflow</td></tr>
+        <tr><td>Cost and latency must be quotable per run</td><td>Workflow</td></tr>
+        <tr><td>The next step depends on what the last step revealed</td><td>Agent</td></tr>
+        <tr><td>Success is verifiable by the environment (tests, bookings)</td><td>Agent</td></tr>
+        <tr><td>One good prompt might just do it</td><td>Neither — start there</td></tr>
+      </table></div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The expensive mistake is rarely choosing the wrong pattern — it is skipping the ladder. Teams reach for an agent because "agent" is the exciting word, then spend months adding guardrails to claw back the predictability a three-call chain had for free on day one. Before you build the craftsman, check whether a laminated card would do.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>These five names are now the industry's shared vocabulary. LangGraph's own tutorials are organised around these exact patterns; "orchestrator-workers" is what Claude Code's subagents and deepagents' <code>task</code> tool implement; every "LLM-as-judge" pipeline you have operated is an evaluator-optimizer. In design reviews, listen for the ladder in disguise: "do we actually need an agent here?" is the golden rule being applied, and "we replaced the agent with a pipeline" means a team moved down a rung on purpose — usually to cheers from whoever pays the API bill. The essay's own flagship examples of agents that <em>do</em> earn their keep: customer-support agents (conversation plus refund tools plus a clear resolution signal) and coding agents (open-ended path, tests as ground truth).</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What is the real dividing line between a workflow and an agent?</p>
+          <div class="q-opts">
+            <button data-opt="a">Workflows use one model call; agents use many</button>
+            <button data-opt="b">In a workflow your code fixes the route in advance; in an agent the model chooses each next step at run time</button>
+            <button data-opt="c">Agents use tools; workflows do not</button>
+          </div>
+          <p class="q-explain">It is about who owns the control flow. A workflow can contain many calls, tools, even loops — as long as a human scripted the structure. The moment the model decides what happens next, it is an agent.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. A task's subtasks cannot be listed in advance — a code change might touch two files or twelve, depending on the codebase. Which workflow pattern fits?</p>
+          <div class="q-opts">
+            <button data-opt="a">Prompt chaining</button>
+            <button data-opt="b">Parallelization</button>
+            <button data-opt="c">Orchestrator-workers</button>
+          </div>
+          <p class="q-explain">Orchestrator-workers exists precisely for a fan-out you cannot hard-code: a central model invents the subtasks per task, delegates to workers, and synthesises. Parallelization looks similar but its branches are fixed in your code.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What is the essay's golden rule?</p>
+          <div class="q-opts">
+            <button data-opt="a">Start with the simplest solution — often a single augmented call — and add complexity only when it measurably improves results</button>
+            <button data-opt="b">Always build an agent, since models keep improving</button>
+            <button data-opt="c">Use a framework so the pattern choice is made for you</button>
+          </div>
+          <p class="q-explain">Climb the ladder one rung at a time: one good call, then an augmented call, then a workflow, then — only for genuinely open-ended, verifiable tasks — an agent. Most production systems never need the last rung.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Why does the bank's suspicious-activity report belong in a workflow, not an agent?</p>
+          <div class="q-opts">
+            <button data-opt="a">Banks are not allowed to use large models</button>
+            <button data-opt="b">Agents cannot read financial documents accurately</button>
+            <button data-opt="c">The steps are fixed by policy, the path must be replayable for auditors, and per-run cost must be predictable — the agent's run-time freedom buys nothing here</button>
+          </div>
+          <p class="q-explain">The task has no run-time decisions left to delegate, and everything the bank must promise — auditability, quotable cost, contained failure — is exactly what a fixed path provides and a model-directed loop cannot.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. The evaluator-optimizer pattern contains a loop with two models. Why does the essay still call it a workflow?</p>
+          <div class="q-opts">
+            <button data-opt="a">Because it never calls tools</button>
+            <button data-opt="b">Because a human fixed the structure in advance — a set cast, a set exit rule — and the models never choose what step comes next</button>
+            <button data-opt="c">It is a typo; anything with a loop is an agent</button>
+          </div>
+          <p class="q-explain">Loops do not make agents. The generator and evaluator play scripted roles inside a structure your code owns, with a budgeted exit. Agenthood begins only when the model itself starts directing the process.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>The split that matters is who owns the control flow: workflows run on routes your code fixed in advance; agents let the model choose each next step from environmental feedback.</li>
+          <li>Everything is built from one atom — the augmented LLM: a single call with retrieval, tools, and memory attached.</li>
+          <li>The five workflow patterns are prompt chaining (fixed steps plus gates), routing (classify then dispatch), parallelization (section or vote, then aggregate), orchestrator-workers (a model invents the fan-out), and evaluator-optimizer (draft, grade, revise, budgeted).</li>
+          <li>Agents trade predictability for flexibility: variable cost, variable latency, unscriptable paths — worth paying only when the task is open-ended and success is verifiable.</li>
+          <li>The golden rule: find the simplest thing that works, measure, and only climb to the next rung when the simpler one demonstrably falls short. Mature teams often climb down.</li>
+          <li>In regulated settings like a bank, auditability, quotable cost, and contained failure make a workflow the winning answer even when an agent could do the task.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

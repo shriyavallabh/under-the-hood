@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tests: why they gate merges — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch103">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>Tests: why they gate merges</h1>
+        <p class="ch-tagline">A test is a promise written in code that the machine checks forever. Learn to write one, run one, and read the ones in every merge request first — that is where the real specification lives.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 104 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>At the pass of a busy restaurant kitchen — the counter where finished plates wait to go out — hangs a laminated checklist. Every line on it has a scar behind it. <em>"Taste the dal before plating"</em> was added the night a new cook grabbed sugar instead of salt. <em>"No whole cardamom on top of the biryani"</em> commemorates a customer who bit one. <em>"Cold plate, cold dessert"</em> — you can guess.</p>
+        <p>No plate leaves the kitchen without passing that checklist. Not because the head chef distrusts her cooks, but because on a Friday night, with six pans going, <em>anyone</em> can grab the wrong jar. The checklist is the reason the kitchen can move fast. And when a new cook joins, the fastest way to learn what this kitchen cares about is not the recipe book — it is that laminated card. Every line is a lesson someone paid for.</p>
+        <p>A project's test suite is that checklist. Each test is one line, added after a real scar or before an anticipated one. The pipeline is the pass. And "the merge button is greyed out until tests go green" is simply the rule that no plate leaves the kitchen unchecked.</p>
+      </section>
+
+      <h2>A test is just a function that complains</h2>
+      <p>Strip away the tooling and a <dfn>test</dfn> is a plain Python function that calls your code and then checks the result. The checking is done by <dfn>assert</dfn>, a one-word Python statement meaning "this must be true, or stop everything": if the condition holds, nothing happens and the line is silent; if it fails, Python raises an <code>AssertionError</code> — the same exception machinery you met in <a href="ch009-errors-and-tracebacks.html">the errors chapter</a>, just triggered deliberately.</p>
+
+      <div class="code-title">tests/test_calculate.py — your first test, complete</div>
+      <pre><code class="language-python">from agent import calculate
+
+def test_calculate_multiplies():
+    assert calculate("1500 * 0.20") == "300.0"</code></pre>
+
+      <p>Read it as a sentence: <em>calculate, given "1500 * 0.20", must return "300.0"</em>. That is the whole art. <dfn>pytest</dfn> — the test runner nearly every Python team uses — finds functions like this by naming convention, no registration required:</p>
+      <ul>
+        <li><strong>Files</strong> named <code>test_*.py</code>, usually in a <code>tests/</code> folder.</li>
+        <li><strong>Functions</strong> inside them whose names start with <code>test_</code>.</li>
+        <li><strong>Plain <code>assert</code></strong> for the checks — no assertion library to learn. pytest's signature move: it rewrites your asserts so a failing report shows the actual values on each side, not just "False".</li>
+      </ul>
+      <p>Notice what a test is <em>not</em>: proof of correctness, or paperwork. It is an executable promise. A wiki page quietly rots; a test that stops being true turns red on the very next run — which is why engineers trust suites more than READMEs.</p>
+
+      <h2>Running them: pytest at the command line</h2>
+      <p>From the project root, one word runs everything:</p>
+
+      <div class="code-title">the commands you will actually type</div>
+      <pre><code class="language-bash">pytest                       # discover and run every test
+pytest -v                    # verbose: one named line per test
+pytest -k "calculate"        # only tests whose NAME matches this expression
+pytest -k "agent and not slow"   # -k understands and / or / not
+pytest tests/test_agent.py   # just one file
+pytest tests/test_agent.py::test_calculate_multiplies   # one exact test
+pytest -x                    # stop at the first failure
+pytest --lf                  # re-run only what failed last time</code></pre>
+
+      <p>The <code>-k</code> flag is the one you will use daily. Real suites take minutes; while iterating on one function you filter to the tests that mention it by name — <code>pytest -k "calculate"</code> — and only run the full suite before pushing. The double-colon form (<code>file.py::test_name</code>) pins one exact test: it is what you paste from a CI failure log to reproduce it locally.</p>
+      <p>Here is what failure looks like — worth staring at once:</p>
+
+      <div class="code-title">pytest output when a test fails</div>
+      <pre><code class="language-bash">$ pytest
+========================= test session starts =========================
+collected 6 items
+
+tests/test_agent.py ..F...                                      [100%]
+
+============================== FAILURES ===============================
+______________________ test_calculate_multiplies ______________________
+
+    def test_calculate_multiplies():
+&gt;       assert calculate("1500 * 0.20") == "300.00"
+E       AssertionError: assert '300.0' == '300.00'
+
+===================== 1 failed, 5 passed in 0.12s =====================</code></pre>
+
+      <p>Each dot is a passing test; the <code>F</code> is the failure, and pytest replays the failing line with the real values filled in: the code returned <code>'300.0'</code>, the test expected <code>'300.00'</code>. No detective work. Sometimes the fix is in the code; sometimes, as here, the test encoded a wrong expectation. Both are useful discoveries.</p>
+
+      <h2>Build a tiny pytest, test the agent you already know</h2>
+      <p>The best way to demystify a tool is to sketch it in twenty lines. Below is the agent you read line-by-line in <a href="ch050-reading-real-code-5.html">Reading real code 5</a> — the <a href="ch045-react-loop-by-hand.html">ReAct loop</a> with its calculator tool — then four real tests, then a miniature test runner doing what pytest does: collect every <code>test_*</code> function, run it, catch <code>AssertionError</code>, print a scoreboard. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="Four tests for the ch050 agent, plus a 15-line pytest">
+<textarea class="py-src" spellcheck="false">
+# ---- The code under test: the ch050 agent, condensed ------
+def calculate(expression):
+    allowed = set("0123456789+-*/(). ")
+    if not set(expression) &lt;= allowed:
+        return "ERROR: only arithmetic is allowed"
+    return str(eval(expression))
+
+TOOLS = {"calculate": calculate}
+
+def fake_llm(history):
+    if "OBSERVATION" not in history[-1]:
+        return "ACTION: calculate(1500 * 0.20)"
+    return "FINAL ANSWER: GST comes to 300.0 rupees"
+
+def run_agent(task, max_turns=5):
+    history = [f"TASK: {task}"]
+    for _ in range(max_turns):
+        reply = fake_llm(history)
+        history.append(reply)
+        if "FINAL ANSWER:" in reply:
+            return reply.split("FINAL ANSWER:")[1].strip()
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            name = call.split("(")[0].strip()
+            arg = call[call.index("(") + 1 : call.rindex(")")]
+            history.append(f"OBSERVATION: {TOOLS[name](arg.strip())}")
+    return "Gave up: hit the max-turns limit."
+
+# ---- The tests: plain functions, plain asserts -------------
+def test_calculate_multiplies():
+    assert calculate("1500 * 0.20") == "300.0"
+
+def test_calculate_refuses_non_arithmetic():
+    assert calculate("import os").startswith("ERROR")
+
+def test_agent_answers_with_the_number():
+    assert "300" in run_agent("What is 20% GST on 1500?")
+
+def test_agent_gives_up_at_turn_limit():
+    assert run_agent("anything", max_turns=0).startswith("Gave up")
+
+# ---- A tiny pytest: collect, run, report -------------------
+def run_tests():
+    passed, failed = 0, 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            try:
+                fn()
+                print(f"PASSED  {name}")
+                passed += 1
+            except AssertionError:
+                print(f"FAILED  {name}")
+                failed += 1
+    print()
+    print(f"{passed} passed, {failed} failed")
+
+run_tests()
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now earn the lesson: break something. Change the agent's final answer to <code>301.0</code> and watch two tests catch it. Delete the <code>allowed</code> check inside <code>calculate</code> and watch the safety test go red while the others stay green — that red line tells a reviewer exactly which promise broke. Then change a test's expectation to something wrong and notice the suite cannot tell which side is lying; only a human reading the test's <em>name</em> can.</p></div>
+
+      <p>Look at what those four tests document, without a single comment: the calculator does arithmetic; it refuses anything else (a security promise); the agent ends with the right number in its answer; and the turn limit actually stops it. If a teammate changed <code>run_agent</code> tomorrow, these four sentences of executable documentation would referee the change within seconds.</p>
+
+      <h2>The vocabulary</h2>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">test function</span><span class="flip-back">A plain function named test_* that calls your code and asserts on the result. pytest finds it by name — no registration.</span></button>
+        <button class="flip" type="button"><span class="flip-front">assert</span><span class="flip-back">"This must be true or stop." On failure it raises AssertionError; pytest catches it, marks the test red, and shows the actual values on both sides.</span></button>
+        <button class="flip" type="button"><span class="flip-front">fixture</span><span class="flip-back">A named setup recipe. Declare it once with @pytest.fixture; any test that lists its name as a parameter gets a fresh one, automatically.</span></button>
+        <button class="flip" type="button"><span class="flip-front">parametrize</span><span class="flip-back">One test body, a table of inputs and expected outputs. pytest runs the body once per row and reports each row separately.</span></button>
+        <button class="flip" type="button"><span class="flip-front">regression test</span><span class="flip-back">A test written after a bug, encoding "this exact mistake must never return". The laminated line on the kitchen checklist.</span></button>
+        <button class="flip" type="button"><span class="flip-front">red / green</span><span class="flip-back">Team shorthand: red = at least one test failing, green = all passing. "Main is red" is a minor emergency; the merge gate exists to keep it green.</span></button>
+      </div>
+
+      <h2>Fixtures, gently: mise en place for tests</h2>
+      <p>Before service, every cook lays out their station — chopped onions here, spice box there — so each dish starts from a clean, known setup. Kitchens call it <em>mise en place</em>; pytest calls it a <dfn>fixture</dfn>: a function that prepares something a test needs, so the test body can stay about the behaviour, not the setup.</p>
+      <p>The mechanism is charmingly odd at first. You mark a setup function with the <code>@pytest.fixture</code> <a href="ch017-decorators.html">decorator</a> (a decorator being a label that changes how a function is treated). Any test that wants it simply <em>names it as a parameter</em>: pytest matches the name, calls the fixture, and passes in the result — a fresh copy per test, so tests can never contaminate each other.</p>
+      <p>pytest also ships fixtures ready-made: <code>tmp_path</code> hands your test a throwaway folder, cleaned up afterwards; <code>monkeypatch</code> lets a test temporarily replace something — an environment variable, or a real LLM call swapped for a scripted fake, the <code>fake_llm</code> trick this course uses. Shared fixtures live in <code>conftest.py</code>, visible to every test in the folder.</p>
+
+      <h2>Reading a real test file — the reviewer's pass</h2>
+      <p>Here is a fuller <code>tests/test_agent.py</code>, the kind you will actually meet in a merge request. Click the annotated lines. This is also where <dfn>parametrize</dfn> appears — a decorator that runs one test body over a whole table of cases, so ten checks cost three lines instead of ten copies.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">tests/test_agent.py — as a reviewer reads it</div>
+        <div class="wl-line"><code>import pytest</code>
+          <div class="wl-note">Only needed for the decorators below. The plain tests further down never touch pytest directly — that is the point of the plain-assert design.</div></div>
+        <div class="wl-line"><code>from agent import calculate, run_agent</code>
+          <div class="wl-note">Tests import the real production code and exercise it — same import system as <a href="ch011-imports-and-modules.html">any other module</a>. Nothing is mocked here except, later, the model.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>def test_calculate_refuses_non_arithmetic():</code>
+          <div class="wl-note">The name is the specification. Read it aloud: "calculate refuses non-arithmetic". When this fails in CI, the failure line alone tells you which promise broke before you read any implementation.</div></div>
+        <div class="wl-line"><code>    assert calculate("__import__('os')").startswith("ERROR")</code>
+          <div class="wl-note">A security promise, pinned forever. If someone "simplifies" calculate next year and drops the character allowlist, this line turns red the same minute. Regression tests are institutional memory that never resigns.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>@pytest.fixture</code>
+          <div class="wl-note">The decorator that turns an ordinary function into a fixture — a named piece of mise en place that pytest will serve to any test that asks.</div></div>
+        <div class="wl-line"><code>def gst_task():</code>
+          <div class="wl-note">The fixture's name is its handle. Tests request it by using this exact word as a parameter name.</div></div>
+        <div class="wl-line"><code>    return "What is 20% GST on a 1500 rupee invoice?"</code>
+          <div class="wl-note">Whatever the fixture returns is what the test receives. Here it is just a string; in real suites it is often a configured agent, a fake model, or a temporary database.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>def test_agent_answers_the_task(gst_task):</code>
+          <div class="wl-note">Magic, explained: the parameter name matches the fixture name, so pytest calls gst_task() and passes the result in. No import, no wiring — name-matching is the whole trick.</div></div>
+        <div class="wl-line"><code>    assert "300" in run_agent(gst_task)</code>
+          <div class="wl-note">Note the loose check: "300" appears somewhere in the answer, not one demanded exact sentence. Testing the behaviour you care about — not the incidental wording — keeps tests from breaking on every harmless rephrase. With LLMs in the loop this instinct becomes essential; <a href="ch104-agent-evals.html">the next chapter</a> builds a whole discipline on it.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>@pytest.mark.parametrize("expression,expected", [</code>
+          <div class="wl-note">Parametrize: the first argument names the test's parameters, the list supplies one tuple per case. pytest runs the body once per row and reports each row as its own test.</div></div>
+        <div class="wl-line"><code>    ("1 + 1", "2"),</code></div>
+        <div class="wl-line"><code>    ("10 / 4", "2.5"),</code>
+          <div class="wl-note">Each row is a promise. Adding a newly discovered edge case costs one line — which is why reviewers love seeing a parametrized table grow in a bug-fix MR: the bug arrives with its own tombstone.</div></div>
+        <div class="wl-line"><code>    ("1500 * 0.20", "300.0"),</code></div>
+        <div class="wl-line"><code>])</code></div>
+        <div class="wl-line"><code>def test_calculate_arithmetic(expression, expected):</code>
+          <div class="wl-note">The parameter names match the string in the decorator. Three rows, one body: three tests.</div></div>
+        <div class="wl-line"><code>    assert calculate(expression) == expected</code>
+          <div class="wl-note">One assert, table-driven. If only the "10 / 4" row fails, the report says exactly that — you know instantly the bug involves division, not multiplication.</div></div>
+      </div>
+
+      <h2>Tests are the first thing to read in an MR</h2>
+      <p>Here is the habit that quietly separates confident reviewers from overwhelmed ones. When a merge request arrives — twelve files, four hundred changed lines — do not start at the top of the diff. <strong>Open the test files first.</strong> The implementation tells you <em>how</em>; the tests tell you <em>what and why</em>, in sentences:</p>
+      <p><code>test_agent_retries_once_on_tool_timeout</code>. <code>test_retry_gives_up_after_second_failure</code>. <code>test_timeout_is_logged</code>. You now know precisely what this MR sets out to do — before reading one line of implementation. Then you read the code asking a sharper question: does it honestly earn those green ticks? And you review the tests themselves with three checks:</p>
+      <ul>
+        <li><strong>Do the tests match the story?</strong> If the MR description says "adds retry logic" and no test mentions retry, the central claim of the change is unverified — saying so is the most useful review comment a non-expert can make.</li>
+        <li><strong>Do the names read as promises?</strong> <code>test_retry_gives_up_after_second_failure</code> is documentation; <code>test_2</code> is a shrug.</li>
+        <li><strong>Would the test catch the bug it claims to?</strong> A test that asserts <code>result is not None</code> passes for almost any behaviour, right or wrong. Green paint is not a checklist.</li>
+      </ul>
+
+      <p>The same standards, condensed into a table you can review against:</p>
+      <div class="tbl"><table>
+        <tr><th>Good tests…</th><th>Weak tests…</th></tr>
+        <tr><td>Have names that read as behaviour: <code>test_unknown_tool_returns_error</code></td><td>Have names that read as filler: <code>test_case_3</code></td></tr>
+        <tr><td>Check one behaviour each, so a failure points at one cause</td><td>Assert twenty things, so a failure points everywhere</td></tr>
+        <tr><td>Follow arrange, act, assert — set up, do the thing, check it</td><td>Interleave setup and checks until nobody can follow the plot</td></tr>
+        <tr><td>Test observable behaviour ("the answer contains 300")</td><td>Test internal wiring ("the private helper was called twice"), shattering on every refactor</td></tr>
+        <tr><td>Run fast and deterministic — no network, no real LLM, no sleeping</td><td>Depend on live services, so failures mean "the wifi", not "the code"</td></tr>
+      </table></div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>That last row explains a pattern you have seen all course: tests replace the real model with a scripted <code>fake_llm</code>. A unit test asserting on a live LLM's exact words would flicker red and green at random — the model is non-deterministic and the network is a lottery. Deterministic fakes keep <em>this</em> layer honest; judging the real model's quality is a different craft called evals, which is exactly where <a href="ch104-agent-evals.html">the next chapter</a> picks up.</p></div>
+
+      <h2>The gate: how GitLab turns red into "cannot merge"</h2>
+      <p>Now connect this to the previous chapter's pipelines. Teams configure the project so a merge request <em>cannot</em> be merged unless its pipeline — which runs <code>pytest</code>, among other jobs — succeeds. In GitLab this is a project setting (<em>"Pipelines must succeed"</em>), and its effect is visceral: the merge button greys out. Walk the flow as the reviewer sees it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="MR arrives">
+          <h3>1. A merge request lands in your queue</h3>
+          <div class="diagram">
+            <div class="d-box dim">Overview</div>
+            <div class="d-box dim">Commits</div>
+            <div class="d-box dim">Pipelines</div>
+            <div class="d-box hot">Changes<small>4 files, +86 −12</small></div>
+          </div>
+          <p class="step-cap">MR !214: "Agent: retry once when a tool times out." You head straight for the Changes tab — but not to the top of the diff.</p>
+        </div>
+        <div class="step" data-title="Tests first">
+          <h3>2. You read the test files before anything else</h3>
+          <div class="diagram">
+            <div class="d-box dim">agent/loop.py<small>+41 −9</small></div>
+            <div class="d-box dim">agent/tools.py<small>+12 −3</small></div>
+            <div class="d-box hot">tests/test_agent.py<small>+33 −0, three new promises</small></div>
+          </div>
+          <p class="step-cap">Three new test names tell you the whole intent: retry once on timeout, give up after the second failure, log the timeout. Now you read the implementation, checking it against those promises.</p>
+        </div>
+        <div class="step" data-title="Pipeline runs">
+          <h3>3. Every push re-runs the suite on a clean machine</h3>
+          <div class="diagram">
+            <div class="d-box">push<small>new commit on the branch</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">runner<small>fresh checkout</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">test job<small>pytest</small></div>
+          </div>
+          <p class="step-cap">Not on the author's laptop — on a neutral runner, from scratch. "Works on my machine" is not admissible evidence here; only the runner's verdict counts.</p>
+        </div>
+        <div class="step" data-title="Red blocks">
+          <h3>4. Red pipeline: the merge button is disabled</h3>
+          <div class="diagram">
+            <div class="d-box hot">Pipeline failed<small>test: 1 failed, 41 passed</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Merge<small>blocked: pipeline must succeed</small></div>
+          </div>
+          <p class="step-cap">One failure out of forty-two, and the door stays shut — no matter how senior the author or how urgent the deadline. The job log names the exact test — paste its ::node id after pytest locally to reproduce it in seconds.</p>
+        </div>
+        <div class="step" data-title="Green unlocks">
+          <h3>5. Fix, push, green — the gate opens</h3>
+          <div class="diagram">
+            <div class="d-box good">Pipeline passed<small>42 passed in 38s</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Merge<small>enabled</small></div>
+          </div>
+          <p class="step-cap">The author fixes the code (or the wrong expectation), pushes, the suite reruns, and the button comes alive. A human approval plus a green verdict from the machine — the merge needs both.</p>
+        </div>
+      </div>
+
+      <h2>Why teams block merges on red — the economics</h2>
+      <p>The gate can feel bureaucratic until you price the alternative. The <a href="ch021-just-enough-git.html">main branch</a> is shared plumbing: everyone branches from it, every deploy is cut from it. Merge one silently-broken change and the breakage does not stay yours: everyone who branches from main inherits your bug, their tests fail for reasons they did not cause, and an hour of shortcut becomes a day of team-wide archaeology. Keeping main green is not perfectionism; it is cheap insurance, paid in seconds per merge.</p>
+      <p>The gate also does something subtler: it depersonalises quality. Without it, "your change broke things" is an accusation between colleagues, and a risky merge can go in because of who asked. With it, the pipeline is the referee — tireless, unbribable, and equally rude to everyone. A red X on a principal engineer's MR blocks exactly as hard as one on an intern's. Teams that block on red argue less, not more.</p>
+      <p>And the gate compounds. The suite is the team's laminated checklist: every incident that mattered got a test, so the whole history of past failures is re-checked on every push, for free. This is why reviewers grumble when a bug fix arrives without a test — the fix repairs today; only the test prevents the sequel. You saw agent failure modes catalogued in <a href="ch048-failure-modes.html">chapter 48</a>; a mature agent codebase has a test pinning each one it has survived.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Green means "every promise we wrote down still holds" — nothing more. A suite full of weak asserts is a checklist that says "plate exists" instead of "taste the dal": comfortably green, catching nothing. When you review, weigh the tests, not the tick. And be suspicious of an MR that "fixes" a red pipeline by deleting or loosening the failing test: sometimes the expectation really was wrong, but that deletion deserves an explaining comment, every time.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any serious Python repository and the shape is instantly recognisable: a <code>tests/</code> folder mirroring the package layout, <code>conftest.py</code> files holding shared fixtures, and a CI config running <code>pytest</code> on every push. In merge requests the giveaways are everywhere: a reviewer commenting "can you add a test that pins this?", a table of parametrize rows growing by one in a bug-fix MR, a red "1 failed" badge next to a greyed-out merge button, and someone pasting <code>pytest tests/test_agent.py::test_retry_gives_up -x</code> into the discussion so others can reproduce a failure locally. When a data scientist's MR changes behaviour but touches no test file, the most valuable review comment you can make costs one line: "which test would catch this if it regressed?"</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. A 400-line merge request lands in your review queue. Where do you look first, and why?</p>
+          <div class="q-opts">
+            <button data-opt="a">The biggest implementation file — that is where the real change is</button>
+            <button data-opt="b">The MR description — the author explains it there</button>
+            <button data-opt="c">The test files — they state the intended behaviour as executable, named promises</button>
+          </div>
+          <p class="q-explain">Descriptions can be stale and diffs tell you <em>how</em> — only the tests state <em>what must now be true</em>, in names that read as sentences and in asserts the machine has already verified. Read them first, then check the implementation earns them.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. What happens when the condition in a plain <code>assert</code> is false during a pytest run?</p>
+          <div class="q-opts">
+            <button data-opt="a">Python prints a warning and carries on to the next line</button>
+            <button data-opt="b">An AssertionError is raised; pytest catches it, marks the test failed, and shows the actual values on both sides</button>
+            <button data-opt="c">pytest retries the test a few times in case it was flaky</button>
+          </div>
+          <p class="q-explain">assert raises AssertionError on a false condition — the exception machinery from chapter 9. pytest's assertion rewriting turns that into the helpful report that shows the real values on both sides.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. You are iterating on the calculator tool and the full suite takes four minutes. What do you type?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>pytest -k "calculate"</code> — run only tests whose names match, full suite before pushing</button>
+            <button data-opt="b"><code>pytest --fast</code> — tell pytest to skip the slow parts</button>
+            <button data-opt="c">Comment out the other test files until you are done</button>
+          </div>
+          <p class="q-explain">-k filters by test name expression (it even understands and/or/not), giving you seconds-fast feedback on the code you are touching. There is no --fast flag, and commenting out tests is how promises quietly stop being checked.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. How does a pytest test get hold of a fixture?</p>
+          <div class="q-opts">
+            <button data-opt="a">It imports the fixture from conftest.py and calls it inside the test body</button>
+            <button data-opt="b">It passes the fixture's name as a string to pytest.use()</button>
+            <button data-opt="c">It declares a parameter with the fixture's exact name; pytest matches the name and injects a fresh result</button>
+          </div>
+          <p class="q-explain">Name-matching is the whole trick: mark the setup function with @pytest.fixture, and any test that lists that name as a parameter receives what the fixture returns — freshly made per test, so tests cannot contaminate each other.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Why do teams disable the merge button on a red pipeline instead of trusting authors to fix failures after merging?</p>
+          <div class="q-opts">
+            <button data-opt="a">Because managers need a metric for who breaks the build most often</button>
+            <button data-opt="b">Because a broken main branch taxes everyone who branches or deploys from it, and an impartial gate removes both the temptation and the negotiation</button>
+            <button data-opt="c">Because GitLab cannot technically merge code while any test is failing</button>
+          </div>
+          <p class="q-explain">Main is shared plumbing — one silently-broken merge becomes everyone's mystery failure. The gate is policy, not a technical limit: it makes the pipeline a referee that blocks a principal engineer exactly as hard as an intern — which is why it works.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A test is a plain function whose name starts with <code>test_</code>, in a file named <code>test_*.py</code>, using plain <code>assert</code> — pytest discovers it by convention and, on failure, shows the real values on both sides.</li>
+          <li><code>pytest -k "expression"</code> runs a named subset for fast iteration; <code>file.py::test_name</code> pins one exact test — the thing you paste from a CI log to reproduce a failure locally.</li>
+          <li>Fixtures are mise en place: declare setup once with <code>@pytest.fixture</code>, and tests receive it by naming it as a parameter. Parametrize turns one test body into a table of promises, one row per case.</li>
+          <li>Tests are executable documentation — the first thing to read in any merge request. Names that read as behaviour tell you what the change intends before you open the diff.</li>
+          <li>Good tests check one observable behaviour each, run fast and deterministic (scripted <code>fake_llm</code>, never the live model), and pin every bug that ever mattered so it can never quietly return.</li>
+          <li>Merges block on red because main is shared plumbing and the pipeline is an impartial referee: it depersonalises quality, protects everyone downstream, and costs seconds per merge against days of archaeology.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

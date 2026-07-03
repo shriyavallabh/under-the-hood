@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your first API call — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch033">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IV · Talking to the Model</div>
+        <h1>Your first API call</h1>
+        <p class="ch-tagline">One HTTP POST, one JSON body, one JSON reply. That is the entire conversation between your code and a frontier model — and every framework you have ever operated is secretly built on this one exchange.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 34 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>There is a legendary kitchen in your city. The chef is a genius, but you never see her — the entire restaurant is one wall with a small hatch in it. You slide an order form through the hatch; a tray comes back. That is the whole interface.</p>
+        <p>The form is strict. Top corner: your membership number, because the kitchen bills by the word. Next line: tonight's house rules — <em>"vegetarian, no cream, explain each dish briefly"</em>. Then the strange part: you must write out your <strong>entire conversation with the chef so far</strong>, labelled who-said-what, because the chef has no memory whatsoever. Every form starts her from zero. Forget to copy yesterday's exchange onto today's form, and yesterday never happened.</p>
+        <p>The tray comes back with the dish, plus a printed slip: how many words you sent in, how many words came back out. That slip is your bill.</p>
+        <p>The hatch is an HTTP POST. The form is JSON. The membership number is your API key, the house rules are the system prompt, and the who-said-what transcript is the <strong>messages array</strong>. Every SDK, every agent framework, every harness you have ever run is just a well-trained assistant filling in this form for you.</p>
+      </section>
+
+      <h2>It was HTTP all along</h2>
+      <p>The previous chapter toured the model landscape — who makes the frontier models and how to choose between them. This chapter is about the wire: what actually travels between your machine and theirs. And the answer is refreshingly boring. There is no magic tunnel, no special protocol, no persistent psychic link. Talking to a large language model is an ordinary web request — the same kind your browser makes when it loads a page.</p>
+      <p>Four words carry the mechanics. An <dfn>API</dfn> (Application Programming Interface) is a service designed to be called by programs instead of clicked by humans. <dfn>HTTP</dfn> is the delivery protocol of the web — a way to send a request to an address and get a response back. A <dfn>POST</dfn> is the flavour of HTTP request that carries a payload with it ("here is some data, do something with it"), as opposed to GET, which only fetches. And the payload itself is <dfn>JSON</dfn> — the curly-brace text format for structured data you met in <a href="ch005-yaml-and-json.html">the YAML and JSON chapter</a>: keys, strings, lists, and nested objects.</p>
+      <p>Put together: your code builds a JSON document describing the conversation, POSTs it to a URL the provider publishes — called an <dfn>endpoint</dfn>, the specific address where a service listens — and receives a JSON document back containing the model's reply. That round trip is <em>the whole thing</em>. Claude Code does it. LangChain does it. Your production agents do it hundreds of times a day. Watch one call travel:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Build the body">
+          <h3>1. Your code assembles the JSON body</h3>
+          <div class="diagram">
+            <div class="d-box hot">Your code<small>model + messages + max_tokens</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Provider<small>api.anthropic.com</small></div>
+          </div>
+          <p class="step-cap">Everything the model needs to answer goes into one JSON document: which model to use, the full conversation so far, and a cap on how long the reply may be. Nothing is "already there" on the server — if it is not in this body, the model does not know it.</p>
+        </div>
+        <div class="step" data-title="POST with headers">
+          <h3>2. The POST leaves, wearing its headers</h3>
+          <div class="diagram">
+            <div class="d-box">Your code</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">HTTPS POST<small>x-api-key: sk-ant-... + content-type: application/json</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Provider</div>
+          </div>
+          <p class="step-cap">Alongside the body travel a few headers — small labelled metadata lines. The important one carries your API key: the membership card that says who is asking and whose account to bill.</p>
+        </div>
+        <div class="step" data-title="Provider checks and runs">
+          <h3>3. The provider checks the key, then runs the model</h3>
+          <div class="diagram">
+            <div class="d-box dim">Your code</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Provider<small>key valid? quota left? then: generate</small></div>
+          </div>
+          <p class="step-cap">Bad key: instant rejection (HTTP 401). Too many requests: rate limit (HTTP 429). Otherwise the text is fed through the transformer you met in <a href="ch029-transformers-plainly.html">the transformers chapter</a>, one token at a time, until the reply is done.</p>
+        </div>
+        <div class="step" data-title="Response returns">
+          <h3>4. A JSON response comes back on the same connection</h3>
+          <div class="diagram">
+            <div class="d-box dim">Your code</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Response JSON<small>reply text + why it stopped + token bill</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box">Provider</div>
+          </div>
+          <p class="step-cap">The reply is wrapped in structure: the generated text, a reason the model stopped, and a usage section counting the tokens in and out — the printed slip on the tray.</p>
+        </div>
+        <div class="step" data-title="Parse and forget">
+          <h3>5. Your code parses the reply — and the server forgets you</h3>
+          <div class="diagram">
+            <div class="d-box good">Your code<small>extracts the text</small></div>
+            <div class="d-box good">Provider<small>remembers nothing</small></div>
+          </div>
+          <p class="step-cap">Your code digs the text out of the JSON and carries on. On the provider's side, the slate is wiped: the next request starts from absolute zero. Whatever continuity you want, you must carry yourself — which brings us to the messages array.</p>
+        </div>
+      </div>
+
+      <h2>The messages array: who said what</h2>
+      <p>The heart of the request body is a list called <code>messages</code> — a plain JSON array of the conversation so far, in order, oldest first. Each entry is a little object with two jobs: <em>who said it</em> and <em>what they said</em>. The "who" is called a <dfn>role</dfn> — a label telling the model which voice each message speaks in. Three roles do almost all the work:</p>
+
+      <div class="code-title">a messages array with all three roles (OpenAI dialect)</div>
+      <pre><code class="language-json">[
+  {"role": "system",    "content": "You are a concise assistant for a small business."},
+  {"role": "user",      "content": "What is 20% GST on a 1,500 rupee invoice?"},
+  {"role": "assistant", "content": "GST at 20% on 1,500 rupees is 300 rupees."},
+  {"role": "user",      "content": "And on 4,000?"}
+]</code></pre>
+
+      <p><strong><code>system</code></strong> is the house rules card: standing instructions about how to behave — persona, tone, format, boundaries. The model treats it with more authority than ordinary conversation, which is why every serious product buries its real behaviour in the system prompt. <strong><code>user</code></strong> is whatever the human (or the calling program) says. <strong><code>assistant</code></strong> is the model's own past replies.</p>
+      <p>That last one deserves a double take. The model does not remember saying those words — remember step 5, the server forgets everything between calls. The API is <em>stateless</em>. When you send an <code>assistant</code> message, you are handing the model a transcript and saying "this is what you said earlier". It rereads its own lines like an actor picking up a script. This has a delightfully strange consequence: the history is just data you construct, so you could edit it, trim it, or fabricate it entirely — and the model would be none the wiser. Chat products feel continuous only because their code faithfully replays the whole transcript on every single call, appending one new user message each time. The transcript grows, the request bodies grow, and the bills grow with them — the root economic fact of agent engineering.</p>
+      <p>Structurally, notice there is nothing exotic here: the array is a Python list of dictionaries the moment your code touches it — the same <a href="ch004-collections.html">collections</a> you already know — serialised to JSON for the trip across the wire.</p>
+
+      <p>Six words carry the rest of this chapter. Flip until each feels obvious:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">endpoint</span><span class="flip-back">The URL a service listens on. For Anthropic: https://api.anthropic.com/v1/messages. The hatch in the wall.</span></button>
+        <button class="flip" type="button"><span class="flip-front">header</span><span class="flip-back">A labelled metadata line that travels with an HTTP request — your API key rides in one, the content type in another.</span></button>
+        <button class="flip" type="button"><span class="flip-front">body</span><span class="flip-back">The JSON payload of the POST: model name, messages array, settings. The order form itself.</span></button>
+        <button class="flip" type="button"><span class="flip-front">role</span><span class="flip-back">The who-said-it label on each message: system (house rules), user (the human), assistant (the model's past replies).</span></button>
+        <button class="flip" type="button"><span class="flip-front">stateless</span><span class="flip-back">The server keeps nothing between calls. Every request must carry the entire conversation. Continuity is your code's job.</span></button>
+        <button class="flip" type="button"><span class="flip-front">usage</span><span class="flip-back">The token counts in the response — how much text you sent and got back. This is literally the line-item on your invoice.</span></button>
+      </div>
+
+      <h2>Your key stays in the environment</h2>
+      <p>The <dfn>API key</dfn> is a long secret string — <code>sk-ant-api03-...</code> for Anthropic, <code>sk-proj-...</code> for OpenAI — that identifies your account and authorises billing. It is, in the most literal sense, money: anyone who has it can spend on your account. Which is why there is one iron rule about where it lives.</p>
+      <p>It lives in an <dfn>environment variable</dfn> — a named value the operating system holds for a running program, which you met in <a href="ch019-logging-config-env.html">the logging, config and env chapter</a>. Your code asks the environment for the key at runtime; the key itself never appears in the source file:</p>
+
+      <div class="code-title">the right way: key from the environment</div>
+      <pre><code class="language-bash"># once, in your shell or your server's secret store
+export ANTHROPIC_API_KEY="sk-ant-api03-..."</code></pre>
+      <pre><code class="language-python">import os
+api_key = os.environ["ANTHROPIC_API_KEY"]   # read at runtime, never written in code</code></pre>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Never paste a key directly into a source file — not even "temporarily". Code gets committed, commits get pushed, and a key that touches git history is compromised even if you delete it in the next commit, because history keeps the old version forever. Automated scrapers watch public repositories and will find a leaked key in minutes. If a key ever leaks: revoke it in the provider's console and mint a fresh one. The official SDKs cooperate with the rule — construct them with no arguments and they quietly read <code>ANTHROPIC_API_KEY</code> or <code>OPENAI_API_KEY</code> from the environment themselves.</p></div>
+
+      <h2>A complete request, line by line</h2>
+      <p>Time to read a real order form. This is a complete request body in the OpenAI chat-completions dialect — the shape most of the industry standardised on. It POSTs to <code>https://api.openai.com/v1/chat/completions</code> with two headers: <code>Authorization: Bearer $OPENAI_API_KEY</code> and <code>Content-Type: application/json</code>. Click each annotated line:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">POST /v1/chat/completions — the request body</div>
+        <div class="wl-line"><code>{</code>
+          <div class="wl-note">One JSON object is the entire request. Everything the model will know about this conversation lives inside these braces.</div></div>
+        <div class="wl-line"><code>  "model": "gpt-4o",</code>
+          <div class="wl-note">Which model answers. This is a routing label, not magic — the same endpoint serves many models, and providers rename them every few months, so real code keeps this in config, not hardcoded. Check the provider's docs for current names.</div></div>
+        <div class="wl-line"><code>  "max_tokens": 200,</code>
+          <div class="wl-note">A hard cap on the length of the reply, in tokens. A cost seatbelt: the model physically cannot bill you for more output than this per call.</div></div>
+        <div class="wl-line"><code>  "messages": [</code>
+          <div class="wl-note">The transcript begins. Oldest first, every turn, every time — because the server remembers nothing from your last call.</div></div>
+        <div class="wl-line"><code>    {"role": "system",</code>
+          <div class="wl-note">The house rules. In the OpenAI dialect the system prompt is just the first message in the array, wearing the system role.</div></div>
+        <div class="wl-line"><code>     "content": "You are a concise assistant for a small business."},</code></div>
+        <div class="wl-line"><code>    {"role": "user",</code>
+          <div class="wl-note">The human's first question — this already happened, one turn ago. We resend it so the model can re-establish context.</div></div>
+        <div class="wl-line"><code>     "content": "What is 20% GST on a 1,500 rupee invoice?"},</code></div>
+        <div class="wl-line"><code>    {"role": "assistant",</code>
+          <div class="wl-note">The model's own previous answer, played back to it. It has no memory of writing this — the transcript IS its memory, and you are the one holding it.</div></div>
+        <div class="wl-line"><code>     "content": "GST at 20% on 1,500 rupees is 300 rupees."},</code></div>
+        <div class="wl-line"><code>    {"role": "user", "content": "And on 4,000?"}</code>
+          <div class="wl-note">The one genuinely new line in the whole request. "And on 4,000?" is meaningless alone — it only makes sense because the three messages above it travelled too. This is why context matters and why long conversations cost more.</div></div>
+        <div class="wl-line"><code>  ]</code></div>
+        <div class="wl-line"><code>}</code></div>
+      </div>
+
+      <p>And the tray that comes back — a JSON response, roughly one second later:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">the response body</div>
+        <div class="wl-line"><code>{</code></div>
+        <div class="wl-line"><code>  "id": "chatcmpl-8x2Kq...",</code>
+          <div class="wl-note">A unique receipt number for this exchange. Production systems log it — when something goes wrong, this ID is what you quote to the provider.</div></div>
+        <div class="wl-line"><code>  "model": "gpt-4o",</code>
+          <div class="wl-note">Confirmation of which model actually answered.</div></div>
+        <div class="wl-line"><code>  "choices": [</code>
+          <div class="wl-note">An array of candidate replies. In practice it almost always holds exactly one — but the wrapper means the text you want is always one level deeper than you expect.</div></div>
+        <div class="wl-line"><code>    {</code></div>
+        <div class="wl-line"><code>      "message": {</code></div>
+        <div class="wl-line"><code>        "role": "assistant",</code>
+          <div class="wl-note">The reply arrives pre-labelled with the assistant role — deliberately shaped so your code can append it straight onto the messages array for the next turn. The loop closes itself.</div></div>
+        <div class="wl-line"><code>        "content": "GST at 20% on 4,000 rupees is 800 rupees."</code>
+          <div class="wl-note">The payload. The path your code walks to reach it — choices[0].message.content — is worth memorising; you will type it hundreds of times.</div></div>
+        <div class="wl-line"><code>      },</code></div>
+        <div class="wl-line"><code>      "finish_reason": "stop"</code>
+          <div class="wl-note">Why generation ended. "stop" = finished naturally. "length" = hit your max_tokens cap, so the reply is truncated — always worth checking. "tool_calls" = the model wants an action performed, the hook the whole of <a href="ch035-tool-calling.html">tool calling</a> hangs on.</div></div>
+        <div class="wl-line"><code>    }</code></div>
+        <div class="wl-line"><code>  ],</code></div>
+        <div class="wl-line"><code>  "usage": {</code>
+          <div class="wl-note">The bill. prompt_tokens counts everything you sent (and it grows every turn, because the transcript grows); completion_tokens counts the reply. Multiply by the per-token price and that is your cost for this call.</div></div>
+        <div class="wl-line"><code>    "prompt_tokens": 61, "completion_tokens": 14, "total_tokens": 75</code></div>
+        <div class="wl-line"><code>  }</code></div>
+        <div class="wl-line"><code>}</code></div>
+      </div>
+
+      <h2>Two dialects of the same language</h2>
+      <p>Anthropic's API speaks the same fundamental grammar — POST, JSON body, messages array, roles — with a different accent. The same conversation, in the Anthropic dialect, POSTs to <code>https://api.anthropic.com/v1/messages</code>:</p>
+
+      <div class="code-title">Anthropic request — POST /v1/messages</div>
+      <pre><code class="language-json">{
+  "model": "claude-opus-4-8",
+  "max_tokens": 300,
+  "system": "You are a concise assistant for a small business.",
+  "messages": [
+    {"role": "user", "content": "What is 20% GST on a 1,500 rupee invoice?"}
+  ]
+}</code></pre>
+
+      <div class="code-title">Anthropic response</div>
+      <pre><code class="language-json">{
+  "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {"type": "text", "text": "GST at 20% on 1,500 rupees is 300 rupees."}
+  ],
+  "stop_reason": "end_turn",
+  "usage": {"input_tokens": 32, "output_tokens": 17}
+}</code></pre>
+
+      <p>Spot the differences: the system prompt is a top-level <code>system</code> field instead of a message in the array; <code>max_tokens</code> is required, not optional; and the reply's <code>content</code> is a <em>list of typed blocks</em> rather than a single string — future-proofing for replies that mix text with tool calls and other block types. Side by side:</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>OpenAI (chat completions)</th><th>Anthropic (messages)</th></tr>
+        <tr><td>Endpoint</td><td><code>POST /v1/chat/completions</code></td><td><code>POST /v1/messages</code></td></tr>
+        <tr><td>Auth header</td><td><code>Authorization: Bearer $OPENAI_API_KEY</code></td><td><code>x-api-key: $ANTHROPIC_API_KEY</code> plus <code>anthropic-version: 2023-06-01</code></td></tr>
+        <tr><td>System prompt</td><td>a <code>{"role": "system"}</code> message inside the array</td><td>a top-level <code>"system"</code> field; the array holds only user/assistant</td></tr>
+        <tr><td><code>max_tokens</code></td><td>optional</td><td>required on every request</td></tr>
+        <tr><td>Where the text lives</td><td><code>choices[0].message.content</code></td><td><code>content[0].text</code></td></tr>
+        <tr><td>Why it stopped</td><td><code>finish_reason: "stop"</code> / <code>"length"</code></td><td><code>stop_reason: "end_turn"</code> / <code>"max_tokens"</code></td></tr>
+        <tr><td>The bill</td><td><code>usage.prompt_tokens</code> / <code>completion_tokens</code></td><td><code>usage.input_tokens</code> / <code>output_tokens</code></td></tr>
+      </table></div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Nobody hand-writes these POSTs in production. Each provider ships an <dfn>SDK</dfn> — an official library that wraps the raw HTTP: <code>pip install anthropic</code> gives you <code>client.messages.create(model=..., max_tokens=..., messages=[...])</code>, and <code>pip install openai</code> gives you <code>client.chat.completions.create(...)</code>. Under the hood they do exactly what you just read — build the JSON, attach the headers, POST, parse — plus retries and error types. OpenAI also offers a newer Responses API alongside chat completions; different wrapper, same wire idea. Learn the wire format once and every SDK becomes transparent.</p></div>
+
+      <h2>Make the call yourself</h2>
+      <p>Below is a complete two-turn conversation with a model, in the Anthropic dialect. Because this page cannot spend real money or reach the network, the HTTPS POST is a scripted stand-in — <code>fake_http_post()</code> returns exactly the JSON shape a real call would. Everything else is production-faithful: the key from the environment, the headers, the body, the growing messages array. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="Two turns over the wire — run me">
+<textarea class="py-src" spellcheck="false">
+import json, os
+
+# Real code reads the key from the environment -- NEVER from source.
+API_KEY = os.environ.get("ANTHROPIC_API_KEY", "sk-fake-key-for-this-page")
+
+SHOW_WIRE = False   # flip to True to print the exact JSON that travels
+
+# ---- A scripted stand-in for the real HTTPS POST ---------------
+# A real script would call requests.post(url, ...).json() or an SDK.
+# The interface is identical: request body in, response body out.
+def fake_http_post(url, headers, body):
+    users = [m for m in body["messages"] if m["role"] == "user"]
+    last = users[-1]["content"]
+    if "capital" in last.lower():
+        text = "The capital of France is Paris."
+    elif "count" in last.lower():
+        text = (f"Reading the transcript you just sent me, you have "
+                f"asked {len(users)} questions so far.")
+    else:
+        text = f"A scripted reply to: {last!r}"
+    return {"id": "msg_01fake", "type": "message", "role": "assistant",
+            "content": [{"type": "text", "text": text}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 30 + 12 * len(body["messages"]),
+                      "output_tokens": len(text.split())}}
+
+def call_model(messages):
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {"x-api-key": API_KEY,              # identity + billing
+               "anthropic-version": "2023-06-01",
+               "content-type": "application/json"}
+    body = {"model": "claude-opus-4-8",
+            "max_tokens": 300,
+            "system": "You are a concise assistant.",
+            "messages": messages}
+    print(f"POST {url}  ({len(messages)} message(s) in the body)")
+    if SHOW_WIRE:
+        print(json.dumps(body, indent=2))
+    return fake_http_post(url, headers, body)
+
+# ---- Turn 1 -----------------------------------------------------
+messages = [{"role": "user", "content": "What is the capital of France?"}]
+resp = call_model(messages)
+answer = resp["content"][0]["text"]     # Anthropic: content is a list of blocks
+print("assistant:", answer)
+print("usage:", resp["usage"])
+print()
+
+# ---- Turn 2: the server remembers NOTHING, so we resend it all --
+messages.append({"role": "assistant", "content": answer})
+messages.append({"role": "user", "content": "Count my questions."})
+resp = call_model(messages)
+print("assistant:", resp["content"][0]["text"])
+print("usage:", resp["usage"])
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now experiment. Flip <code>SHOW_WIRE</code> to <code>True</code> and read the exact JSON that would cross the internet. Add a third turn — append the assistant's reply, append another <code>"Count my questions."</code> — and watch two things climb together: the count in the answer and <code>input_tokens</code> in the usage. That climb is the transcript growing, and it is the single biggest driver of cost in every agent you operate. Then delete the line that appends the assistant reply and see what the model loses.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This chapter's shapes are everywhere once you know them. Framework configs with <code>model:</code>, <code>base_url:</code>, and <code>api_key:</code> keys are just filling in this POST's blanks — LangChain's <code>init_chat_model</code> is a coat of paint over it. CI pipelines and deploy scripts export <code>OPENAI_API_KEY</code> / <code>ANTHROPIC_API_KEY</code> as environment secrets, never in code. Ops runbooks carry <code>curl https://api.anthropic.com/v1/messages ...</code> one-liners for smoke-testing whether "the model is down or just our code". Log lines shouting <code>401</code> mean a bad or missing key; <code>429</code> means rate-limited; <code>finish_reason: "length"</code> in a trace means someone's <code>max_tokens</code> was too tight and a reply got cut mid-sentence. And when you reach <a href="ch045-react-loop-by-hand.html">the ReAct loop</a>, the mysterious line that "calls the model" will be exactly the <code>call_model()</code> you just ran.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. When a framework "calls the model", what actually travels over the network?</p>
+          <div class="q-opts">
+            <button data-opt="a">A persistent open connection where the model holds the conversation in memory</button>
+            <button data-opt="b">A single HTTP POST carrying a JSON body with the model name and the full messages array</button>
+            <button data-opt="c">Only the newest user message — the server keeps the earlier turns</button>
+          </div>
+          <p class="q-explain">One POST, one JSON body, one JSON reply — and the body must carry the entire conversation, because the server keeps nothing between calls. Every framework is a wrapper around this exchange.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Which role carries the standing instructions — persona, tone, rules of behaviour?</p>
+          <div class="q-opts">
+            <button data-opt="a">user</button>
+            <button data-opt="b">assistant</button>
+            <button data-opt="c">system</button>
+          </div>
+          <p class="q-explain">The system role is the house rules card, and the model treats it with more authority than ordinary conversation. OpenAI puts it inside the messages array; Anthropic gives it its own top-level field — same idea, different placement.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why does turn two of a chat resend turn one's messages?</p>
+          <div class="q-opts">
+            <button data-opt="a">The API is stateless — the transcript you send is the model's only memory of the conversation</button>
+            <button data-opt="b">For the provider's audit and compliance logs</button>
+            <button data-opt="c">It is a retry mechanism in case turn one was lost</button>
+          </div>
+          <p class="q-explain">The server wipes the slate after every call. If turn one is not in turn two's messages array, then as far as the model is concerned, turn one never happened. That is also why input tokens — and cost — grow every turn.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Where should your API key live?</p>
+          <div class="q-opts">
+            <button data-opt="a">In the source file, so the code works anywhere without setup</button>
+            <button data-opt="b">In an environment variable, read by the code at runtime</button>
+            <button data-opt="c">In a comment at the top of the script, for easy reference</button>
+          </div>
+          <p class="q-explain">The key is spendable money. It lives in the environment (or a secrets manager) and the code reads it at runtime — never in source, because anything committed to git is in history forever and scrapers find leaked keys in minutes.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. Your code just received a response from the Anthropic messages API. Where is the reply text?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>choices[0].message.content</code></button>
+            <button data-opt="b"><code>reply.text</code></button>
+            <button data-opt="c"><code>content[0].text</code> — the first block in the content list</button>
+          </div>
+          <p class="q-explain">Anthropic returns content as a list of typed blocks, so the text sits at content[0].text. The choices[0].message.content path is the OpenAI dialect — same language, different accent.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Talking to an LLM is one ordinary HTTP POST: a JSON body goes to an endpoint, a JSON reply comes back. Every framework and harness wraps this single exchange.</li>
+          <li>The messages array is the conversation — a list of role-plus-content objects, where system sets the rules, user asks, and assistant is the model's own past replies played back to it.</li>
+          <li>The API is stateless: the server forgets you after every call, so your code resends the whole growing transcript each turn — which is exactly why long conversations cost more.</li>
+          <li>API keys are spendable money. They live in environment variables and are read at runtime; a key in source code or git history is a leaked key.</li>
+          <li>OpenAI and Anthropic are two dialects of one grammar: same POST-and-JSON idea, different endpoints, auth headers, system-prompt placement, and reply paths (<code>choices[0].message.content</code> vs <code>content[0].text</code>).</li>
+          <li>The usage section of every response is the bill — input and output token counts — and the finish/stop reason tells you whether the reply ended naturally or was cut short.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

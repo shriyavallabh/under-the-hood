@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent evals — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch104">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>Agent evals</h1>
+        <p class="ch-tagline">An agent that aced every demo can still be quietly getting worse every week. Evals are how you find out before your users do — datasets of tasks, graders, trajectory scores, an LLM examiner with a printed rubric, and a CI gate that blocks the merge.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 105 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>The driving examiner slides into the passenger seat carrying two clipboards. The first has a single line: <em>did the car arrive at the finish point?</em> The second is dense: mirror checks, signalling, speed control, that dreaded parallel park by the market. Forty minutes later you arrive — destination reached, clipboard one says pass. But clipboard two tells the real story: you rolled through a stop sign, and you circled the same roundabout twice because you missed your exit. The examiner fails you, politely. Arriving was never the point; arriving <em>reliably</em> was, and the drive says you got lucky.</p>
+        <p>Now notice the rest of the exam. Every candidate drives the same standard routes, so results compare fairly across days and examiners. The examiner scores against a printed rubric, not a mood. And the transport office re-runs those routes on every new batch — if this month's cohort fails at twice the usual rate, somebody inspects the driving school. Hold that picture: it is exactly how serious teams measure whether an agent actually works.</p>
+      </section>
+
+      <h2>Tests pass. Is the agent any good?</h2>
+      <p>In <a href="ch103-pytest.html">the last chapter</a> you learned why tests gate merges: a test feeds a function a known input, asserts the exact expected output, and the pipeline turns red or green with no room for debate. That works because ordinary code is deterministic — same input, same output, every single time. Pytest's whole edifice rests on that promise.</p>
+      <p>Agents break the promise. You know from <a href="ch031-llms-vs-deterministic.html">the chapter on LLMs versus deterministic software</a> that a model is a probability machine, and from <a href="ch034-sampling-params.html">the sampling chapter</a> that even at low temperature its wording wobbles. Ask your invoice agent the same question three times and you might get <em>"GST comes to 360 rupees"</em>, <em>"That works out to Rs 360"</em>, and <em>"The GST amount is 360.00"</em> — three phrasings, all correct, and <code>assert answer == "GST comes to 360 rupees"</code> fails on two of them. Worse, the failure can run the other way: you tweak one line of the system prompt, your single happy-path test stays green, and the agent quietly gets worse at thirty other tasks nobody was checking.</p>
+      <p>So the industry built a different instrument. An <dfn>eval</dfn> is a test for a nondeterministic system: instead of one input and one exact assertion, you run the agent across a whole <em>dataset</em> of tasks, score each result with <em>graders</em> that check meaning rather than exact strings, and track the <em>rate</em> — 84 per cent of tasks passed, up from 79 last week. One red test tells you a function broke. A falling pass rate tells you your agent is degrading. Different instrument, same job: catching regressions before they ship.</p>
+
+      <h2>The anatomy of an eval</h2>
+      <p>Every eval system — from a fifty-line script to an enterprise platform — has the same three organs:</p>
+      <p><strong>A dataset.</strong> A collection of representative tasks, each paired with what "right" looks like: a reference answer, facts that must appear, or a rule to check. Teams call a trusted, human-reviewed dataset their <dfn>golden dataset</dfn> — the standard routes of the driving exam. It lives in the repo as a JSONL or CSV file, versioned like any other code, and it grows every time production surprises you: yesterday's incident becomes tomorrow's eval case.</p>
+      <p><strong>A runner.</strong> Code that executes the agent on every task and captures <em>everything</em> — not just the final answer but every tool call and intermediate step. If you set up tracing in <a href="ch088-observability.html">the observability chapter</a>, this will feel familiar: the runner replays your agent under a microscope.</p>
+      <p><strong>Graders.</strong> Functions that look at what the agent did and produce a score. A <dfn>grader</dfn> can be dumb and cheap (does the answer contain the number 360?), clever and cheap (extract all numbers, compare within a tolerance), or clever and expensive (ask another LLM to judge against a rubric — more on that shortly). One task can have several graders — the examiner's two clipboards.</p>
+      <p>Watch a full eval run move through the machine:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Dataset loads">
+          <h3>1. The dataset loads</h3>
+          <div class="diagram">
+            <div class="d-box hot">Dataset<small>40 tasks + expected results</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Runner</div>
+            <div class="d-box dim">Agent</div>
+            <div class="d-box dim">Graders</div>
+          </div>
+          <p class="step-cap">The golden dataset — the fixed exam routes. Same tasks every run, so today's score is comparable with last month's.</p>
+        </div>
+        <div class="step" data-title="Agent runs each task">
+          <h3>2. The runner executes the agent on every task</h3>
+          <div class="diagram">
+            <div class="d-box dim">Dataset</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Runner</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Agent<small>thinks, calls tools, answers</small></div>
+          </div>
+          <p class="step-cap">The agent solves each task exactly as it would in production. The runner records the final answer AND the full step-by-step trace.</p>
+        </div>
+        <div class="step" data-title="Graders score">
+          <h3>3. Graders score answers and trajectories</h3>
+          <div class="diagram">
+            <div class="d-box dim">Agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Graders<small>answer right? steps sane?</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Scores</div>
+          </div>
+          <p class="step-cap">Two clipboards per task: did it reach the right destination, and was the drive itself sound? Each grader returns pass, fail, or a score.</p>
+        </div>
+        <div class="step" data-title="Aggregate">
+          <h3>4. Scores aggregate into rates</h3>
+          <div class="diagram">
+            <div class="d-box dim">Graders</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Report<small>final: 34/40 · trajectory: 31/40</small></div>
+          </div>
+          <p class="step-cap">Individual passes and fails collapse into pass rates. Rates, not booleans, are the currency of eval results — nondeterministic systems are judged statistically.</p>
+        </div>
+        <div class="step" data-title="Gate decides">
+          <h3>5. The gate compares against the bar</h3>
+          <div class="diagram">
+            <div class="d-box dim">Report<small>85% / 78%</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Gate<small>threshold 90%</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Verdict<small>RED — merge blocked</small></div>
+          </div>
+          <p class="step-cap">The rate is compared to a threshold, or to the baseline score on the main branch. Below the bar, the pipeline goes red and the merge request waits — exactly like a failing pytest suite.</p>
+        </div>
+      </div>
+
+      <p>Six words carry this chapter. Flip each card until they feel obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">eval</span><span class="flip-back">A test for a nondeterministic system: run the agent on a dataset of tasks, grade each result, track the pass rate over time.</span></button>
+        <button class="flip" type="button"><span class="flip-front">golden dataset</span><span class="flip-back">The trusted, human-reviewed set of tasks with known-good expected results. The fixed exam routes. Versioned in git; grows with every production incident.</span></button>
+        <button class="flip" type="button"><span class="flip-front">grader</span><span class="flip-back">A function that scores one result — exact match, numeric tolerance, rule check, or an LLM judging against a rubric. One task can have several.</span></button>
+        <button class="flip" type="button"><span class="flip-front">trajectory</span><span class="flip-back">The full sequence of steps the agent took — thoughts, tool calls, observations. The drive, not the destination. Graded separately from the final answer.</span></button>
+        <button class="flip" type="button"><span class="flip-front">LLM-as-judge</span><span class="flip-back">Using a second model call to grade the first one's output against an explicit rubric. Powerful for prose; comes with biases you must actively manage.</span></button>
+        <button class="flip" type="button"><span class="flip-front">regression suite</span><span class="flip-back">A fixed eval suite re-run on every change (and nightly), so any drop in pass rate is caught at the merge request, not in production.</span></button>
+      </div>
+
+      <h2>Destination versus the drive: final-answer and trajectory evals</h2>
+      <p>The first clipboard is the <strong>final-answer eval</strong>: did the agent produce the right result? For many tasks it is enough. But you learned in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> that an agent is a loop, and the <code>history</code> list that loop builds — thought, action, observation, repeated — is a complete record of <em>how</em> the answer was reached. That record is the <dfn>trajectory</dfn>, and grading it is the second clipboard: a <strong>trajectory eval</strong> asks whether the agent took sane steps, regardless of where it ended up.</p>
+      <p>Why grade the drive when the destination was right? Three reasons that show up in real merge requests:</p>
+      <p><strong>Luck rots.</strong> An agent that answers a legal question correctly <em>without ever calling the retrieval tool</em> answered from its training memory. Today that memory happened to be right. Next week, on a slightly different clause, it will confidently be wrong. The final-answer grader says pass; only the trajectory grader sees the skipped lookup and raises the flag.</p>
+      <p><strong>Cost compounds.</strong> An agent that takes forty steps to finish a three-step task passes the answer check and fails your budget. You saw in <a href="ch071-the-token-bill.html">the token bill chapter</a> that every loop turn re-sends the whole history — a step-count grader is a cost guardrail wearing an eval costume.</p>
+      <p><strong>Safety is a process property.</strong> "Never call the payments tool for a read-only question", "never issue the same tool call twice in a row" (the classic stuck-loop smell), "always cite the document you retrieved" — none of these are visible in the final answer. All of them are one-line checks against the trajectory.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Where do trajectories come from in production? From your tracing setup — the spans and tool-call logs from <a href="ch088-observability.html">the observability chapter</a>. Teams harvest production traces, scrub them, and promote them into the golden dataset. Observability feeds evals; evals justify observability.</p></div>
+
+      <h2>Run a real eval, right now</h2>
+      <p>Below is a complete miniature eval suite. As in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, the "model" is a scripted stand-in — a <code>fake_llm()</code> playing four personalities, one per task: a careful worker, a lucky guesser, an agent that repeats itself and then blunders, and a careful worker again. Everything else — dataset, runner, graders, aggregation, gate — is the real shape production eval code takes. Press <strong>Run</strong> and read the scoreboard.</p>
+
+      <div class="pyrun" data-title="A miniature agent eval suite — run me">
+<textarea class="py-src" spellcheck="false">
+# A miniature agent eval: dataset -&gt; run -&gt; grade -&gt; gate.
+import re
+
+# ---- 1. The dataset: tasks plus what "right" looks like ----
+DATASET = [
+    {"id": "gst-18",   "question": "GST at 18% on 2000 rupees?",
+     "expected": 360.0, "must_use": "calculate"},
+    {"id": "gst-5",    "question": "GST at 5% on 840 rupees?",
+     "expected": 42.0,  "must_use": "calculate"},
+    {"id": "late-fee", "question": "Late fee of 2% on 15000?",
+     "expected": 300.0, "must_use": "calculate"},
+    {"id": "refund",   "question": "Refund of 12.5% on 2400?",
+     "expected": 300.0, "must_use": "calculate"},
+]
+
+# ---- 2. The agent under test (scripted model, real loop) ---
+# fake_llm plays four personalities: careful, lucky guesser,
+# loop-then-blunder, careful again.
+SCRIPTS = {
+    "gst-18":   ["ACTION: calculate(2000 * 0.18)",
+                 "FINAL ANSWER: GST comes to 360 rupees."],
+    "gst-5":    ["FINAL ANSWER: GST comes to 42 rupees."],
+    "late-fee": ["ACTION: calculate(15000 * 0.2)",
+                 "ACTION: calculate(15000 * 0.2)",
+                 "FINAL ANSWER: The late fee is 3000 rupees."],
+    "refund":   ["ACTION: calculate(2400 * 0.125)",
+                 "FINAL ANSWER: The refund is 300 rupees."],
+}
+
+def fake_llm(case, turn):
+    return SCRIPTS[case["id"]][turn]
+
+def calculate(expr):
+    return str(eval(expr, {"__builtins__": {}}))
+
+def run_agent(case):
+    """The ch45 loop, compressed. Returns answer + trajectory."""
+    trajectory = []
+    for turn in range(6):                     # max-turns cap
+        reply = fake_llm(case, turn)
+        if "FINAL ANSWER:" in reply:
+            return reply.split("FINAL ANSWER:")[1].strip(), trajectory
+        call = reply.split("ACTION:")[1].strip()
+        arg = call[call.index("(") + 1 : call.rindex(")")]
+        calculate(arg)                        # the observation
+        trajectory.append(call)
+    return "(never answered)", trajectory
+
+# ---- 3. The graders: real code with real opinions ----------
+def grade_final(case, answer):
+    # Extract numbers, compare with tolerance. NOT a naive
+    # substring check: "contains 300" would happily pass the
+    # wrong answer "3000 rupees". Graders are code -- they
+    # have bugs too, so keep them simple and test them.
+    nums = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", answer)]
+    return any(abs(n - case["expected"]) &lt; 0.01 for n in nums)
+
+def grade_trajectory(case, traj):
+    problems = []
+    if not any(case["must_use"] in c for c in traj):
+        problems.append("skipped required tool")
+    if len(traj) != len(set(traj)):
+        problems.append("repeated an identical call")
+    if len(traj) &gt; 3:
+        problems.append("over step budget")
+    return problems
+
+# ---- 4. Run the suite, aggregate, gate ---------------------
+final_ok = traj_ok = 0
+print(f"{'task':&lt;10}{'final':&lt;8}{'steps':&lt;8}notes")
+for case in DATASET:
+    answer, traj = run_agent(case)
+    ok = grade_final(case, answer)
+    problems = grade_trajectory(case, traj)
+    final_ok += ok
+    traj_ok += not problems
+    print(f"{case['id']:&lt;10}"
+          f"{'PASS' if ok else 'FAIL':&lt;8}"
+          f"{'PASS' if not problems else 'FAIL':&lt;8}"
+          f"{'; '.join(problems)}")
+
+n = len(DATASET)
+print()
+print(f"final-answer pass rate: {final_ok}/{n} ({final_ok/n:.0%})")
+print(f"trajectory pass rate:   {traj_ok}/{n} ({traj_ok/n:.0%})")
+
+GATE = 0.90
+worst = min(final_ok / n, traj_ok / n)
+print(f"CI gate needs {GATE:.0%} on both ... "
+      + ("GREEN: merge allowed" if worst &gt;= GATE
+         else "RED: merge blocked"))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it, then fix it. Give <code>gst-5</code> a proper <code>ACTION</code> line and watch its trajectory turn green. Change the <code>late-fee</code> script to compute <code>15000 * 0.02</code> once and watch the whole gate flip. Then lower <code>GATE</code> to <code>0.75</code> and feel how uncomfortable that number is — every threshold in industry is somebody's judgement call about tolerable wrongness.</p></div>
+
+      <h2>The graders, line by line</h2>
+      <p>The runner is the ch45 loop you already own. The graders and the gate are the new muscles — read them the way a reviewer would:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">graders and gate — the heart of the eval</div>
+        <div class="wl-line"><code>def grade_final(case, answer):</code>
+          <div class="wl-note">A grader is just a function: the task's expectations plus the agent's output go in, a verdict comes out. Nothing mystical — every eval platform ultimately lets you write plain Python here.</div></div>
+        <div class="wl-line"><code>    nums = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", answer)]</code>
+          <div class="wl-note">Pull every number out of the answer text with a regex, using a <a href="ch008-comprehensions.html">comprehension</a>. This is meaning-aware grading on a budget: we do not care whether the agent said "Rs 360", "360.00", or "GST comes to 360 rupees".</div></div>
+        <div class="wl-line"><code>    return any(abs(n - case["expected"]) &lt; 0.01 for n in nums)</code>
+          <div class="wl-note">Numeric tolerance instead of string equality. A naive "does the text contain 300" check would pass the wrong answer "3000 rupees". Graders are code; they need the same care as the agent.</div></div>
+        <div class="wl-line"><code>def grade_trajectory(case, traj):</code>
+          <div class="wl-note">The second clipboard. It never looks at the answer at all — only at the list of tool calls the runner recorded.</div></div>
+        <div class="wl-line"><code>    if not any(case["must_use"] in c for c in traj):</code>
+          <div class="wl-note">The "lucky guesser" detector: the dataset says this task requires the calculator, so an empty or tool-free trajectory fails even when the answer is right. This one check catches answered-from-memory bugs that final-answer evals are blind to.</div></div>
+        <div class="wl-line"><code>    if len(traj) != len(set(traj)):</code>
+          <div class="wl-note">A <a href="ch004-collections.html">set</a> drops duplicates, so if the lengths differ the agent issued the same call twice — the classic stuck-loop smell you met in the failure-modes chapter.</div></div>
+        <div class="wl-line"><code>    if len(traj) &gt; 3:</code>
+          <div class="wl-note">The step budget. A cost guardrail dressed as a grader: agents that wander pay for every extra turn in tokens and latency.</div></div>
+        <div class="wl-line"><code>worst = min(final_ok / n, traj_ok / n)</code>
+          <div class="wl-note">Gate on the weaker of the two rates. Teams vary — some gate only on final answers, treating trajectory as advisory — but the shape is always: aggregate, then compare to a bar.</div></div>
+        <div class="wl-line"><code>... if worst &gt;= GATE else "RED: merge blocked"</code>
+          <div class="wl-note">A threshold, not perfection. Demanding 100 per cent from a nondeterministic system makes every pipeline red and teaches everyone to ignore the gate. Pick a bar, hold it, raise it deliberately.</div></div>
+      </div>
+
+      <h2>LLM-as-judge: hiring an examiner made of the same stuff</h2>
+      <p>Numbers are easy to grade with code. But suppose your agent drafts a polite payment-reminder email, summarises a rental agreement, or explains a refund decision. There is no single correct string, no number to extract — a regex cannot tell a good apology from a passive-aggressive one. For prose, teams use <dfn>LLM-as-judge</dfn>: a second model call whose only job is to grade the first one's output against an explicit rubric.</p>
+      <p>The rubric is the whole trick. A judge asked "is this answer good?" returns vibes. A judge given binary criteria, a reference answer, and a required output format returns something you can aggregate:</p>
+
+      <div class="code-title">judge_prompt.py — a rubric-driven judge</div>
+      <pre><code class="language-python">JUDGE_PROMPT = """You are grading an AI assistant's reply.
+
+Score each criterion 0 or 1. Be strict.
+1. correctness: every figure and date matches the reference
+2. grounding: no claims beyond the provided context
+3. tone: plain, polite, no jargon
+4. action: ends with one clear next step for the reader
+
+Reference answer:
+{reference}
+
+Reply to grade:
+{candidate}
+
+Return JSON only:
+{{"correctness": 0, "grounding": 0, "tone": 0,
+  "action": 0, "reason": "one sentence"}}"""</code></pre>
+
+      <p>Notice the choices baked in. Binary criteria, not marks out of ten — models are unreliable at fine-grained scales but decent at yes/no, and binary scores aggregate cleanly. A reference answer whenever one exists, so the judge compares rather than imagines. A required JSON shape (the <a href="ch036-structured-output.html">structured output</a> chapter at work) plus a one-sentence reason, because a score you cannot audit is a score you cannot trust. In the real call, pin the judge's model version and keep its temperature low — the examiner should be the most boring driver on the road.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>LLM judges have documented biases. <strong>Verbosity bias:</strong> longer answers score higher, deserved or not. <strong>Position bias:</strong> in "which of these two is better?" comparisons, the answer shown first wins more often — run every pair both ways and keep only consistent verdicts. <strong>Self-preference:</strong> models rate their own family's outputs more kindly, so judge with a different model where you can. And the judge is itself nondeterministic. The standing fix: keep a small set of human-graded examples and measure how often the judge agrees with the humans — when agreement drops, recalibrate the rubric. You grade the examiner.</p></div>
+
+      <h2>From notebook to merge gate: the regression suite in CI</h2>
+      <p>An eval you run once, by hand, the week before launch is a demo. It becomes a <dfn>regression suite</dfn> when it is fixed, versioned, and re-run on every change — so any drop against the baseline is caught at the merge request, in the pipelines you learned to read in <a href="ch101-gitlab-pipelines.html">the pipelines chapter</a>. The wiring is ordinary CI:</p>
+
+      <div class="code-title">.gitlab-ci.yml — evals as a merge gate</div>
+      <pre><code class="language-yaml">agent-evals:
+  stage: test
+  script:
+    - python evals/run_suite.py --suite smoke --min-pass-rate 0.90
+  rules:
+    - changes:
+        - agents/**/*
+        - prompts/**/*
+        - evals/**/*
+  artifacts:
+    when: always
+    paths:
+      - evals/report.json
+
+nightly-evals:
+  stage: test
+  script:
+    - python evals/run_suite.py --suite full --report evals/report.json
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"</code></pre>
+
+      <p>Two design decisions in that file matter more than the syntax. First, the <strong>smoke/full split</strong>. Unlike pytest, evals call real models — every case costs tokens and seconds — so the per-merge-request job runs a small <dfn>smoke suite</dfn> covering the critical behaviours, while the full suite (hundreds of cases) runs nightly. Second, the <code>rules: changes:</code> guard: the eval job fires only when agent code, prompts, or the evals themselves changed. Re-grading an untouched agent after a README edit burns money, and you saw in <a href="ch102-when-pipelines-fail.html">the failing-pipelines chapter</a> what teams do to jobs that annoy everyone.</p>
+      <p>The report artifact is the third quiet hero: scores from every run become a trend line, and the trend line is the payoff. One number means nothing; the same suite scored across versions tells you whether that prompt rewrite actually helped:</p>
+
+      <div data-bars data-title="Same 40-task suite, three versions of the agent (illustrative numbers)" data-unit="% pass"
+           data-note="The suite never changed — only the agent did. That is what makes the comparison honest.">
+        <div class="bar" data-label="Prompt v1" data-value="62"></div>
+        <div class="bar" data-label="Prompt v2" data-value="78"></div>
+        <div class="bar" data-label="v2 + tool-retry fix" data-value="91"></div>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Keep the dataset in git and review edits to it like code. If both the agent and the exam change in one merge request, a moving score is uninterpretable. Resist chasing 100 per cent: investigate step-changes in the rate, shrug at single-case wobble. A regression suite is a smoke alarm, not a court verdict.</p></div>
+
+      <h2>The tooling landscape, briefly</h2>
+      <p>You will rarely build the whole apparatus from scratch. The ecosystem (as of mid-2026 — names churn, the shape does not) splits into hosted platforms and open-source libraries:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Tool</th><th>What it is</th></tr>
+        <tr><td>LangSmith</td><td>Hosted platform from the LangChain team: tracing, datasets, evaluators, and annotation queues where humans grade sampled runs. The archetype of the "LangSmith-style platform".</td></tr>
+        <tr><td>Langfuse</td><td>Open-source tracing plus evals; self-hostable, popular where data cannot leave the building.</td></tr>
+        <tr><td>Braintrust</td><td>Hosted eval platform with strong CI integration — scores posted straight onto pull/merge requests.</td></tr>
+        <tr><td>Arize Phoenix</td><td>Open-source observability with built-in LLM evals.</td></tr>
+        <tr><td>DeepEval</td><td>Open-source Python library; writes evals in a pytest-like style, which makes the CI wiring feel like chapter 103.</td></tr>
+        <tr><td>promptfoo</td><td>Config-driven eval runner (YAML in, scores out); a favourite for quick CI gates.</td></tr>
+        <tr><td>Ragas</td><td>Metrics built for <a href="ch042-rag.html">RAG</a> pipelines: faithfulness, answer relevance, context precision.</td></tr>
+        <tr><td>Inspect</td><td>Open-source eval framework from the UK's AI Security Institute; strong on agentic, multi-step tasks.</td></tr>
+      </table></div>
+
+      <p>Whatever the logo, look for the same organs you built above: a dataset store, a runner that captures trajectories, pluggable graders including rubric-driven judges, and a way to post the rate into CI. One distinction to keep sharp: public benchmarks (SWE-bench, GAIA and friends) measure <em>models</em> on standardised tasks so the industry can compare them; your regression suite measures <em>your agent on your tasks</em>. A leaderboard-topping model can still fail your invoice workflow — only your own golden dataset will tell you.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>In a real repo, look for an <code>evals/</code> folder holding JSONL datasets (often <code>goldens.jsonl</code>), grader code, and a runner script; an eval job in <code>.gitlab-ci.yml</code> beside the pytest job; and merge-request descriptions carrying a small table — "billing suite: 91% → 94%, no trajectory regressions". In review threads you will hear "this MR regresses the refunds suite", "the judge and the humans disagree on twelve cases — recalibrating the rubric", and "add yesterday's incident as an eval case before we close the ticket". That last one marks a serious team: every production failure becomes a permanent exam question, the same way <a href="ch103-pytest.html">bug-fix commits arrive carrying a new test</a>.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Your test asserts <code>answer == "GST comes to 360 rupees."</code> and fails every third run even though the agent is always right. What is the eval-shaped fix?</p>
+          <div class="q-opts">
+            <button data-opt="a">Set temperature to 0 and keep the exact-match assert</button>
+            <button data-opt="b">Run a dataset of tasks with graders that check meaning (numbers, facts), and gate on the pass rate</button>
+            <button data-opt="c">Auto-retry the test until it passes</button>
+          </div>
+          <p class="q-explain">Low temperature reduces variation but does not eliminate it, and retry-until-green hides real regressions. The instrument built for nondeterministic systems is a dataset plus meaning-aware graders plus a rate.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. An agent answers a contract question correctly, but its trace shows it never called the retrieval tool — it answered from training memory. Which grader catches this, and why does it matter?</p>
+          <div class="q-opts">
+            <button data-opt="a">The final-answer grader — the answer is where the risk lives</button>
+            <button data-opt="b">An LLM judge reading the answer text against a rubric</button>
+            <button data-opt="c">A trajectory grader — because a lucky process passes today and fails on next week's slightly different question</button>
+          </div>
+          <p class="q-explain">Nothing in the answer text reveals the skipped lookup; only the trajectory does. Final-answer evals grade the destination, trajectory evals grade the drive — and unreliable driving is what fails you later.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. In pairwise LLM-as-judge comparisons, your judge prefers whichever answer it is shown first. What is this, and what is the standard mitigation?</p>
+          <div class="q-opts">
+            <button data-opt="a">Verbosity bias — cap the length of both answers</button>
+            <button data-opt="b">Position bias — run every pair in both orders and keep only consistent verdicts</button>
+            <button data-opt="c">Self-preference — switch to a judge from the same model family</button>
+          </div>
+          <p class="q-explain">Order-dependent preference is position bias. Swapping the order and requiring agreement is the standard fix; self-preference is the opposite problem (judge favouring its own family), mitigated by judging with a different model.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. Why do teams run a small smoke suite on every merge request but the full eval suite only nightly?</p>
+          <div class="q-opts">
+            <button data-opt="a">Evals call real models — every case costs tokens and minutes, so the per-MR gate stays small and fast while depth runs on a schedule</button>
+            <button data-opt="b">Full suites are less accurate than small ones</button>
+            <button data-opt="c">GitLab pipelines cannot run more than fifty cases per job</button>
+          </div>
+          <p class="q-explain">It is purely an economics-and-latency split. The smoke suite keeps the merge gate quick and affordable; the nightly full suite provides the deep, comprehensive signal. Both run the same graders.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. In the pyrun above, a naive "answer contains 300" grader would have passed the wrong answer "3000 rupees". What is the lesson?</p>
+          <div class="q-opts">
+            <button data-opt="a">Always use an LLM judge instead of code graders</button>
+            <button data-opt="b">The agent was actually right and the dataset was wrong</button>
+            <button data-opt="c">Graders are code — they have bugs and blind spots too, so keep them simple, review them, and test them</button>
+          </div>
+          <p class="q-explain">The whole eval is only as trustworthy as its graders. Substring checks, sloppy regexes, and vague judge rubrics all produce false confidence — grader code deserves the same review discipline as the agent it grades.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Evals are tests for nondeterministic systems: a dataset of tasks, a runner that captures everything, graders that score meaning, and a pass <em>rate</em> instead of a single red/green assert.</li>
+          <li>Grade both clipboards — the final answer (did it arrive?) and the trajectory (was the drive sane: right tools used, no repeated calls, within the step budget). Lucky answers pass the first and fail the second.</li>
+          <li>LLM-as-judge unlocks grading prose — but only with an explicit rubric, binary criteria, a reference answer, structured output, and regular calibration against human grades; it carries verbosity, position, and self-preference biases you must counter.</li>
+          <li>A regression suite is an eval made permanent: versioned dataset in git, smoke subset gating every merge request, full suite nightly, scores archived so the trend line — not any single run — tells the story.</li>
+          <li>Graders are code with bugs of their own; the "contains 300 passes 3000" trap is real. Review and test your graders like you review the agent.</li>
+          <li>Platforms and libraries (LangSmith-style hosted tools; open-source runners like DeepEval, promptfoo, Ragas, Inspect) package the same organs you built by hand — and public model benchmarks never substitute for your own golden dataset on your own tasks.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

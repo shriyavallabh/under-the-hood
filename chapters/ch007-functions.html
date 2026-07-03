@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Functions: reading any signature — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch007">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act I · The Language</div>
+        <h1>Functions: reading any signature</h1>
+        <p class="ch-tagline">Every function definition is an order form with five possible zones, always in the same order. Learn the zones once and no signature — stdlib, LangChain, or a two-thousand-line enterprise module — will ever look foreign again.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 7 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>There is a small travel agency near the railway station that has booked tickets the same way for thirty years. On the counter sits a pad of booking forms. Two fields are compulsory — <em>passenger</em> and <em>destination</em>; the clerk will not move without them. Two more arrive pre-filled in faint grey ink: <em>seat: economy</em>, <em>meal: veg</em>. Cross them out and write your own if you care; leave them and the grey ink stands. Regulars rattle off answers in order — "Asha, Jaipur" — and the clerk fills the fields top to bottom. Fussier customers name their fields — "meal: Jain, seat: window" — in whatever order they please. At the bottom sit two catch-all boxes: <em>extra tags — attach as many slips as you like</em>, and <em>other preferences — write each as label = value</em>. When the form is complete, the clerk disappears behind a bead curtain and returns with exactly one thing: your ticket. Taped to the counter is a laminated card explaining, in one friendly paragraph, what this form is for.</p>
+        <p>That form is a function <strong>signature</strong>. The compulsory fields are parameters, the grey ink is defaults, naming your fields is keyword arguments, the two catch-all boxes are <strong>*args</strong> and <strong>**kwargs</strong>, the ticket is the return value, and the laminated card is the docstring. You have filled this form a thousand times without knowing it. Today you learn to read it at a glance.</p>
+      </section>
+
+      <h2>The machine behind the counter</h2>
+      <p>Quick recap of where you stand. In <a href="ch002-names-and-objects.html">chapter 2</a> you learned that Python variables are names stuck on objects. In <a href="ch006-control-flow.html">the last chapter</a> you learned how <code>if</code>, <code>for</code> and <code>while</code> steer a program — decisions and repetition. But everything so far ran top to bottom, once. Functions are how code becomes <em>reusable</em>: you wrap a block of logic, give it a name, and from then on anyone can trigger it by filling in the form.</p>
+      <p>A <dfn>function</dfn> is a named, reusable block of code that takes some inputs and hands back a result. You create one with the <dfn>def</dfn> keyword — short for <em>define</em>. The line that starts with <code>def</code> is the <dfn>signature</dfn>: the function's name plus the full list of what it accepts, exactly like the printed fields on the booking form. Two words that sound interchangeable but are not: a <dfn>parameter</dfn> is a named slot printed <em>on the form</em> (in the <code>def</code> line), while an <dfn>argument</dfn> is the actual value <em>you write into</em> a slot when you call the function. Parameters are the blanks; arguments are the ink.</p>
+      <p>Here is the agency as four lines of Python. Read it, then click each annotated line in the walkthrough below until every note feels obvious.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">booking.py — a complete function, top to bottom</div>
+        <div class="wl-line"><code>def book_ticket(passenger, destination, seat="economy", meal="veg"):</code>
+          <div class="wl-note">The signature. <code>def</code> starts the definition, <code>book_ticket</code> is the machine's name, and the brackets hold four parameters. The first two are bare names — compulsory fields. The last two carry <code>=</code> and a value — grey-ink defaults a caller may simply leave alone. The colon at the end promises an indented body, exactly like the <code>if</code> and <code>for</code> lines of the last chapter.</div></div>
+        <div class="wl-line"><code>    """Book one ticket and return its summary line."""</code>
+          <div class="wl-note">The docstring — the laminated card. A plain string sitting as the first statement in the body. Python stores it on the function itself, and tools like <code>help()</code> read it back. Later in this chapter you will see why agent frameworks care about it far more than you would expect.</div></div>
+        <div class="wl-line"><code>    label = f"{passenger} to {destination}"</code>
+          <div class="wl-note">Inside the body, the parameters behave like ordinary variables that were pre-loaded with whatever the caller sent. The f-string stitching is <a href="ch003-strings-and-fstrings.html">chapter 3</a>.</div></div>
+        <div class="wl-line"><code>    return f"{label}: {seat} seat, {meal} meal"</code>
+          <div class="wl-note"><code>return</code> is the bead curtain. It hands one value back to whoever called and ends the function on the spot — nothing after a reached <code>return</code> ever runs. The <dfn>return value</dfn> is the ticket.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>summary = book_ticket("Asha", "Jaipur", meal="jain")</code>
+          <div class="wl-note">The call. <code>"Asha"</code> and <code>"Jaipur"</code> fill the first two slots by position; <code>meal="jain"</code> crosses out one piece of grey ink by name; <code>seat</code> was never mentioned, so it stays <code>"economy"</code>. The returned ticket lands in the variable <code>summary</code>.</div></div>
+      </div>
+
+      <h2>What comes back: return, and the print trap</h2>
+      <p>The single most common beginner confusion is <code>print</code> versus <code>return</code>, so let us kill it early. <code>print</code> shows a value on the screen and hands back nothing useful; <code>return</code> hands a value back to the calling code, silently. A function that prints is a clerk who shouts your booking details across the room and then shreds the ticket. A function that returns quietly passes you the ticket so you can do something with it — store it, pass it to another function, test it. Production code returns; printing is for humans watching.</p>
+      <p>Two more facts complete the picture. First, a function with no <code>return</code> statement (or a bare <code>return</code> with nothing after it) still returns something: the special value <code>None</code>, Python's word for "nothing here". If you have ever seen a mysterious <code>None</code> appear where a result should be, somebody forgot to return. Second, when a function needs to hand back several things, it returns them separated by commas — Python quietly bundles them into a tuple, one of the <a href="ch004-collections.html">four containers</a>, and the caller unpacks it: <code>text, cost = call_model(prompt)</code>.</p>
+
+      <h2>The laminated card: docstrings</h2>
+      <p>A <dfn>docstring</dfn> is a triple-quoted string placed as the very first statement inside a function body. It documents what the function is <em>for</em> — not how it works, but what a caller may expect. Type <code>help(book_ticket)</code> in any Python session and the docstring comes back, along with the signature. Every serious codebase treats them as mandatory for public functions.</p>
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Here is the part that makes docstrings personally relevant to you as an agent operator: modern agent frameworks lift the docstring off a tool function and hand it to the model as the tool's description. In the MCP Python SDK, a function decorated with <code>@mcp.tool()</code> advertises itself to the model using its docstring; LangChain tools do the same. A lazy docstring literally makes your agent worse at choosing tools — the model picks tools by reading those descriptions. The laminated card is not decoration; it is the menu the model orders from.</p></div>
+
+      <h2>Say the words before we go deeper</h2>
+      <p>Eight terms carry this chapter. Flip each card until the back feels like something you already knew:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">signature</span><span class="flip-back">The def line: name plus the full parameter list. The order form. Reading signatures fluently is the whole skill of this chapter.</span></button>
+        <button class="flip" type="button"><span class="flip-front">parameter</span><span class="flip-back">A named slot printed on the form — it lives in the def line. The blank, not the ink.</span></button>
+        <button class="flip" type="button"><span class="flip-front">argument</span><span class="flip-back">The actual value a caller writes into a slot. The ink, not the blank.</span></button>
+        <button class="flip" type="button"><span class="flip-front">default value</span><span class="flip-back">Grey ink: a pre-filled value after = in the signature. Callers may omit that argument entirely and the default stands.</span></button>
+        <button class="flip" type="button"><span class="flip-front">keyword argument</span><span class="flip-back">An argument passed by name — meal="jain" — instead of by position. Order stops mattering; readability soars.</span></button>
+        <button class="flip" type="button"><span class="flip-front">*args</span><span class="flip-back">A one-star parameter that scoops up any extra positional arguments into a tuple. The "attach extra slips" box.</span></button>
+        <button class="flip" type="button"><span class="flip-front">**kwargs</span><span class="flip-back">A two-star parameter that scoops up any extra named arguments into a dict. The "other preferences, label = value" box.</span></button>
+        <button class="flip" type="button"><span class="flip-front">docstring</span><span class="flip-back">The triple-quoted first statement in a body. Documentation for humans — and the tool description agent frameworks show to the model.</span></button>
+      </div>
+
+      <h2>Grey ink: how defaults really behave</h2>
+      <p>A <dfn>default value</dfn> turns a compulsory field into an optional one. Write <code>seat="economy"</code> in the signature and every caller who says nothing about seats gets economy. Two rules govern them. First, position: once one parameter has a default, every parameter after it must have one too — <code>def f(a, b=1, c)</code> is a syntax error, because Python could never tell which slot a two-argument call meant to fill. All the grey ink lives at the end of the form. Second, defaults make change cheap: adding a new <em>defaulted</em> parameter to a widely used function breaks nobody, because every existing call simply inherits the default. Adding a new <em>required</em> parameter breaks every caller at once. Reviewers approve one of these in seconds and question the other — now you know why.</p>
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>One famous trap: a default is created <em>once</em>, when the <code>def</code> line runs — not freshly on every call. With immutable defaults like <code>3</code> or <code>"veg"</code> that is invisible. But <code>def add_task(task, queue=[])</code> creates <em>one</em> shared list that every call without a <code>queue</code> argument silently reuses — remember <a href="ch002-names-and-objects.html">names stuck on objects</a>: each call sticks the same name on the same list, and tasks from unrelated calls pile up together. The convention you will see everywhere: default to <code>None</code>, then create the fresh list inside the body. When a signature says <code>tools=None</code>, this is usually why.</p></div>
+
+      <h2>By position or by name</h2>
+      <p>Every ordinary parameter can be filled two ways. A <em>positional</em> argument relies on order: <code>book_ticket("Asha", "Jaipur")</code> works because "Asha" is first and so is <code>passenger</code>. A <dfn>keyword argument</dfn> names its slot: <code>book_ticket(destination="Jaipur", passenger="Asha")</code> says exactly where each value goes, so order stops mattering. The grammar has three small rules: positional arguments must come before keyword arguments in a call, each parameter may be filled only once, and a name that is not on the form is an immediate <code>TypeError</code> — the clerk hands the form straight back.</p>
+      <p>Style matters here more than syntax. Real production code leans hard on keyword arguments because they make call sites self-documenting: <code>retrain(data, 0.2, True)</code> tells a reviewer nothing, while <code>retrain(data, test_split=0.2, shuffle=True)</code> reads like a sentence. Time to get your hands on the form — run this, then follow the prompts in the comments:</p>
+
+      <div class="pyrun" data-title="Fill the form four ways — run me, then edit me">
+<textarea class="py-src" spellcheck="false">
+def book_ticket(passenger, destination, seat="economy", meal="veg"):
+    """Book one ticket and return its summary line."""
+    return f"{passenger} to {destination}: {seat} seat, {meal} meal"
+
+# 1. By position — order does the work:
+print(book_ticket("Asha", "Jaipur"))
+
+# 2. Override one piece of grey ink, by name:
+print(book_ticket("Asha", "Jaipur", meal="jain"))
+
+# 3. Name everything — order stops mattering:
+print(book_ticket(destination="Pune", passenger="Ravi", seat="business"))
+
+# 4. Mix: positions first, then names:
+print(book_ticket("Meera", "Delhi", meal="vegan"))
+
+# Now break it on purpose (uncomment one at a time, read the error):
+# print(book_ticket("Asha"))                      # missing a required field
+# print(book_ticket("Asha", "Jaipur", clas="1A")) # a field not on the form
+# print(book_ticket(passenger="Asha", "Jaipur"))  # keyword before position
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>The three commented errors at the bottom are the three function-call errors you will meet for the rest of your life: <code>missing required positional argument</code>, <code>unexpected keyword argument</code>, and <code>positional argument follows keyword argument</code>. Trigger each one now, on purpose, while the stakes are zero. <a href="ch009-errors-and-tracebacks.html">Chapter 9</a> teaches you to read the full traceback; today, just notice how precisely each message names what went wrong.</p></div>
+
+      <h2>The two stars: catch-all boxes</h2>
+      <p>Now the part that makes most newcomers' eyes slide off a signature: <code>*args</code> and <code>**kwargs</code>. The names <code>args</code> and <code>kwargs</code> are only conventions — the stars are the machinery. A single star in a signature means: <em>scoop up every extra positional argument into a tuple</em>. A double star means: <em>scoop up every extra keyword argument into a dict</em> — yes, the same dict you met in <a href="ch004-collections.html">chapter 4</a>. They are the form's two catch-all boxes: as many extra slips as you like, and any label = value preferences the printed fields did not anticipate.</p>
+      <p>And here is the elegant part: <strong>the stars work in both directions</strong>. In a <code>def</code> line they <em>collect</em>; at a call site they <em>unpack</em>. Write <code>call_model(prompt, **config)</code> and Python explodes the <code>config</code> dict into individual keyword arguments, as if you had typed each one by hand. Remember <a href="ch005-yaml-and-json.html">chapter 5</a>, where a YAML settings file became a Python dict the moment it was loaded? This is the payoff: that dict gets starred straight into a function call. Config file to dict to <code>**config</code> is one of the most common three-step patterns in every AI codebase you operate. Run both directions:</p>
+
+      <div class="pyrun" data-title="Stars that collect, stars that unpack — run me">
+<textarea class="py-src" spellcheck="false">
+def call_model(prompt, *examples, **options):
+    """Pretend LLM call: shows exactly what arrived in each zone."""
+    print("prompt   :", prompt)
+    print("examples :", examples)   # extra positionals -> a tuple
+    print("options  :", options)    # extra keywords    -> a dict
+    temp = options.get("temperature", 1.0)
+    return f"(fake reply, temperature {temp})"
+
+# Direction 1 — COLLECTING. The def line scoops up the extras:
+reply = call_model("Summarise this invoice",
+                   "example A", "example B",
+                   temperature=0.2, max_tokens=500)
+print("reply    :", reply)
+print()
+
+# Direction 2 — UNPACKING. Stars at the CALL site explode containers:
+few_shot = ["good sample", "bad sample"]          # a list
+config = {"temperature": 0.0, "max_tokens": 200}  # e.g. loaded from YAML
+reply = call_model("Classify this email", *few_shot, **config)
+print("reply    :", reply)
+
+# Try: add stop_sequence="END" to the first call. Where does it land?
+</textarea>
+      </div>
+
+      <h2>The five zones, assembled</h2>
+      <p>Put every piece from this chapter side by side and a full signature turns out to have at most five zones, always in the same order: required parameters, then defaulted ones, then <code>*args</code>, then keyword-only defaults, then <code>**kwargs</code>. Almost no real function uses all five — but every real function uses a <em>subset</em>, in that order. That is why the skill transfers: once the zones are familiar, an unfamiliar signature is just a form with some fields missing.</p>
+
+      <div class="stepper" data-title="Decode a real-world monster, one zone at a time">
+        <div class="step"><strong>Zone 1 — required.</strong> <code>def create_agent(model, tools, ...)</code> opens with bare names. No grey ink, no stars: the caller must supply a model and a tool list or the clerk hands the form back with a <code>TypeError</code>. Required parameters always tell you what a function is fundamentally <em>about</em>.</div>
+        <div class="step"><strong>Zone 2 — defaults.</strong> Next comes <code>prompt=None, temperature=1.0, max_retries=3</code>. Grey ink. Every one of these is a decision the author made for you, which you may override by name. And <code>prompt=None</code> is the mutable-default convention from the warning above: "none supplied, I will build a fresh one inside."</div>
+        <div class="step"><strong>Zone 3 — the single star.</strong> A bare <code>*</code> or <code>*args</code>. If extras arrive by position, they land here as a tuple. A lone <code>*</code> with no name is the same fence with the box removed: nothing positional may pass, everything after it must be named.</div>
+        <div class="step"><strong>Zone 4 and 5 — keyword-only, then the double star.</strong> Parameters after the star can only be filled by name — frameworks use this to force readable call sites. Finally <code>**kwargs</code> quietly accepts whatever named options the author did not anticipate, usually to pass them through to a lower layer.</div>
+      </div>
+
+      <p>Read signatures in that order — left to right, zone by zone — and the intimidation evaporates. The required names tell you the point of the function; the defaults tell you its opinions; the stars tell you how forgiving it is about extras. Three glances, and you know how to call code you have never seen before.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any agent framework and the form-reading skill pays out immediately. The OpenAI and Anthropic Python clients are called almost exclusively with keyword arguments — <code>client.chat.completions.create(model="gpt-4o", messages=msgs, temperature=0)</code> — because self-documenting call sites survive code review. Config-driven code everywhere ends in a starred dict: <code>create(**payload)</code>, where <code>payload</code> came out of a YAML or JSON file. And wrapper functions — retry helpers, logging shims, LangChain's layers over model clients — are built almost entirely from <code>def wrapper(*args, **kwargs)</code>: accept anything, pass everything through unchanged. When you meet a signature that seems to accept nothing but stars, you are looking at a polite middleman, not magic.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. In <code>def book_ticket(passenger, seat="economy")</code> called as <code>book_ticket("Asha")</code>, which is the parameter and which is the argument?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>"Asha"</code> is the parameter; <code>passenger</code> is the argument</button>
+            <button data-opt="b"><code>passenger</code> is the parameter (the named slot on the form); <code>"Asha"</code> is the argument (the value written into it)</button>
+            <button data-opt="c">They are two words for the same thing</button>
+          </div>
+          <p class="q-explain">Parameters are the blanks printed on the form — they live in the <code>def</code> line. Arguments are the ink — the actual values a caller supplies. Error messages use both words precisely, so keeping them straight makes tracebacks readable.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Why does <code>def f(a, b=1, c):</code> refuse to even run?</p>
+          <div class="q-opts">
+            <button data-opt="a">Parameters must be in alphabetical order</button>
+            <button data-opt="b">A function may only have one default value</button>
+            <button data-opt="c">Once one parameter has a default, all parameters after it need one too — otherwise a call like <code>f(1, 2)</code> would be ambiguous</button>
+          </div>
+          <p class="q-explain">All the grey ink lives at the end of the form. If <code>c</code> could sit defaultless after <code>b=1</code>, Python could not tell whether <code>f(1, 2)</code> meant to fill <code>b</code> or skip to <code>c</code>. It is a syntax error precisely to keep calls unambiguous.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why do experienced authors write <code>def add_task(task, queue=None)</code> instead of <code>queue=[]</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">A default is created once, at <code>def</code> time — a default list would be shared by every call that omits <code>queue</code>, silently accumulating items across unrelated calls</button>
+            <button data-opt="b"><code>[]</code> is a syntax error in a signature</button>
+            <button data-opt="c"><code>None</code> uses less memory, which matters at scale</button>
+          </div>
+          <p class="q-explain">The default object is built one time, when the <code>def</code> line runs. Every defaulted call then sticks the same name on the same list — names on objects, chapter 2. Defaulting to <code>None</code> and creating the fresh list inside the body sidesteps the shared object entirely.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. <code>config = {"temperature": 0.2, "max_tokens": 500}</code> — what does <code>call_model("hi", **config)</code> do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Passes the dict itself as the second positional argument</button>
+            <button data-opt="b">Unpacks the dict into keyword arguments, exactly as if you had typed <code>temperature=0.2, max_tokens=500</code> by hand</button>
+            <button data-opt="c">Collects extra keyword arguments into a dict named <code>config</code></button>
+          </div>
+          <p class="q-explain">Direction matters. Two stars in a <code>def</code> line collect extras into a dict; two stars at a call site do the reverse — explode a dict into individual named arguments. This is the config-file-to-function-call bridge you will see in every AI codebase.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A function body contains <code>print(result)</code> and no <code>return</code> statement. What does a caller receive?</p>
+          <div class="q-opts">
+            <button data-opt="a">The printed string</button>
+            <button data-opt="b">Whatever value <code>result</code> held</button>
+            <button data-opt="c"><code>None</code> — printing shows a value on screen but hands nothing back; without <code>return</code>, the function returns <code>None</code></button>
+          </div>
+          <p class="q-explain">The clerk shouted your details across the room and shredded the ticket. <code>print</code> is for humans watching a screen; <code>return</code> is how a value travels back into the program. A mysterious <code>None</code> where a result should be almost always means a missing <code>return</code>.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A function is a named, reusable block: <code>def</code> defines it, the signature is its order form, <code>return</code> hands exactly one thing back through the bead curtain.</li>
+          <li>Parameters are the blanks on the form (in the <code>def</code> line); arguments are the ink a caller writes into them. Error messages use the two words precisely.</li>
+          <li><code>print</code> shows, <code>return</code> gives back. A function without <code>return</code> returns <code>None</code> — the usual culprit when a mysterious <code>None</code> appears.</li>
+          <li>Defaults are grey ink: created once at <code>def</code> time (hence the mutable-default trap and the <code>tools=None</code> convention) and always grouped at the end of the parameter list.</li>
+          <li>Keyword arguments make call sites self-documenting; production code prefers <code>retrain(data, test_split=0.2)</code> over a bare row of positional values.</li>
+          <li>The stars work both directions: in a <code>def</code> line <code>*args</code>/<code>**kwargs</code> collect extras into a tuple/dict; at a call site <code>*</code>/<code>**</code> unpack containers into arguments — the YAML-config-to-API-call bridge.</li>
+          <li>Docstrings are the laminated card — and in agent frameworks they double as the tool description the model reads when choosing tools, so a lazy docstring genuinely weakens an agent.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

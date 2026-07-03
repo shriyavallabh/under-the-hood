@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Context engineering — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch082">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act X · Harness Anatomy</div>
+        <h1>Context engineering</h1>
+        <p class="ch-tagline">Chapter 47's survival tricks, promoted to a named discipline — the one that lets Claude Code work for days inside a window that fills up in hours.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 83 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Two trekkers start up the same Himalayan trail. The first packs everything that might conceivably matter: the full guidebook, maps for the whole region, a week of food, spare everything. Eighteen kilos. By noon he is exhausted, and when the weather turns he cannot find the rain cover — it is buried under things he will never use.</p>
+        <p>The second trekker is a working guide, and her pack is small. She photocopied only today's pages of the guidebook — tomorrow's pages wait at the next lodge. When the route looks doubtful, she sends a porter to scout the pass; he walks four hours and returns with one sentence: "Snow above the ridge, take the east fork." Wrappers leave her pack the moment the food is eaten. And every evening she rewrites the day into three lines in a small diary — then burns her scratch notes.</p>
+        <p>She is not carrying less <em>knowledge</em>. She is carrying references, summaries, and exactly today's payload — because on a mountain, weight is a budget and every gram must earn its place. Her pack is a context window. Her habits have a name: <strong>context engineering</strong>.</p>
+      </section>
+
+      <h2>The trick that earned a name</h2>
+      <p>First, the promised recap. In <a href="ch047-memory-and-context.html">memory and the context problem</a> you learned that an LLM is stateless — the history list your loop re-sends every turn is the agent's entire world. That list grows until it hits the context window, and harnesses survive with three moves: truncation (chop the oldest), sliding windows (keep the last N, pin the important bits), and compaction (summarise the middle, keep recent turns verbatim). That chapter taught survival — how not to crash.</p>
+      <p>This chapter is what the field built on top of survival. Around 2025 the practice acquired a name, a manifesto, and a playbook. <dfn>Context engineering</dfn> is the discipline of curating, at every turn, the set of tokens the model sees — what enters the window, what gets summarised, what gets evicted, what never enters at all. The anchor text is Anthropic's engineering post "Effective context engineering for AI agents", which frames it as the successor to prompt engineering and gives the discipline its one-line creed: find the <em>smallest possible set of high-signal tokens</em> that makes the desired outcome likely.</p>
+      <p><em>Prompt</em> engineering asks: how do I word one instruction well? <em>Context</em> engineering asks a logistics question: of everything that <em>could</em> go in front of the model this turn — system prompt, tool definitions, history, tool results, retrieved files, notes — what actually should?</p>
+
+      <h2>The attention budget</h2>
+      <p>Why does this deserve the word "engineering"? Because of a physical constraint. Inside a transformer (<a href="ch029-transformers-plainly.html">chapter 29</a>, plainly), every token attends to every other token — the relationships to track grow roughly with the <em>square</em> of context length, and models are trained mostly on shorter sequences. The practical result is <dfn>context rot</dfn> — as the token count climbs, the model's ability to recall and use any one fact in the context measurably drops. You met its most famous symptom in chapter 47: "lost in the middle", where facts buried mid-transcript get recalled worse than facts at the edges.</p>
+      <p>So the window is not a warehouse. It is an <dfn>attention budget</dfn> — a finite pool of the model's focus, and every token you add makes a withdrawal, whether or not that token helps. A 190,000-token transcript that "still fits" in a 200,000-token window is a model paying attention to everything a little and to nothing well. Hence the discipline's creed: <strong>curate, not cram</strong>. Past a point, more context is less thinking.</p>
+      <p>Here is roughly what a coding agent's window already carries the moment a session starts — before you have typed a single word (round, illustrative numbers):</p>
+
+      <div class="viz-tiles">
+        <div class="tile"><div class="tile-label">System prompt</div>
+          <div class="tile-value">~3K</div><div class="tile-delta">the harness's standing rules</div></div>
+        <div class="tile"><div class="tile-label">Tool definitions</div>
+          <div class="tile-value">~15K</div><div class="tile-delta">every tool's name, schema, description</div></div>
+        <div class="tile"><div class="tile-label">Project memory file</div>
+          <div class="tile-value">~2K</div><div class="tile-delta">team conventions, loaded at start</div></div>
+        <div class="tile"><div class="tile-label">Left for actual work</div>
+          <div class="tile-value">~180K</div><div class="tile-delta">and a week of work wants millions</div></div>
+      </div>
+
+      <p>That last tile is the whole problem. A serious task — refactor a subsystem, chase a bug across services — generates far more text than any window holds: files read, tests run, logs scanned, dead ends explored. Context engineering's job is to run a multi-day marathon of work <em>through</em> a fixed-size window.</p>
+
+      <h2>The playbook, in five moves</h2>
+      <p>The entire discipline, as practised inside Claude Code and its peers, comes down to five named moves. Flip each card until the definitions feel obvious, then we take them one at a time:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">attention budget</span><span class="flip-back">The model's finite pool of focus. Every token in the window spends some of it — useful or not. "It still fits" is not "it still works".</span></button>
+        <button class="flip" type="button"><span class="flip-front">compaction</span><span class="flip-back">Near a full window, summarise the old conversation into a brief, keep recent turns verbatim, continue in a rebuilt window.</span></button>
+        <button class="flip" type="button"><span class="flip-front">tool-result pruning</span><span class="flip-back">Evict old tool outputs first: replace the 2,000-line dump from forty turns ago with a stub saying what it was and how to fetch it again.</span></button>
+        <button class="flip" type="button"><span class="flip-front">just-in-time retrieval</span><span class="flip-back">Do not preload "in case". Keep lightweight references — paths, queries, links — and pull the payload through a tool only when needed.</span></button>
+        <button class="flip" type="button"><span class="flip-front">sub-agent isolation</span><span class="flip-back">Send a scout: a helper agent with its own clean window does the token-hungry exploration and returns only a condensed answer.</span></button>
+        <button class="flip" type="button"><span class="flip-front">structured note-taking</span><span class="flip-back">Write decisions, findings, and todos to files outside the window. Notes on disk survive every prune and every compaction.</span></button>
+        <button class="flip" type="button"><span class="flip-front">progressive disclosure</span><span class="flip-back">Discover detail layer by layer — the folder, then one file, then one section — instead of receiving everything up front.</span></button>
+        <button class="flip" type="button"><span class="flip-front">context rot</span><span class="flip-back">The measurable decline in recall and reasoning as the window fills. Why the budget binds long before the token limit does.</span></button>
+      </div>
+
+      <h3>Move 1 — compaction, now with taste</h3>
+      <p>You already know compaction's mechanics from <a href="ch047-memory-and-context.html">chapter 47</a>: summarise the old middle, keep the tail verbatim. The discipline adds the part that separates a good harness from a naive one: <em>what the summary must keep</em>. When Claude Code compacts — manually via <code>/compact</code>, or automatically as the window nears its limit — the summariser is instructed to preserve the load-bearing facts: architectural decisions taken, bugs found and not yet fixed, the current state of the task, the next steps. What goes first is bulk already spent: repeated tool outputs, files quoted in full, dead-end explorations.</p>
+      <p>The cost: a summary is lossy, and whatever the summariser judged unimportant is gone. That is why compaction is the <em>last</em> resort in the playbook — the remaining four moves all exist to postpone it.</p>
+
+      <h3>Move 2 — tool-result pruning</h3>
+      <p>Look at any long agent transcript and ask: which tokens are dead weight? Almost always, old tool results. The 2,000-line test log from this morning mattered enormously for one turn; forty turns later its lesson is extracted, but the log still sits in the window, spending attention on every call. Tool results are the safest eviction because they are <em>re-fetchable</em>: the world still contains that file, that log, that query result. So the harness replaces the payload with a stub — "output of <code>read_file('tests.log')</code>, pruned; re-run to fetch" — keeping the reference, dropping the bulk. Anthropic's post describes this tool-result clearing as the lightweight cousin of compaction: cheap, low-risk, the first thing to reach for.</p>
+
+      <h3>Move 3 — just-in-time retrieval</h3>
+      <p>The moves so far clean up a window after it fills. The sharper discipline is to stop filling it in the first place. Early LLM apps preloaded: gather everything relevant, stuff it in, then ask — you saw the industrial version in <a href="ch042-rag.html">the RAG chapter</a>, where documents are embedded ahead of time and injected at query time. <dfn>Just-in-time retrieval</dfn> is the agentic alternative: the context holds lightweight <em>references</em> — file paths, folder listings, saved queries — and the agent pulls actual payloads through tools only at the moment of need, one layer of detail at a time (that layering is <dfn>progressive disclosure</dfn>: the folder, then the file, then the section).</p>
+      <p>This is visibly how Claude Code treats your codebase. It does not ingest the repository at session start. It greps for a symbol, reads the three files that matter, often just the relevant line ranges — a senior engineer navigating by <code>ls</code> and search rather than memorising the repo. The reference ("there is a <code>billing/</code> folder with a <code>tax.py</code> in it") costs tens of tokens; the payload costs tens of thousands, and is fetched only when it earns its place:</p>
+
+      <div data-bars data-title="Getting one answer out of a 300-file repo" data-unit="tokens"
+           data-note="Round illustrative numbers. Preloading does not even fit in a 200K window; navigation plus three targeted reads answers the same question a whole order of magnitude cheaper.">
+        <div class="bar" data-label="Preload every file" data-value="400000"></div>
+        <div class="bar" data-label="Grep + read 3 files" data-value="9000"></div>
+      </div>
+
+      <p>Mixing is normal: many production agents preload a small always-relevant core (the project memory file, a schema) and fetch everything else just in time.</p>
+
+      <h3>Move 4 — sub-agent isolation</h3>
+      <p>Some questions are token bombs. "Which of these 40 modules touches the payments flow?" is a legitimate question whose honest answer requires reading tens of thousands of tokens — almost all worthless the moment the answer is known. The engineered move, which you met mechanically in <a href="ch070-subagents.html">the subagents chapter</a>, is isolation: spawn a helper agent whose context window starts <em>empty</em>, let it burn fifty thousand tokens exploring, and take back a one-paragraph answer. The exploration happened in a disposable window; only the distilled result — often one or two thousand tokens — enters the context that must survive the week. In Claude Code this is the Task tool dispatching a sub-agent; in deepagents, the built-in <code>task</code> tool. The porter walks four hours; the guide's pack gains one sentence.</p>
+
+      <h3>Move 5 — structured note-taking</h3>
+      <p>The final move concedes something the other four cannot fix: any token inside the window can be lost — pruned, slid off, or flattened by a summary. So the discipline keeps its most precious state <em>outside</em> the window, in files. The agent writes as it works — a todo list it re-reads and updates, a notes file of decisions and findings, a progress log — using ordinary file tools (deepagents made the pattern structural with its <a href="ch069-virtual-filesystem.html">virtual filesystem</a>; Claude Code simply writes real files in your repo). Notes on disk cost zero attention until re-read, survive every compaction, and can be pulled back in — just in time — when needed. This is the guide's diary — and a note that survives the session is the beginning of long-term memory, exactly where the next chapter picks up.</p>
+
+      <h2>One week, one window: a session survives</h2>
+      <p>Now watch the five moves cooperate — a stylised but faithful picture of how a days-long Claude Code session stays inside a fixed window:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Session start">
+          <h3>1. The window starts curated, not empty</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">System prompt<small>~3K tokens</small></div>
+              <div class="d-box">Tools + project memory<small>~17K tokens</small></div>
+              <div class="d-box hot">Free space<small>~180K tokens</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Repo on disk<small>300 files — NOT loaded</small></div>
+          </div>
+          <p class="step-cap">At launch the harness loads standing instructions, tool schemas, and the small project memory file — and pointedly does not load your codebase. The repo stays on disk, reachable through tools.</p>
+        </div>
+        <div class="step" data-title="Just-in-time">
+          <h3>2. Payloads arrive just in time</h3>
+          <div class="diagram">
+            <div class="d-box hot">Agent<small>grep "tax_rate"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Repo<small>match in billing/tax.py</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Window<small>+ 90 relevant lines</small></div>
+          </div>
+          <p class="step-cap">Asked about a tax bug, the agent searches, then reads only the matching file — often only the matching line range. A cheap reference bought exactly the payload needed, when it was needed.</p>
+        </div>
+        <div class="step" data-title="Scout dispatched">
+          <h3>3. A token bomb goes to a sub-agent</h3>
+          <div class="diagram">
+            <div class="d-box">Main window<small>stays lean</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Sub-agent<small>fresh window, reads 40 modules, ~60K tokens</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Returns<small>1K-token summary</small></div>
+          </div>
+          <p class="step-cap">"Map every caller of the payments API" would flood the main context. A sub-agent with a clean window does the reading and dies; only its distilled report crosses back.</p>
+        </div>
+        <div class="step" data-title="Pruning">
+          <h3>4. Old tool results shrink to stubs</h3>
+          <div class="diagram">
+            <div class="d-box dim">Turn 12<small>test log, 2,000 lines</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Stub<small>"[log pruned - re-run to fetch]"</small></div>
+            <div class="d-box">Recent results<small>kept verbatim</small></div>
+          </div>
+          <p class="step-cap">Stale tool outputs are cleared first — re-fetchable, so evicting them risks nothing. The window keeps the lesson and the reference; the bulk goes.</p>
+        </div>
+        <div class="step" data-title="Compaction">
+          <h3>5. Near the ceiling: compact</h3>
+          <div class="diagram">
+            <div class="d-box">Window<small>92% full</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Summary<small>decisions, open bugs, next steps</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Rebuilt window<small>~30% full</small></div>
+          </div>
+          <p class="step-cap">When pruning is not enough, the harness summarises the old conversation — decisions, unresolved bugs, current state — and continues in a rebuilt window: system prompt, summary, recent turns. In Claude Code: auto-compact, or a manual /compact.</p>
+        </div>
+        <div class="step" data-title="Notes persist">
+          <h3>6. The diary outlives everything</h3>
+          <div class="diagram">
+            <div class="d-box">Window<small>rebuilt, working</small></div>
+            <div class="d-col">
+              <div class="d-box good">notes.md<small>on disk</small></div>
+              <div class="d-box good">todo list<small>on disk</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Day 3<small>work continues</small></div>
+          </div>
+          <p class="step-cap">Through every prune and compaction, the files the agent wrote sit safely outside the window, re-readable on demand. Days later the loop is still turning, and the window has never overflowed. That is the discipline working.</p>
+        </div>
+      </div>
+
+      <h2>Run the discipline yourself</h2>
+      <p>Time to feel the physics. Below, the same 40-turn job runs twice against a deliberately tiny 2,000-token window (small makes the drama visible). The first run is the naive transcript from <a href="ch045-react-loop-by-hand.html">your ReAct loop</a> — append everything, forever. The second adds three of this chapter's moves: tool-result pruning, compaction, and structured note-taking. As ever, the model and tools are scripted stand-ins; the context management is the real thing. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="Naive transcript vs engineered context — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- The physics: one fixed window, measured in tokens --------
+WINDOW = 2000                      # real windows are 200K+; tiny = visible
+
+def tok(text):
+    return max(1, len(text) // 4)  # rough rule: ~4 characters per token
+
+def used(msgs):
+    return sum(tok(m) for m in msgs)
+
+def gauge(msgs):
+    pct = round(100 * used(msgs) / WINDOW)
+    return f"{used(msgs):&gt;5} tokens ({pct}%)"
+
+# Each turn the agent thinks briefly, then reads one big report.
+# (A scripted stand-in for the model + tools, as in ch045.)
+def fake_turn(i):
+    thought = (f"THOUGHT {i}: read section {i}; found the figure I "
+               f"needed and noted it down. Next: section {i + 1}.")
+    result = f"TOOL RESULT {i}: " + "very long report text " * 36
+    return thought, result
+
+TURNS_NEEDED = 40
+
+# ---- Run 1: the naive transcript from ch047 -------------------
+print("NAIVE RUN " + "-" * 35)
+msgs = ["SYSTEM: you are a careful analyst.", "TASK: digest 40 sections."]
+for i in range(1, TURNS_NEEDED + 1):
+    thought, result = fake_turn(i)
+    msgs += [thought, result]
+    if used(msgs) &gt; WINDOW:
+        print(f"turn {i:&gt;2}: OVERFLOW at {used(msgs)} tokens - call rejected")
+        print(f"needed {TURNS_NEEDED} turns; the naive transcript died here\n")
+        break
+    if i % 4 == 0:
+        print(f"turn {i:&gt;2}: {gauge(msgs)}")
+
+# ---- Run 2: the engineered context ----------------------------
+print("ENGINEERED RUN " + "-" * 30)
+msgs = ["SYSTEM: you are a careful analyst.", "TASK: digest 40 sections."]
+notes = []                # structured note-taking: lives OUTSIDE the window
+KEEP_RESULTS = 3          # tool-result pruning: last N stay verbatim
+peak = 0
+
+for i in range(1, TURNS_NEEDED + 1):
+    thought, result = fake_turn(i)
+    msgs += [thought, result]
+    notes.append(f"- section {i}: key figure captured")
+
+    # move 1: tool-result pruning - old results become re-fetchable stubs
+    results = [m for m in msgs if m.startswith("TOOL RESULT")]
+    for old in results[:-KEEP_RESULTS]:
+        n = old.split(":")[0].split()[-1]
+        msgs[msgs.index(old)] = f"[result {n} pruned - re-read section {n} if needed]"
+
+    # move 2: compaction - near the ceiling, summarise all but the tail
+    if used(msgs) &gt; 0.8 * WINDOW:
+        before = used(msgs)
+        head, tail = msgs[:2], msgs[-4:]
+        summary = (f"SUMMARY of turns 1-{i}: sections read in order; every "
+                   "figure recorded in notes; no blockers so far.")
+        msgs = head + [summary] + tail
+        print(f"turn {i:&gt;2}: COMPACTED {before} -&gt; {used(msgs)} tokens")
+
+    peak = max(peak, used(msgs))
+    if i % 8 == 0:
+        print(f"turn {i:&gt;2}: {gauge(msgs)}")
+
+print(f"\nfinished all {TURNS_NEEDED} turns; peak use {round(100 * peak / WINDOW)}%")
+print(f"notes survived everything - {len(notes)} lines, e.g.:")
+print(notes[0], "...", notes[-1])
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Experiment before reading on. Set <code>KEEP_RESULTS = 999</code> to switch pruning off and watch compaction fire earlier and more often. Shrink <code>WINDOW</code> to 1000 and see the engineered run compact repeatedly yet still finish. Every knob here has a direct twin in a production harness.</p></div>
+
+      <h2>The two moves, line by line</h2>
+      <p>The engineered run's whole advantage lives in about ten lines. Read them the way a harness author would:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">engineered_context.py — the part that does the engineering</div>
+        <div class="wl-line"><code>notes.append(f"- section {i}: key figure captured")</code>
+          <div class="wl-note">Structured note-taking. This list stands in for a file on disk — never counted by <code>used(msgs)</code>, because it is not in the window. No prune or compact can touch it.</div></div>
+        <div class="wl-line"><code>results = [m for m in msgs if m.startswith("TOOL RESULT")]</code>
+          <div class="wl-note">Find every tool payload still sitting in the window, oldest first. A list comprehension (<a href="ch008-comprehensions.html">ch8</a>) doing triage.</div></div>
+        <div class="wl-line"><code>for old in results[:-KEEP_RESULTS]:</code>
+          <div class="wl-note">Everything except the newest three is evicted. Recent results stay verbatim because the model is probably still using them — recency is the cheap heuristic real harnesses use too.</div></div>
+        <div class="wl-line"><code>    msgs[msgs.index(old)] = f"[result {n} pruned - re-read section {n} if needed]"</code>
+          <div class="wl-note">The prune itself: a 200-token payload becomes a 12-token stub that keeps the reference. Nothing is lost that cannot be re-fetched.</div></div>
+        <div class="wl-line"><code>if used(msgs) &gt; 0.8 * WINDOW:</code>
+          <div class="wl-note">The trigger sits at 80%, not 100%. Harnesses act early: the model needs room to write its reply, and context rot degrades quality long before the hard limit rejects the call.</div></div>
+        <div class="wl-line"><code>    head, tail = msgs[:2], msgs[-4:]</code>
+          <div class="wl-note">Pin the head (system prompt and original task — chapter 47's hard-won lesson about what must never fall off) and keep the freshest turns verbatim.</div></div>
+        <div class="wl-line"><code>    summary = (f"SUMMARY of turns 1-{i}: sections read in order; ...")</code>
+          <div class="wl-note">A string literal plays the summariser here. In Claude Code this is a real LLM call instructed on what to preserve: decisions, open bugs, current state, next steps. The quality of that prompt is the quality of the agent's memory.</div></div>
+        <div class="wl-line"><code>    msgs = head + [summary] + tail</code>
+          <div class="wl-note">The rebuilt window: pinned head, one summary, recent tail. To the stateless model, this tidy transcript simply is the world — same power, same danger as in chapter 47.</div></div>
+      </div>
+
+      <p>Step back and notice what you just did. In <a href="ch047-memory-and-context.html">chapter 47</a> these were emergency responses to an overflowing list. Here they are policies, running <em>every turn</em>, tuned and cooperating: notes make compaction safe, and pruning postpones it. That shift — from coping to curating — is what earned the practice its name. The money follows the same curve: every token evicted is a token you stop re-paying on every subsequent call, the mechanism behind <a href="ch071-the-token-bill.html">the token bill</a>.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>None of these moves is free. Pruning bets the agent will not need the old payload; compaction is lossy and adds an LLM call; sub-agents cost latency and their own tokens; just-in-time retrieval trades preloading's predictability for exploration at runtime. Context engineering is choosing, deliberately, which costs to pay — because the failure it prevents, a concussed or crashed agent, is worse than every one of those prices.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will see this discipline daily once you know its face. In Claude Code: the context indicator ticking down, the "compacting conversation" pause, a <code>/compact</code> typed before a big task, sub-agents dispatched for open-ended searches, the agent grepping instead of reading whole folders. In framework code: deepagents ships the pattern as built-ins (<code>write_todos</code>, virtual file tools, subagents via its <code>task</code> tool), and LangChain-family stacks hang summarisation and trimming off middleware around the model call. In merge requests, "fetch it JIT instead of preloading", "the agent's notes file", or "summarise tool outputs over 5K tokens" are all this chapter. And when a teammate says "the agent got dumber after lunch", you now have a differential diagnosis: context rot versus a bad compaction — check the window, then check the summary.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. What separates context engineering from prompt engineering?</p>
+          <div class="q-opts">
+            <button data-opt="a">Context engineering only applies to models with very large windows</button>
+            <button data-opt="b">Prompt engineering is for chatbots; context engineering is for coding agents</button>
+            <button data-opt="c">Prompt engineering crafts one instruction; context engineering curates everything entering the window, every turn — history, tool results, retrieved data, notes</button>
+          </div>
+          <p class="q-explain">Prompt engineering is writing; context engineering is logistics — the turn-by-turn decision of what the model sees at all. The system prompt is one item in the rucksack.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. A fact sits in a transcript that is 190K tokens long, comfortably inside a 200K window. Why might the agent still miss it?</p>
+          <div class="q-opts">
+            <button data-opt="a">The API silently drops tokens once the window is 90% full</button>
+            <button data-opt="b">Attention is a finite budget — as the window fills, recall of any single fact measurably degrades (context rot), especially mid-transcript</button>
+            <button data-opt="c">Facts expire after a fixed number of turns</button>
+          </div>
+          <p class="q-explain">Nothing is dropped and nothing expires — the model attends to everything a little, and to nothing well. "Fits in the window" and "gets the model's attention" are different claims; the gap between them is why the discipline exists.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why are old tool results the first tokens a harness evicts?</p>
+          <div class="q-opts">
+            <button data-opt="a">They are re-fetchable — the file or log still exists in the world, so a stub with the reference loses nothing permanently</button>
+            <button data-opt="b">They are always the largest messages in the transcript</button>
+            <button data-opt="c">Models are trained to ignore tool results after a few turns anyway</button>
+          </div>
+          <p class="q-explain">Eviction is safest when reversible. A pruned tool result can be re-run; a deleted user decision cannot. Keeping the stub ("this was read; re-run to fetch") preserves the map while dropping the territory.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Your agent must scan 40 modules to answer one question. What does sub-agent isolation buy you?</p>
+          <div class="q-opts">
+            <button data-opt="a">The sub-agent runs on a cheaper model, saving money</button>
+            <button data-opt="b">The scan finishes faster because two agents work in parallel</button>
+            <button data-opt="c">The tens of thousands of exploration tokens are spent in a disposable window; only a short distilled answer enters the context that must last all week</button>
+          </div>
+          <p class="q-explain">Cheaper models and parallelism are optional bonuses; the guaranteed win is contamination control. The scout's window dies with the scout — the main context gains a paragraph, not a library.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. After an aggressive auto-compaction, which of these is guaranteed to survive intact?</p>
+          <div class="q-opts">
+            <button data-opt="a">Every tool result from the last twenty turns</button>
+            <button data-opt="b">The notes and todo files the agent wrote to disk along the way</button>
+            <button data-opt="c">The agent's full reasoning from the start of the session</button>
+          </div>
+          <p class="q-explain">Anything inside the window can be flattened into the summary. Files live outside it — untouchable by compaction, re-readable on demand. That is why disciplined harnesses write notes as they go.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Context engineering is the named discipline of curating, every turn, the smallest set of high-signal tokens that gets the job done — the successor to prompt engineering, anchored by Anthropic's "effective context engineering" playbook.</li>
+          <li>The window is an attention budget, not a warehouse: every token spends focus, and past a point more context means worse thinking (context rot, lost-in-the-middle). Curate, do not cram.</li>
+          <li>Five moves make up the playbook: compaction (summarise old turns, keep decisions and open issues), tool-result pruning (stub out re-fetchable payloads first), just-in-time retrieval (carry references, fetch payloads when needed), sub-agent isolation (burn exploration tokens in a disposable window), and structured note-taking (state in files, outside the window).</li>
+          <li>Claude Code runs all five at once — grep-then-read navigation, Task-tool scouts, stale-result clearing, auto-compact near the limit, notes and todos on disk — which is how a days-long session survives a fixed window.</li>
+          <li>Every move has a cost (lossiness, re-fetches, extra calls); the discipline is choosing those costs deliberately because a crashed or concussed agent costs more.</li>
+          <li>Chapter 47 taught you to survive a full window; this chapter taught you to govern one. Notes that outlive the session are the bridge to what comes next: long-term memory.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

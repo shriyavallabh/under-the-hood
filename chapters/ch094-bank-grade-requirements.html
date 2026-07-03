@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bank-grade requirements — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch094">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XI · The Landscape</div>
+        <h1>Bank-grade requirements</h1>
+        <p class="ch-tagline">"Enterprise-ready" is not a feature list. It is the ability to answer, for every action your agent ever took: who did it, with whose permission, and how do you know. You will leave with a checklist for real evaluations.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 95 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>On her first morning at a bank branch, a new employee named Meera receives three things before she may touch anything. First, an ID badge — it opens exactly the doors her role permits, and the vault door does not care how persuasive she is. Second, the logbook: every cash movement is written in ink, in a book with numbered pages, countersigned by a colleague. You cannot tear a page out without the gap showing. Third, a rule: any transfer above fifty thousand needs a supervisor's second signature. No exceptions.</p>
+        <p>Nobody thinks Meera is a criminal. The branch works this way because one day an inspector with the legal power to fine the bank or revoke its licence will walk in and ask: <em>who did what, with whose permission, and how do you know?</em> The badge, the logbook, and the second signature exist so that question always has an answer.</p>
+        <p>Now replace Meera with an AI agent. Every rule stays. That, in one paragraph, is what "bank-grade" means.</p>
+      </section>
+
+      <h2>"Enterprise-ready" is a claim about evidence, not features</h2>
+      <p>In <a href="ch093-is-langgraph-right.html">the previous chapter</a> you weighed LangGraph against its alternatives on engineering grounds. This chapter adds the other axis — the one that decides whether a harness is even <em>allowed into the building</em> when a <dfn>regulator</dfn> (a government body with legal power to inspect, fine, and shut down a business) is part of daily life. A demo has to work once, in front of friendly people. A regulated deployment has to survive a hostile question, years later, about something that happened at 2 a.m. on a Tuesday.</p>
+      <p>So here is the honest definition. A system is <dfn>enterprise-ready</dfn> when it can answer three questions for <em>every</em> action it has ever taken:</p>
+      <ol>
+        <li><strong>Who did it?</strong> Not "the agent" — which human's authority was it acting under?</li>
+        <li><strong>With whose permission?</strong> Was that human entitled to the action, and if it was consequential, who approved it?</li>
+        <li><strong>How do you know?</strong> Where is the record, and can you prove nobody edited it afterwards?</li>
+      </ol>
+      <p>Everything below is one of those three questions wearing work clothes: the badge, the logbook, the second signature, the building — and the replaceable teller.</p>
+
+      <h2>The badge: on-behalf-of identity</h2>
+      <p>The biggest difference between a hobby agent and a bank-grade one is whose name is on the badge. A <dfn>service account</dfn> is a machine identity — a login that belongs to software rather than a person. The tempting shortcut is one powerful service account that does everything for everyone. Enterprises call this the "god account" anti-pattern, and it fails the auditor's first question instantly: when the agent moves money, the record says the <em>agent</em> did it. Which human's authority was behind it? Unknowable.</p>
+      <p>The bank-grade answer is <dfn>on-behalf-of identity</dfn>: the agent acts <em>as the user who asked</em>, carrying that user's identity with every request, so it can never do anything the user themselves could not. When Asha from operations asks for a report, the agent queries the database as Asha — if her role cannot see salary columns, neither can her agent. In practice this runs on delegation tokens — the OAuth family even has a flow named "on-behalf-of" — carrying the user's signed identity downstream.</p>
+      <p>Identity answers "who is asking". An <dfn>entitlement</dfn> answers "what may this person do" — the machine-readable version of Meera's badge opening some doors and not others. Entitlements are enforced <em>at the tool boundary, in code</em> — never in the prompt. You built that boundary yourself in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>: the model can only reach functions in the <code>TOOLS</code> dict your loop is willing to run. A system-prompt sentence saying "please do not access payroll" is a request to a text generator; an entitlement lookup that refuses the call is a wall — <a href="ch087-guardrails.html">the guardrails chapter</a>'s rule that prompts persuade, code enforces. Regulators only accept walls.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Watch for the quiet version of the god account: users are authenticated at the front door, but every tool underneath shares one privileged database credential. If any layer widens to "the agent can do everything", the badge above it is decoration. <a href="ch079-mcp-security.html">MCP security</a> has the same rule for tool servers: the server enforces, the client asks.</p></div>
+
+      <h2>The logbook: an immutable audit trail</h2>
+      <p>You already keep logs — <a href="ch088-observability.html">the observability chapter</a> was all about traces and spans for debugging. An audit trail is a different animal with a different customer. Debug logs serve engineers; they get rotated and deleted when disk fills up. An <dfn>audit trail</dfn> serves the inspector: an append-only record of every consequential event, kept for years, that can <em>prove</em> it has not been edited.</p>
+      <p><dfn>Immutable</dfn> means write-once: records can be added, never changed or removed. Two mechanisms make that credible. Storage-level: <dfn>WORM storage</dfn> ("write once, read many" — storage that refuses edits, like the numbered pages of Meera's logbook). Cryptographic: a <dfn>hash chain</dfn>, where each record includes a fingerprint of the record before it, so editing any old entry breaks every fingerprint after it — the gap always shows. You will build one in Python a few scrolls down.</p>
+      <p>What goes in the book matters as much as the binding. A defensible record captures who asked, what the model was shown, what it <em>proposed</em>, what the entitlement check decided, who approved, and what actually executed. Note <em>proposed</em> — bank-grade systems audit intent even when it is blocked. "The agent tried to access payroll and was denied" is exactly the line an inspector wants to find: it proves the walls are load-bearing.</p>
+
+      <h2>The second signature: human approval gates</h2>
+      <p>Some actions are cheap to reverse; some are not. Reading a balance is harmless. Sending a payment, closing an account, or emailing a customer is <dfn>consequential</dfn> — once it happens, it happened. Meera's rule applies unchanged: consequential actions need a second signature. Enterprises call the pattern <dfn>maker-checker</dfn> — one party proposes (the maker), a different party with authority approves (the checker). The agent is always the maker, never the checker.</p>
+      <p>You have already met the machinery. In <a href="ch062-human-in-the-loop.html">the human-in-the-loop chapter</a>, LangGraph's <code>interrupt()</code> froze a graph mid-run and <code>Command(resume=...)</code> woke it with the human's verdict; <a href="ch061-checkpointing.html">checkpointing</a> makes the pause durable, so an approval can arrive days later and the run resumes where it stopped. Bank-grade platforms wrap that machinery in three extra rules:</p>
+      <ul>
+        <li><strong>The approver must have authority.</strong> A gate approved by "whoever clicks first" is theatre. Entitlements apply to approvers too.</li>
+        <li><strong>The approval is itself audited.</strong> Who approved, when, and what exactly they saw when they signed.</li>
+        <li><strong>Gates are tiered, not universal.</strong> If every trivial read demands a signature, humans start rubber-stamping and the gate protects nothing. Classify actions by consequence and gate the tier that deserves it.</li>
+      </ul>
+
+      <p>Here is one request travelling through all of it. Step through slowly — this diagram <em>is</em> the chapter:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Request arrives">
+          <h3>1. A request arrives wearing a badge</h3>
+          <div class="diagram">
+            <div class="d-box hot">Asha<small>"pay the vendor invoice" + identity token</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Harness</div>
+            <div class="d-box dim">Model</div>
+          </div>
+          <p class="step-cap">The user's signed identity travels with the request. From this moment the run is "Asha, via agent" — never just "the agent".</p>
+        </div>
+        <div class="step" data-title="Entitlements resolved">
+          <h3>2. The harness looks up the badge</h3>
+          <div class="diagram">
+            <div class="d-box dim">Asha</div>
+            <div class="d-box hot">Harness<small>directory: Asha may read accounts, may request payments</small></div>
+            <div class="d-box dim">Model</div>
+          </div>
+          <p class="step-cap">Entitlements come from the company directory, a system of record — never from the prompt.</p>
+        </div>
+        <div class="step" data-title="Model proposes">
+          <h3>3. The model proposes; the proposal is logged</h3>
+          <div class="diagram">
+            <div class="d-box dim">Harness</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Model<small>proposes: initiate_payment(24,500)</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Audit log<small>records the intent</small></div>
+          </div>
+          <p class="step-cap">Intent is written to the audit trail before anything runs — even a blocked proposal leaves a permanent line in the book.</p>
+        </div>
+        <div class="step" data-title="Wall check">
+          <h3>4. The tool boundary checks the badge</h3>
+          <div class="diagram">
+            <div class="d-box dim">Model</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Tool boundary<small>is initiate_payment in Asha's entitlements? yes</small></div>
+            <div class="d-box dim">Payment system</div>
+          </div>
+          <p class="step-cap">Code, not prompt. If Asha lacked the entitlement, the call would die right here and the denial would be audited.</p>
+        </div>
+        <div class="step" data-title="Approval gate">
+          <h3>5. Consequential — the run freezes for a checker</h3>
+          <div class="diagram">
+            <div class="d-box dim">Tool boundary</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Approval gate<small>run paused; supervisor sees the exact action</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Supervisor<small>approves</small></div>
+          </div>
+          <p class="step-cap">Payments are consequential, so the checkpointed run pauses — minutes or days — until an authorised human signs. The signature is audited too.</p>
+        </div>
+        <div class="step" data-title="Execute and record">
+          <h3>6. Execute, record, respond</h3>
+          <div class="diagram">
+            <div class="d-box good">Payment system<small>24,500 sent</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Audit log<small>who, what, approved by whom, hash-chained</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Asha<small>gets her answer</small></div>
+          </div>
+          <p class="step-cap">The action executes as Asha, the immutable record closes the loop, and all three auditor questions now have answers — permanently.</p>
+        </div>
+      </div>
+
+      <h2>The building: data residency and what leaves the boundary</h2>
+      <p>Meera's branch has one more quiet rule: customer files do not leave the building. The agent equivalent is easy to miss. Every time your harness calls a hosted model API, the <em>entire prompt</em> — the user's question plus every document, record, and tool result you stuffed into context — travels to the vendor's servers. <dfn>Data residency</dfn> is the legal requirement that certain data stays within a given country or region; several jurisdictions impose it on financial and personal data (the EU's data-protection regime and India's payment-data rules are two public examples).</p>
+      <p>So a bank-grade evaluation asks precisely: <em>what leaves the boundary, to where, and what does the vendor keep?</em> The usual answers, in increasing strictness: region-pinned API endpoints, private deployments in the company's own cloud tenancy, on-premises models for the most sensitive work, plus redaction layers that strip personal identifiers first. And separate from <em>where</em>: a written <dfn>zero-data-retention agreement</dfn> — a contract that the vendor does not store your prompts or train on them. If a vendor cannot state their retention terms in one clear sentence, that is your answer.</p>
+
+      <h2>The model on the risk register</h2>
+      <p>Here is a comforting fact: banks did not meet risky models for the first time in 2023. Credit-scoring, fraud, and trading models have been regulated for decades under formal supervisory guidance on <dfn>model risk management</dfn> — the discipline of treating every model as a thing that can be wrong, and building process around that fact. An LLM entering a bank does not get a shrug; it joins an existing register, with four standing obligations:</p>
+      <ul>
+        <li><strong>Inventory and versioning.</strong> Which model, which exact version, in which workflow. "The API silently upgraded" is not an acceptable sentence — versions are pinned and changes are deliberate.</li>
+        <li><strong>Validation before use.</strong> Documented evidence the model performs acceptably on the intended task — for LLM agents, an evaluation suite with recorded results, not a vibe check.</li>
+        <li><strong>Ongoing monitoring.</strong> Quality drifts; usage drifts. Someone watches the metrics after go-live, and thresholds trigger review.</li>
+        <li><strong>Documented limitations.</strong> Known failure modes — the ones you catalogued in <a href="ch048-failure-modes.html">the failure-modes chapter</a> — written where the auditor can find them, mitigations beside them.</li>
+      </ul>
+      <p>One phrase to remember: <em>evidence over confidence</em>. Model risk management is the paperwork shape of humility.</p>
+
+      <h2>The replaceable teller: vendor and model swap-ability</h2>
+      <p>The branch does not close when a teller resigns. A bank-grade platform must survive its model vendor raising prices, changing terms, or disappearing — some regulators explicitly examine <dfn>exit plans</dfn> for critical third-party dependencies (<em>concentration risk</em> is the formal name). Lock-in creeps in through prompts hand-tuned to one model's quirks, proprietary vendor features, fine-tuned models locked to one cloud, and tool-calling formats that differ across providers.</p>
+      <p>The defences are all things you have met. An abstraction layer at the model call — <a href="ch052-messages-and-models.html">LangChain's <code>init_chat_model</code></a> exists precisely so the model is a config string, not an architecture. Open protocols at the tool layer — <a href="ch074-why-mcp-exists.html">MCP</a> means your tools survive a model swap untouched. And the quiet hero: <strong>your evaluation suite is your portability insurance.</strong> Swapping vendors is terrifying when "does it still work?" is opinion, and routine when it is a test run. The eval suite from model risk management is the same artifact that makes the exit plan real — one investment, two regulatory boxes.</p>
+
+      <h2>Build the badge, the logbook, and the gate — in forty lines</h2>
+      <p>Enough architecture — time to make it concrete. Below is a toy bank-grade wrapper: entitlements at the tool boundary, an approval gate on consequential actions, and a hash-chained audit trail you can tamper with and get caught. The model is a scripted stand-in, as always. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A bank-grade tool boundary — run me">
+<textarea class="py-src" spellcheck="false">
+import hashlib, json
+
+# Entitlements come from the BANK's directory, not the prompt.
+ENTITLEMENTS = {
+    "asha":   {"read_balance"},
+    "vikram": {"read_balance", "initiate_payment"},
+}
+CONSEQUENTIAL = {"initiate_payment"}   # needs a human checker
+
+# ---- the logbook: append-only, hash-chained ---------------
+AUDIT = []
+def audit(event):
+    prev = AUDIT[-1]["hash"] if AUDIT else "genesis"
+    body = json.dumps(event, sort_keys=True)
+    h = hashlib.sha256((prev + body).encode()).hexdigest()[:12]
+    AUDIT.append({"event": event, "prev": prev, "hash": h})
+
+def chain_intact():
+    prev = "genesis"
+    for rec in AUDIT:
+        body = json.dumps(rec["event"], sort_keys=True)
+        good = hashlib.sha256((prev + body).encode()).hexdigest()[:12]
+        if rec["prev"] != prev or rec["hash"] != good:
+            return False
+        prev = rec["hash"]
+    return True
+
+# ---- tools + a scripted stand-in for the model ------------
+TOOLS = {
+    "read_balance":     lambda user: "balance is 42,000",
+    "initiate_payment": lambda user: "payment of 24,500 sent",
+}
+def fake_llm(task):           # a real agent would call an LLM here
+    return ["read_balance", "initiate_payment"]
+
+def checker_approves(action, user):
+    print(f"   [GATE] paused... supervisor approves {action}")
+    audit({"approval": action, "for": user, "by": "supervisor"})
+    return True
+
+# ---- the bank-grade boundary ------------------------------
+def run_agent(user, task):
+    print(f"Agent acting ON BEHALF OF {user!r}: {task}")
+    for action in fake_llm(task):
+        audit({"who": user, "proposed": action})
+        if action not in ENTITLEMENTS[user]:
+            print(f"   BLOCKED: {user} lacks entitlement {action!r}")
+            audit({"who": user, "action": action, "result": "denied"})
+            continue
+        if action in CONSEQUENTIAL and not checker_approves(action, user):
+            continue
+        result = TOOLS[action](user)
+        print(f"   {action}: {result}")
+        audit({"who": user, "action": action, "result": "done"})
+
+run_agent("asha",   "check balance, then pay the vendor invoice")
+print()
+run_agent("vikram", "check balance, then pay the vendor invoice")
+
+print()
+print("audit records:", len(AUDIT), "| chain intact?", chain_intact())
+AUDIT[1]["event"]["who"] = "someone_else"     # a quiet little edit
+print("after tampering with record 2 ...  chain intact?", chain_intact())
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now play inspector. Give <code>asha</code> the <code>initiate_payment</code> entitlement and watch the gate still catch it. Make <code>checker_approves</code> return <code>False</code> — the payment never runs, but the <em>attempt</em> still lands in the audit trail. Then "fix" the tampered record by recomputing its hash: the next record's <code>prev</code> pointer betrays you anyway.</p></div>
+
+      <h2>The same walls, one line at a time</h2>
+      <p>Read the load-bearing lines the way a reviewer at a bank would — each exists to answer one of the auditor's three questions.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">bank_grade.py — the load-bearing lines</div>
+        <div class="wl-line"><code>ENTITLEMENTS = { "asha": {"read_balance"}, ... }</code>
+          <div class="wl-note">The badge. In production this is a live directory lookup, not a dict — same shape: user in, permitted actions out. The model has no say in this table.</div></div>
+        <div class="wl-line"><code>prev = AUDIT[-1]["hash"] if AUDIT else "genesis"</code>
+          <div class="wl-note">Each new record grabs the fingerprint of the one before it — the single line that turns a list of logs into a chain.</div></div>
+        <div class="wl-line"><code>h = hashlib.sha256((prev + body).encode()).hexdigest()[:12]</code>
+          <div class="wl-note">The fingerprint covers the previous hash plus this record's content — edit any old record and every fingerprint after it breaks. The torn page always shows.</div></div>
+        <div class="wl-line"><code>audit({"who": user, "proposed": action})</code>
+          <div class="wl-note">Intent is recorded before the entitlement check runs. Blocked proposals are evidence too — they prove the walls stop things.</div></div>
+        <div class="wl-line"><code>if action not in ENTITLEMENTS[user]:</code>
+          <div class="wl-note">The wall. The check uses this user's entitlements — the agent is exactly as powerful as the person it serves. A god-account agent would skip this line entirely.</div></div>
+        <div class="wl-line"><code>if action in CONSEQUENTIAL and not checker_approves(action, user):</code>
+          <div class="wl-note">The second signature, tiered: only the consequential set pays the approval cost. In LangGraph this is where <code>interrupt()</code> would freeze the checkpointed run until <code>Command(resume=...)</code> arrives with the verdict.</div></div>
+        <div class="wl-line"><code>audit({"approval": action, "for": user, "by": "supervisor"})</code>
+          <div class="wl-note">The approval itself becomes a chained record — who signed, for whom, for what. An unaudited gate fails "how do you know?".</div></div>
+      </div>
+
+      <h2>The checklist: eight questions to take into an evaluation</h2>
+      <p>Here is the chapter compressed into a table for a vendor evaluation, platform review, or build-vs-buy debate. Ask the question, demand the evidence, treat the red flag as disqualifying until explained. The next chapter turns rows like these into a full scoring method.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Requirement</th><th>The question to ask</th><th>Evidence that counts</th><th>Red flag</th></tr>
+        <tr><td>On-behalf-of identity</td><td>When the agent acts for a user, whose identity reaches the downstream system?</td><td>Delegated tokens end-to-end; two users demonstrably get different results from the same tool</td><td>One shared service account "for simplicity"</td></tr>
+        <tr><td>Entitlement enforcement</td><td>Where is "may this user do this?" decided?</td><td>A code-level check at the tool boundary, fed by the company directory</td><td>"The system prompt tells it what not to do"</td></tr>
+        <tr><td>Immutable audit trail</td><td>Can you prove a record from last year was never edited?</td><td>Append-only or WORM storage, hash chaining, stated retention; blocked <em>proposals</em> recorded too</td><td>Audit lives in rotating debug logs</td></tr>
+        <tr><td>Human approval gates</td><td>Which actions pause for a human, and is the approval recorded?</td><td>Tiered consequential-action list; durable pause/resume; audited approver identity</td><td>All-or-nothing gating, or approvals by "anyone"</td></tr>
+        <tr><td>Data residency</td><td>Exactly what data leaves our boundary, to which region?</td><td>Region-pinned endpoints, private or on-prem options, redaction layer</td><td>Vendor cannot name the processing region</td></tr>
+        <tr><td>Vendor data retention</td><td>What do you store from our prompts, and for how long?</td><td>A written zero-data-retention agreement</td><td>"Prompts may be used to improve our services"</td></tr>
+        <tr><td>Model risk management</td><td>How are model versions pinned, validated, and monitored?</td><td>Model inventory, versioned rollouts, eval results on file, live monitoring</td><td>Silent auto-upgrades of the underlying model</td></tr>
+        <tr><td>Swap-ability / exit plan</td><td>What breaks if we change model vendor next quarter?</td><td>Model behind an abstraction layer, tools on open protocols, eval suite to re-certify a swap</td><td>Prompts and tools welded to one vendor's private features</td></tr>
+      </table></div>
+
+      <h2>The vocabulary that survives the meeting</h2>
+      <p>These eight terms come up in every enterprise-agent conversation. Flip until fluent:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">on-behalf-of identity</span><span class="flip-back">The agent acts as the requesting user, carrying their identity into every downstream call — never more powerful than that human.</span></button>
+        <button class="flip" type="button"><span class="flip-front">entitlement</span><span class="flip-back">A machine-readable permission: what THIS user may do. Enforced in code at the tool boundary, sourced from the directory.</span></button>
+        <button class="flip" type="button"><span class="flip-front">service account</span><span class="flip-back">A machine identity owned by software, not a person. One powerful shared one behind an agent is the god-account anti-pattern.</span></button>
+        <button class="flip" type="button"><span class="flip-front">maker-checker</span><span class="flip-back">One party proposes, a different party with authority approves. The agent is always the maker, never the checker.</span></button>
+        <button class="flip" type="button"><span class="flip-front">immutable audit trail</span><span class="flip-back">Append-only, tamper-evident record of who did what, with whose approval — kept for years, provably unedited.</span></button>
+        <button class="flip" type="button"><span class="flip-front">data residency</span><span class="flip-back">Legal requirement that certain data stays in a given country or region — and every hosted-API prompt leaves your boundary.</span></button>
+        <button class="flip" type="button"><span class="flip-front">model risk management</span><span class="flip-back">Treating every model as possibly wrong: inventory, validation before use, monitoring after, documented limitations.</span></button>
+        <button class="flip" type="button"><span class="flip-front">exit plan</span><span class="flip-back">The documented, tested path to leaving a vendor. An eval suite plus abstraction layers makes it real.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this chapter as paperwork before code: vendor security questionnaires hundreds of rows long, due-diligence calls asking "walk me through your audit story". In codebases the tell-tale names are <code>entitlements.py</code>, <code>audit_event</code>, <code>approval_workflow</code>, middleware injecting a user token into every tool call. In merge requests, "add an approval gate on the refund tool" is this chapter happening line by line. When a pitch says "enterprise-ready" without identity or audit, the polite follow-up is: <em>on whose behalf does it act, and how would you prove what it did?</em></p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Why is running an agent on one powerful shared service account an anti-pattern in a bank?</p>
+          <div class="q-opts">
+            <button data-opt="a">Service accounts are slower than user accounts</button>
+            <button data-opt="b">It costs more, because every call is billed to one account</button>
+            <button data-opt="c">Actions can no longer be traced to a human's authority, and the agent can do more than the user it serves</button>
+          </div>
+          <p class="q-explain">The god account fails two questions at once: "who did it?" becomes unanswerable, and the agent inherits powers its user never had. On-behalf-of identity fixes both.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. What separates an audit trail from the observability logs you already keep?</p>
+          <div class="q-opts">
+            <button data-opt="a">Audit trails are stored in a database, logs in files</button>
+            <button data-opt="b">Append-only, tamper-evident, retained for years, recording proposals and approvals — while logs serve engineers and get rotated</button>
+            <button data-opt="c">Nothing — "audit trail" is the compliance name for the same logs</button>
+          </div>
+          <p class="q-explain">Different customer, different guarantees. Debug logs can be truncated tomorrow; an audit trail must prove, years later, that a record was never edited — including records of blocked actions.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Where must the "may this user do this?" check live, and why?</p>
+          <div class="q-opts">
+            <button data-opt="a">In code at the tool boundary — the prompt is persuasion, code is enforcement</button>
+            <button data-opt="b">In the system prompt, so the model understands its limits</button>
+            <button data-opt="c">In the model's fine-tuning, so refusals are automatic</button>
+          </div>
+          <p class="q-explain">Anything expressed only in the prompt can be talked around. An entitlement lookup that refuses the call is a wall — and regulators only accept walls.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Your harness calls a hosted model API. What actually leaves your data boundary?</p>
+          <div class="q-opts">
+            <button data-opt="a">Only the user's typed question</button>
+            <button data-opt="b">Nothing — the API processes requests statelessly</button>
+            <button data-opt="c">The entire prompt: the question plus every document, record, and tool result loaded into context</button>
+          </div>
+          <p class="q-explain">Context is cargo: whatever you loaded into the prompt travels with it — so residency reviews ask what goes, to which region, and what is retained.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. What single artifact does the most work for BOTH model risk management and vendor swap-ability?</p>
+          <div class="q-opts">
+            <button data-opt="a">A longer system prompt with detailed rules</button>
+            <button data-opt="b">A maintained evaluation suite with recorded results</button>
+            <button data-opt="c">A contract guaranteeing the vendor never changes the model</button>
+          </div>
+          <p class="q-explain">Evals are the validation evidence before go-live, the monitoring baseline after, and the re-certification that makes vendor swaps routine. One investment, two boxes.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>"Enterprise-ready" means being able to answer three questions for every action ever taken: who did it, with whose permission, and how do you know.</li>
+          <li>On-behalf-of identity makes the agent exactly as powerful as the human it serves; entitlements are enforced in code at the tool boundary — prompts persuade, walls enforce.</li>
+          <li>An audit trail is not debug logging: append-only, tamper-evident (WORM, hash chains), kept for years, recording blocked proposals and approvals too.</li>
+          <li>Consequential actions get maker-checker gates — durable pauses where an authorised human signs, and the signature is itself audited.</li>
+          <li>Every hosted-API call ships your whole prompt across the boundary; ask what leaves, to which region, and what the vendor retains — in writing.</li>
+          <li>LLMs join the bank's existing model-risk register: pinned versions, validation before use, monitoring after, documented limitations.</li>
+          <li>Your eval suite is both the model-risk evidence and the exit plan; the next chapter builds these rows into a full scoring method.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading LangChain code fluently — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch056">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VI · LangChain</div>
+        <h1>Reading LangChain code fluently</h1>
+        <p class="ch-tagline">The import cheat-sheet, the four idioms that carry every file, and a guided read of a realistic seventy-line app. This is the fluency checkpoint: by the end, you narrate LangChain code the way you narrate a sentence.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 57 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You land in a country whose language you do not speak, and you panic for exactly one day. Then, standing in the railway station, you notice something: the same forty words appear everywhere. <em>Saída</em> over every exit. <em>Bilhetes</em> above every ticket counter. <em>Linha 3</em> on every platform sign. You never learn to discuss the weather, but within a week you can walk into any station in the country — one you have never seen — and know where to stand, what to buy, and when to run for the train.</p>
+        <p>Reading LangChain code is exactly this. Files differ, apps differ, authors differ — but the same forty words appear everywhere: a handful of imports, a model line, a tool decorator, one constructor, one config dict. This chapter is your phrasebook. After it, an unfamiliar LangChain file is just a station you have never visited, in a language you can already read.</p>
+      </section>
+
+      <h2>You already know more than you think</h2>
+      <p>Quick stock-take of Act VI so far. In <a href="ch051-langchain-ecosystem-map.html">the ecosystem map</a> you learned that "LangChain" is a small family of packages, not one library. In <a href="ch052-messages-and-models.html">messages and models</a> you met the message objects and the chat-model interface. In <a href="ch053-langchain-tools.html">tools</a> you saw a plain function become something a model can request. In <a href="ch054-create-agent.html">create_agent</a> one constructor assembled all of it into the <a href="ch045-react-loop-by-hand.html">ReAct loop you once built by hand</a> — and the previous chapter showed middleware wrapping that loop without touching it.</p>
+      <p>So this chapter adds almost no new machinery. It does what a language course does after five vocabulary lessons: hands you a real newspaper. <dfn>Fluency</dfn>, for our purposes, means that when you open a LangChain file, roughly ninety percent of it is instantly boring — recurring phrases you recognise on sight — so your full attention goes to the ten percent that is actually specific to this app. Boring is the goal. Boring means fluent.</p>
+
+      <h2>The import cheat-sheet: five packages, five jobs</h2>
+      <p>Remember from <a href="ch011-imports-and-modules.html">the imports chapter</a>: the top of a Python file is its passport page, declaring which outside worlds it touches before any logic runs. In LangChain code the passport is unusually honest — each package name tells you which layer of the stack you are looking at.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Package</th><th>What lives there</th><th>Imports you will actually see</th></tr>
+        <tr><td><code>langchain_core</code></td><td>The shared vocabulary every other package speaks: message objects, the tool decorator, prompts, the Runnable machinery</td><td><code>from langchain_core.messages import HumanMessage, AIMessage, ToolMessage</code><br><code>from langchain_core.tools import tool</code><br><code>from langchain_core.runnables import RunnableConfig</code></td></tr>
+        <tr><td><code>langchain</code></td><td>The top layer you build agents with: the agent constructor, the model initialiser, middleware</td><td><code>from langchain.agents import create_agent</code><br><code>from langchain.chat_models import init_chat_model</code></td></tr>
+        <tr><td><code>langchain_openai</code>, <code>langchain_anthropic</code>, …</td><td>One thin package per model provider — just the connector for that vendor's API</td><td><code>from langchain_anthropic import ChatAnthropic</code><br><code>from langchain_openai import ChatOpenAI</code></td></tr>
+        <tr><td><code>langchain_community</code></td><td>The long tail of third-party integrations: vector stores, document loaders, niche APIs</td><td><code>from langchain_community.vectorstores import FAISS</code></td></tr>
+        <tr><td><code>langgraph</code></td><td>The engine underneath: graphs, and the checkpointers that give agents memory across calls</td><td><code>from langgraph.checkpoint.memory import InMemorySaver</code></td></tr>
+        <tr><td><code>langchain_mcp_adapters</code></td><td>The bridge to MCP servers — external toolboxes speaking the Model Context Protocol</td><td><code>from langchain_mcp_adapters.client import MultiServerMCPClient</code></td></tr>
+      </table></div>
+
+      <p>That table is most of the cheat-sheet. The reading rule that goes with it: <strong>imports tell you what a file does before you read a single line of logic.</strong> A file importing <code>create_agent</code> plus a provider package is an agent app. A file importing only <code>langchain_core.messages</code> is probably a helper that shapes conversations. A file importing <code>langgraph</code> directly has outgrown <code>create_agent</code> — exactly where the next chapter picks up.</p>
+      <p>Flip these until each package's job feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">langchain_core</span><span class="flip-back">The shared dictionary. Messages, the tool decorator, Runnable plumbing. Every other package depends on it; it depends on nothing.</span></button>
+        <button class="flip" type="button"><span class="flip-front">langchain</span><span class="flip-back">The batteries-included top layer: create_agent, init_chat_model, middleware. Where application code usually starts.</span></button>
+        <button class="flip" type="button"><span class="flip-front">langchain_anthropic</span><span class="flip-back">A provider package — one per vendor. Nothing in it but the connector to that vendor's models. Swap it to swap providers.</span></button>
+        <button class="flip" type="button"><span class="flip-front">langchain_community</span><span class="flip-back">The bazaar: hundreds of third-party integrations of varying polish. Seeing it means the app touches something outside the core stack.</span></button>
+        <button class="flip" type="button"><span class="flip-front">langgraph</span><span class="flip-back">The engine room. create_agent compiles down to a LangGraph graph; importing it directly signals custom wiring or checkpointing.</span></button>
+        <button class="flip" type="button"><span class="flip-front">langchain_mcp_adapters</span><span class="flip-back">The adapter that turns MCP servers into ordinary LangChain tools, via MultiServerMCPClient. Seeing it means the tools live in another process.</span></button>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The internet is full of pre-1.0 LangChain tutorials, and their imports are your smoke detector. If you see <code>initialize_agent</code>, <code>AgentExecutor</code>, or <code>LLMChain</code>, you are reading legacy 0.x-era code — the ideas map onto <code>create_agent</code>, but the names and shapes are stale. Likewise, pipelines glued with the <code>|</code> pipe (<code>prompt | model | parser</code>, the style called LCEL) still work in simple non-agent code, but are no longer how agents are built. Date-check any tutorial whose imports look like this before copying from it.</p></div>
+
+      <h2>The reading protocol: five moves, any file</h2>
+      <p>Fluent readers do not read top-to-bottom like a novel; they make the same five moves, each answering one question. Step through the protocol — the highlight shows where your eyes go.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Imports">
+          <h3>1. Read the imports — which layers are in play?</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">Imports<small>the passport page</small></div>
+              <div class="d-box dim">Tools</div>
+              <div class="d-box dim">Model</div>
+              <div class="d-box dim">Agent</div>
+              <div class="d-box dim">Run</div>
+            </div>
+          </div>
+          <p class="step-cap">Match each import to the cheat-sheet. Provider packages say whose models pay the bills; <code>langgraph</code> imports signal memory or custom wiring; legacy names say check the date.</p>
+        </div>
+        <div class="step" data-title="Tools">
+          <h3>2. Find the tools — what can this thing touch?</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Imports</div>
+              <div class="d-box hot">Tools<small>@tool functions</small></div>
+              <div class="d-box dim">Model</div>
+              <div class="d-box dim">Agent</div>
+              <div class="d-box dim">Run</div>
+            </div>
+          </div>
+          <p class="step-cap">Search for <code>@tool</code>. The decorated functions are the agent's entire reach into the world — and, as you learned building the loop by hand, where all the security lives.</p>
+        </div>
+        <div class="step" data-title="Model">
+          <h3>3. Find the model line — which brain, on what settings?</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Imports</div>
+              <div class="d-box dim">Tools</div>
+              <div class="d-box hot">Model<small>init_chat_model(…)</small></div>
+              <div class="d-box dim">Agent</div>
+              <div class="d-box dim">Run</div>
+            </div>
+          </div>
+          <p class="step-cap">One line, usually <code>init_chat_model("…")</code> or a provider class like <code>ChatAnthropic(…)</code>. Note the model name and the temperature — they explain more production behaviour than any other single line.</p>
+        </div>
+        <div class="step" data-title="Constructor">
+          <h3>4. Find the constructor — how is it all wired?</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Imports</div>
+              <div class="d-box dim">Tools</div>
+              <div class="d-box dim">Model</div>
+              <div class="d-box hot">Agent<small>create_agent(…)</small></div>
+              <div class="d-box dim">Run</div>
+            </div>
+          </div>
+          <p class="step-cap">The <code>create_agent(…)</code> call is the wiring diagram: system prompt (personality and rules), middleware (wrappers around the loop), <code>response_format</code> (structured final answer), <code>checkpointer</code> (memory between calls).</p>
+        </div>
+        <div class="step" data-title="Call site">
+          <h3>5. Find the call site — invoke or stream, and what rides along?</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Imports</div>
+              <div class="d-box dim">Tools</div>
+              <div class="d-box dim">Model</div>
+              <div class="d-box dim">Agent</div>
+              <div class="d-box good">Run<small>.invoke / .stream + config</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Does the app call <code>.invoke</code> (wait for the whole answer) or <code>.stream</code> (watch it happen)? And what rides in <code>config</code>? A <code>thread_id</code> means conversations persist — it names which one this call joins.</p>
+        </div>
+      </div>
+
+      <h2>Four idioms that carry every file</h2>
+      <p>Vocabulary gets you into the station; idioms get you through conversations. Four phrases do most of the talking in LangChain code, all variations on one deep idea: almost everything here is a <dfn>Runnable</dfn> — an object speaking the universal verbs <code>invoke</code> (one call, one answer), <code>stream</code> (the answer in pieces), and <code>batch</code> (many inputs at once), each with an async twin prefixed with <code>a</code>.</p>
+
+      <h3>Idiom one: <code>bind_tools</code> — attach the toolbox</h3>
+      <div class="code-title">the phrase, wherever tools meet a model by hand</div>
+      <pre><code class="language-python">model_with_tools = model.bind_tools([look_up_order, refund_policy])</code></pre>
+      <p>This staples the tools' schemas onto every future call, so the model can reply with structured tool requests — the <a href="ch035-tool-calling.html">native tool-calling handshake</a>. The crucial subtlety: it <em>returns a new model object</em>, leaving the original untouched. Inside <code>create_agent</code> this happens for you; you meet it written out in hand-rolled loops.</p>
+
+      <h3>Idiom two: <code>with_structured_output</code> — demand data, not prose</h3>
+      <div class="code-title">the phrase, wherever a typed answer is needed</div>
+      <pre><code class="language-python">grader = model.with_structured_output(Triage)
+report = grader.invoke(messages)   # report is a Triage object, not a string</code></pre>
+      <p>Give it a <a href="ch016-type-hints-and-pydantic.html">Pydantic model</a> and it returns a new model whose answers arrive parsed and validated into that shape — the framework's packaging of <a href="ch036-structured-output.html">structured output</a>. Same pattern as <code>bind_tools</code>: a modified copy, never a mutation.</p>
+
+      <h3>Idiom three: <code>RunnableConfig</code> — the sidecar channel</h3>
+      <div class="code-title">the phrase, at almost every call site</div>
+      <pre><code class="language-python">config = {"configurable": {"thread_id": "ticket-4187"}, "tags": ["support"]}
+agent.invoke(question, config)</code></pre>
+      <p>The second argument to every <code>invoke</code> and <code>stream</code> is a <dfn>RunnableConfig</dfn> — a plain dict of run settings that rides <em>alongside</em> the prompt rather than inside it: which conversation thread to join, tags for tracing dashboards, callbacks, recursion limits. The model never sees it; the machinery around the model does. "How does this app keep each customer's chat separate?" is nearly always answered by a <code>thread_id</code> in this dict, keyed to a checkpointer.</p>
+
+      <h3>Idiom four: streaming — watch the run instead of waiting for it</h3>
+      <div class="code-title">the phrase, wherever a UI shows progress</div>
+      <pre><code class="language-python">for chunk in model.stream("Explain GST in one line"):
+    print(chunk.content, end="")            # token-sized pieces of one reply
+
+for step in agent.stream(question, config, stream_mode="updates"):
+    print(step)                             # one update per loop step</code></pre>
+      <p>On a bare model, <code>.stream</code> yields chunks of a single reply — a <a href="ch038-generators-and-yield.html">generator</a>, exactly as in the <a href="ch040-streaming-responses.html">streaming responses chapter</a>. On an agent, <code>.stream</code> narrates the whole loop, and <code>stream_mode</code> picks the commentary style: <code>"values"</code> replays the full state after each step, <code>"updates"</code> reports only what each step changed, <code>"messages"</code> streams token-level pieces for chat UIs. For a firehose of every internal event — each token, each tool starting and finishing — there is also <code>astream_events</code>, which powers polished agent frontends.</p>
+
+      <p>Now poke the idioms yourself. The real classes need API keys and a network, so here is their behaviour mocked in plain Python — the surface acts exactly like the real thing. Run it, then try the experiments underneath.</p>
+
+      <div class="pyrun" data-title="The four idioms, on a mock model — run me">
+<textarea class="py-src" spellcheck="false">
+# A mock of LangChain's chat-model surface, pure stdlib.
+# The real classes behave exactly like this shell.
+class FakeChatModel:
+    def __init__(self, name, tools=(), schema=None):
+        self.name, self.tools, self.schema = name, tuple(tools), schema
+
+    def bind_tools(self, tools):            # idiom 1: returns a NEW model
+        return FakeChatModel(self.name, self.tools + tuple(tools), self.schema)
+
+    def with_structured_output(self, schema):   # idiom 2: same pattern
+        return FakeChatModel(self.name, self.tools, schema)
+
+    def invoke(self, prompt, config=None):      # idiom 3: config rides along
+        thread = (config or {}).get("configurable", {}).get("thread_id", "none")
+        if self.schema:
+            return {field: f"({field} for: {prompt})" for field in self.schema}
+        return f"[{self.name} | thread={thread} | tools={list(self.tools)}] reply to: {prompt}"
+
+    def stream(self, prompt, config=None):      # idiom 4: pieces, not one blob
+        for word in self.invoke(prompt, config).split(" "):
+            yield word + " "
+
+model = FakeChatModel("fake-model-1")
+agent_model = model.bind_tools(["look_up_order", "refund_policy"])
+
+print("original model's tools:", list(model.tools))
+print("bound model's tools:   ", list(agent_model.tools))
+print()
+print(agent_model.invoke("where is order A-1002?",
+      config={"configurable": {"thread_id": "ticket-4187"}}))
+print()
+triage = model.with_structured_output(["summary", "urgency"])
+print("structured reply:", triage.invoke("router is down"))
+print()
+print("streamed: ", end="")
+for chunk in model.stream("hello there, reader"):
+    print(chunk, end="")
+print()
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Prove the copy-not-mutate rule: after <code>bind_tools</code>, print both tool lists — the original is still empty. Then chain the idioms as real code does: <code>model.bind_tools([...]).with_structured_output([...])</code> and invoke the result. Each call returns a fresh wrapper, so they stack like <a href="ch017-decorators.html">decorators</a>.</p></div>
+
+      <h2>The guided read: one realistic app, end to end</h2>
+      <p>Time for the newspaper. Below is <code>triage_agent.py</code> — a complete, realistic app of about seventy lines that a small web shop might run to triage support tickets. It uses everything: tools, structured output, memory, config, streaming. Read it in three passes, one per section of the file, clicking annotated lines to unfold their meaning. Your goal is the fluent reader's reaction: "imports, tools, schema, model, constructor, call site — yes, yes, obviously."</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">triage_agent.py — part 1 of 3: the passport page</div>
+        <div class="wl-line"><code>"""Support-ticket triage agent for a small web shop."""</code>
+          <div class="wl-note">A docstring first — real files introduce themselves. One line in, you already know the domain.</div></div>
+        <div class="wl-line"><code>from typing import Literal</code>
+          <div class="wl-note">Standard library. <code>Literal</code> lets the schema later say "urgency is exactly one of these three words" — a type hint doing the work of a validation rule.</div></div>
+        <div class="wl-line"><code>from pydantic import BaseModel, Field</code>
+          <div class="wl-note">Pydantic — so somewhere below, a typed shape is being declared. Expect structured output.</div></div>
+        <div class="wl-line"><code>from langchain.agents import create_agent</code>
+          <div class="wl-note">Top layer of the stack: this file builds an agent. Also a freshness signal — a modern 1.x file, not a legacy <code>AgentExecutor</code> tutorial.</div></div>
+        <div class="wl-line"><code>from langchain.chat_models import init_chat_model</code>
+          <div class="wl-note">The provider-neutral model initialiser. The vendor will be chosen by a model-name string, not by an import — handy for swapping providers later.</div></div>
+        <div class="wl-line"><code>from langchain_core.tools import tool</code>
+          <div class="wl-note">The core layer's tool decorator. Expect <code>@tool</code> functions below — the agent's hands.</div></div>
+        <div class="wl-line"><code>from langgraph.checkpoint.memory import InMemorySaver</code>
+          <div class="wl-note">A checkpointer import — the biggest tell on the page. This agent will remember conversations between calls, so a <code>thread_id</code> must appear at the call site. You know the ending before reading the middle.</div></div>
+      </div>
+
+      <p>Seven imports, and you already know: agent app, current API, structured output, tools, memory. Part two — what it can touch, and what it must hand back:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">triage_agent.py — part 2 of 3: tools and the report schema</div>
+        <div class="wl-line"><code>@tool</code>
+          <div class="wl-note">The <a href="ch017-decorators.html">decorator</a> from <a href="ch053-langchain-tools.html">the tools chapter</a>: it reads the function's name, type hints, and docstring, and builds the schema the model will see. The docstring is not decoration — it is the tool's advertisement.</div></div>
+        <div class="wl-line"><code>def look_up_order(order_id: str) -&gt; str:</code>
+          <div class="wl-note">A plain function with type hints. Nothing agent-flavoured about the body — the decorator does the introductions.</div></div>
+        <div class="wl-line"><code>    """Look up an order's shipping status by its id."""</code>
+          <div class="wl-note">This sentence goes to the model verbatim, as the tool's description. Vague docstring, wrong tool choices — a real production failure mode.</div></div>
+        <div class="wl-line"><code>    orders = {</code></div>
+        <div class="wl-line"><code>        "A-1001": "shipped, arriving Thursday",</code></div>
+        <div class="wl-line"><code>        "A-1002": "payment failed, never shipped",</code></div>
+        <div class="wl-line"><code>    }</code>
+          <div class="wl-note">A stand-in for the real database call. In production this dict is a query; the shape of the tool stays identical.</div></div>
+        <div class="wl-line"><code>    return orders.get(order_id, "no order with that id")</code>
+          <div class="wl-note"><code>.get</code> with a default (<a href="ch004-collections.html">ch4</a>): unknown ids return a polite sentence instead of crashing. Tools should fail in words — their output goes straight back into the model's context.</div></div>
+        <div class="wl-line"><code>@tool</code></div>
+        <div class="wl-line"><code>def refund_policy(category: str) -&gt; str:</code></div>
+        <div class="wl-line"><code>    """Return the refund policy for a product category."""</code></div>
+        <div class="wl-line"><code>    policies = {"electronics": "30-day full refund",</code></div>
+        <div class="wl-line"><code>                "clothing": "45-day exchange or refund"}</code></div>
+        <div class="wl-line"><code>    return policies.get(category, "14-day store credit")</code>
+          <div class="wl-note">Second tool, same pattern. Two tools total: this agent can check orders and quote policy — nothing else. That is its entire reach.</div></div>
+        <div class="wl-line"><code>class Triage(BaseModel):</code>
+          <div class="wl-note">The promised Pydantic shape: the form the agent must fill in at the end, instead of free-flowing prose.</div></div>
+        <div class="wl-line"><code>    """The report the agent must return — data, not prose."""</code></div>
+        <div class="wl-line"><code>    summary: str = Field(description="One line: what is the issue")</code>
+          <div class="wl-note"><code>Field(description=…)</code> is prompt text in disguise — the model reads these descriptions when filling the form.</div></div>
+        <div class="wl-line"><code>    urgency: Literal["low", "medium", "high"]</code>
+          <div class="wl-note">The <code>Literal</code> from the imports: the model cannot answer "quite urgent" — validation rejects anything but these three values.</div></div>
+        <div class="wl-line"><code>    suggested_reply: str = Field(description="Draft reply to the customer")</code></div>
+      </div>
+
+      <p>And part three, where everything is wired and run:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">triage_agent.py — part 3 of 3: wiring and the call site</div>
+        <div class="wl-line"><code>model = init_chat_model("claude-sonnet-4-5", temperature=0)</code>
+          <div class="wl-note">The brain, chosen by name string — the prefix tells the initialiser which provider package to use. <code>temperature=0</code> says: maximum consistency, minimum creativity. Correct for triage; wrong for a poetry bot.</div></div>
+        <div class="wl-line"><code>agent = create_agent(</code>
+          <div class="wl-note">The constructor from <a href="ch054-create-agent.html">two chapters ago</a> — the fifty-line ReAct loop, productionised. Every argument that follows is a wiring decision.</div></div>
+        <div class="wl-line"><code>    model,</code></div>
+        <div class="wl-line"><code>    tools=[look_up_order, refund_policy],</code>
+          <div class="wl-note">The toolbox — the <code>TOOLS</code> dict from your hand-built loop, wearing a suit. Behind the scenes the framework does the <code>bind_tools</code> idiom for you.</div></div>
+        <div class="wl-line"><code>    system_prompt=(</code></div>
+        <div class="wl-line"><code>        "You triage support tickets for a web shop. "</code></div>
+        <div class="wl-line"><code>        "Check facts with tools before answering. "</code></div>
+        <div class="wl-line"><code>        "Never invent order data."</code>
+          <div class="wl-note">The standing instructions. Adjacent string literals glue into one (a Python nicety from <a href="ch003-strings-and-fstrings.html">ch3</a>). "Never invent order data" is doing serious anti-hallucination work here.</div></div>
+        <div class="wl-line"><code>    ),</code></div>
+        <div class="wl-line"><code>    response_format=Triage,</code>
+          <div class="wl-note">The <code>with_structured_output</code> idiom, applied to the agent's final answer: when the loop finishes, the result will include a parsed <code>Triage</code> object.</div></div>
+        <div class="wl-line"><code>    checkpointer=InMemorySaver(),</code>
+          <div class="wl-note">Memory. State is saved per thread, so a second call with the same <code>thread_id</code> resumes rather than restarts. Swap in a Postgres checkpointer for production; the surrounding code stays identical.</div></div>
+        <div class="wl-line"><code>)</code></div>
+        <div class="wl-line"><code>config = {"configurable": {"thread_id": "ticket-4187"}}</code>
+          <div class="wl-note">Idiom three. The conversation's name-tag: every call carrying it joins ticket 4187's thread. In a real app the id comes from the ticketing system, one thread per ticket.</div></div>
+        <div class="wl-line"><code>question = {"messages": [{"role": "user",</code>
+          <div class="wl-note">Agent input is a dict with a <code>"messages"</code> list — the same message shape you met in <a href="ch052-messages-and-models.html">messages and models</a>; plain role/content dicts are accepted and converted.</div></div>
+        <div class="wl-line"><code>    "content": "Customer says order A-1002 never arrived. Help?"}]}</code></div>
+        <div class="wl-line"><code>for step in agent.stream(question, config, stream_mode="updates"):</code>
+          <div class="wl-note">Idiom four, agent flavour: watch the loop narrate itself. <code>"updates"</code> yields one dict per step — the model deciding, a tool running, the model again.</div></div>
+        <div class="wl-line"><code>    print(step)</code>
+          <div class="wl-note">A real app would update a progress UI here. Printing the raw updates is exactly how developers debug agents — it is the loop's heartbeat, made visible.</div></div>
+        <div class="wl-line"><code>result = agent.invoke(</code>
+          <div class="wl-note">A second call — note: <code>.invoke</code> this time, no streaming — asking a follow-up question.</div></div>
+        <div class="wl-line"><code>    {"messages": [{"role": "user", "content": "So how urgent is this?"}]},</code>
+          <div class="wl-note">"This" is never explained — the shared <code>thread_id</code> lets the checkpointer restore the earlier conversation. Delete the config and the agent would ask "how urgent is what?".</div></div>
+        <div class="wl-line"><code>    config,</code></div>
+        <div class="wl-line"><code>)</code></div>
+        <div class="wl-line"><code>report = result["structured_response"]</code>
+          <div class="wl-note">The payoff of <code>response_format</code>: the result dict carries a validated <code>Triage</code> object under <code>"structured_response"</code>, ready for code — no string parsing, no fingers crossed.</div></div>
+        <div class="wl-line"><code>print(report.urgency.upper(), "-", report.summary)</code>
+          <div class="wl-note">Typed attribute access on a Pydantic object. Downstream code can route on <code>report.urgency</code> with total confidence it is one of exactly three values.</div></div>
+        <div class="wl-line"><code>print(report.suggested_reply)</code></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Nothing in those seventy lines was new. Tools from <a href="ch053-langchain-tools.html">chapter 53</a>, the constructor from <a href="ch054-create-agent.html">chapter 54</a>, structured output from <a href="ch036-structured-output.html">chapter 36</a>, streaming from <a href="ch040-streaming-responses.html">chapter 40</a>, and underneath it all the loop from <a href="ch045-react-loop-by-hand.html">chapter 45</a>. Fluency is not knowing more things — it is recognising the same few things quickly, everywhere.</p></div>
+
+      <h2>Fluency checkpoint: narrate it back</h2>
+      <p>Final exam, and it works only if you play it honestly. Below is a snippet you have not seen — a copy-review bot, written by someone else in a different style. For each line, <strong>say out loud what it does before clicking</strong>, then click and compare. If your version and the note agree in substance, that line is fluent.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">review_bot.py — narrate first, then click to check</div>
+        <div class="wl-line"><code>from langchain.chat_models import init_chat_model</code>
+          <div class="wl-note">You should have said: top-layer import of the provider-neutral model initialiser — a modern file, model chosen by name string.</div></div>
+        <div class="wl-line"><code>from langchain_core.messages import HumanMessage, SystemMessage</code>
+          <div class="wl-note">You should have said: core-layer message objects — this file builds conversations by hand rather than passing plain dicts.</div></div>
+        <div class="wl-line"><code>model = init_chat_model("gpt-5.4-mini", temperature=0.4)</code>
+          <div class="wl-note">You should have said: the brain — a small, cheap model, with a little creative temperature. Reasonable for wording suggestions; suspicious for anything needing strict consistency.</div></div>
+        <div class="wl-line"><code>critic = model.bind_tools([check_style_guide])</code>
+          <div class="wl-note">You should have said: idiom one — a new model object with one tool stapled on, the original untouched. This bot can consult a style guide, and nothing else.</div></div>
+        <div class="wl-line"><code>messages = [SystemMessage("You review marketing copy for tone."),</code>
+          <div class="wl-note">You should have said: the standing instruction, as a message object — this hand-rolled code carries the system prompt in the messages list itself.</div></div>
+        <div class="wl-line"><code>            HumanMessage(draft_copy)]</code>
+          <div class="wl-note">You should have said: the user turn — the draft under review, coming from a variable defined elsewhere.</div></div>
+        <div class="wl-line"><code>config = {"tags": ["copy-review"], "configurable": {"thread_id": review_id}}</code>
+          <div class="wl-note">You should have said: idiom three — the sidecar dict. A tag for tracing dashboards, and a thread id so each review is its own remembered conversation.</div></div>
+        <div class="wl-line"><code>for chunk in critic.stream(messages, config):</code>
+          <div class="wl-note">You should have said: idiom four, model flavour — a generator of token-sized chunks, so the review appears as it is written.</div></div>
+        <div class="wl-line"><code>    print(chunk.content, end="", flush=True)</code>
+          <div class="wl-note">You should have said: print each piece with no newline, flushing so it appears immediately — the classic streaming-display line from chapter 40.</div></div>
+      </div>
+
+      <p>Score yourself like a language teacher: nine confident narrations is fluent; six or seven means re-skim the idioms; fewer means re-run the <a href="ch054-create-agent.html">create_agent chapter</a> and come back — the checkpoint will wait. One caution: this certifies fluency in <em>reading</em>. Writing production LangChain from a blank file is a different muscle, and the rest of the course keeps building it.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This skill pays off fastest in merge requests and incident channels. A reviewer who reads imports first spots "this MR quietly added <code>langchain_community</code> — what are we integrating, and who audited it?" in five seconds. A bug report saying "the bot mixes up two customers' conversations" sends a fluent reader straight to the <code>thread_id</code> in the config dict, not into the prompt text. And when a colleague pastes a tutorial full of <code>AgentExecutor</code> and <code>LLMChain</code>, you can say, kindly and precisely: that is 0.x-era code — the modern spelling is <code>create_agent</code>. That one sentence has saved teams whole sprints.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. You open an unfamiliar file and the imports include <code>from langchain_community.vectorstores import FAISS</code>. What have you learned before reading any logic?</p>
+          <div class="q-opts">
+            <button data-opt="a">The file is legacy 0.x code and should be rewritten</button>
+            <button data-opt="b">The file defines its own model provider</button>
+            <button data-opt="c">The app pulls in a third-party integration from the community long tail — here, a vector store</button>
+          </div>
+          <p class="q-explain"><code>langchain_community</code> is the bazaar of third-party integrations. Its presence is not a version signal (that would be names like <code>AgentExecutor</code>) — it simply tells you the app touches something beyond the core stack, and a careful reviewer asks what and why.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. After <code>bound = model.bind_tools(tools)</code>, what is true of <code>model</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">It now carries the tool schemas on every call</button>
+            <button data-opt="b">It is unchanged — <code>bind_tools</code> returned a new, separate object</button>
+            <button data-opt="c">It is closed and cannot be used again</button>
+          </div>
+          <p class="q-explain">The wrapper idioms — <code>bind_tools</code>, <code>with_structured_output</code> — always return modified copies and never mutate the original. That is why they chain safely, and why two agents can share one base model without interfering.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. An agent keeps forgetting what the user said one message ago, even though a checkpointer is configured. Where does a fluent reader look first?</p>
+          <div class="q-opts">
+            <button data-opt="a">The <code>config</code> dict at the call site — is the same <code>thread_id</code> passed on every call?</button>
+            <button data-opt="b">The system prompt — does it tell the model to remember?</button>
+            <button data-opt="c">The tool docstrings — are they descriptive enough?</button>
+          </div>
+          <p class="q-explain">Memory is keyed by thread: the checkpointer saves state per <code>thread_id</code>, carried in the config dict. A missing or freshly generated id on each call means every call starts a brand-new conversation — no prompt wording can fix that.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. In <code>agent.stream(question, config, stream_mode="updates")</code>, what does each yielded item contain?</p>
+          <div class="q-opts">
+            <button data-opt="a">One token of the final answer</button>
+            <button data-opt="b">The complete conversation state, replayed after every step</button>
+            <button data-opt="c">Just what changed at that step of the loop — a model decision, a tool result</button>
+          </div>
+          <p class="q-explain"><code>"updates"</code> reports deltas step by step; <code>"values"</code> is the full-state replay; <code>"messages"</code> gives the token-level chunks a chat UI wants. Choosing the mode is choosing the commentary style on the same underlying loop.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. A tutorial's first code block imports <code>initialize_agent</code> and <code>AgentExecutor</code>. What is the fluent conclusion?</p>
+          <div class="q-opts">
+            <button data-opt="a">These are advanced features you have not reached yet</button>
+            <button data-opt="b">This is pre-1.0 legacy material — the concepts transfer, the names do not; the modern entry point is <code>create_agent</code></button>
+            <button data-opt="c">The tutorial is for LangGraph rather than LangChain</button>
+          </div>
+          <p class="q-explain">Those names are the 0.x era's agent machinery. The ideas beneath them — a model, tools, a loop — are what you know, but copying the code will fight the current library. Imports are a tutorial's fastest date-stamp.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Package names are the map: <code>langchain_core</code> is the shared vocabulary, <code>langchain</code> the agent-building top layer, <code>langchain_*</code> provider packages the vendor connectors, <code>langchain_community</code> the third-party long tail, <code>langgraph</code> the engine underneath.</li>
+          <li>Read any file with five moves: imports, tools, model line, constructor, call site — each answers one question, and together they summarise the app before you read its logic.</li>
+          <li>Four idioms carry every file: <code>bind_tools</code> (attach the toolbox), <code>with_structured_output</code> (typed answers), the <code>config</code> dict (thread ids, tags — the sidecar the model never sees), and <code>stream</code> (the run, narrated).</li>
+          <li>The wrapper idioms return modified copies, never mutations — which is why they chain, and why one base model can serve many agents.</li>
+          <li><code>initialize_agent</code>, <code>AgentExecutor</code>, and <code>LLMChain</code> in any code you meet are a date-stamp: pre-1.0 legacy whose modern spelling is <code>create_agent</code>.</li>
+          <li>Fluency means ninety percent of a file is boring on sight, so your attention lands on the ten percent that is genuinely this app's own.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

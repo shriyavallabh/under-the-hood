@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The M-by-N problem — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch074">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IX · MCP and Agent Protocols</div>
+        <h1>The M-by-N problem</h1>
+        <p class="ch-tagline">Every agent wired to every tool by hand: the cost grows multiplicatively, and through 2024 the whole industry was paying it. Then one open protocol — a USB-C port for AI — collapsed the mess, and every major lab adopted it within a year.</p>
+        <div class="ch-meta"><span>~20 min</span><span>Chapter 75 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Sometime this decade you moved house, and at the back of a cupboard you found the shoebox. Inside: eleven chargers. The fat-pinned one for a phone that died in 2013. A barrel plug for a camera you cannot locate. Two nearly identical laptop bricks that refuse to charge each other's laptops. Every gadget maker had solved "get power into the device" from scratch, with its own private plug — so every new device meant one more cable to buy, label, lose, and eventually bury in the box.</p>
+        <p>Then, quietly, the industry agreed on one oval connector. Today you charge your phone, your laptop, your headphones and your neighbour's e-reader with the same cable, and the shoebox stopped growing. Notice what actually happened: nobody's charger got better. No new physics was discovered. What changed was an <em>agreement</em>.</p>
+        <p>This chapter is about the moment the AI-agent world found its own shoebox — every agent needing hand-made wiring to every tool — and about the one-oval-connector agreement, the Model Context Protocol, that emptied it in roughly a year.</p>
+      </section>
+
+      <h2>The wall every team hit</h2>
+      <p>Quick recall before the new idea. In <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> you built a <code>TOOLS</code> dict — a private menu of functions your loop was willing to run. In <a href="ch046-tools.html">the tools chapter</a> you learned what makes a tool good: a clear name, a description the model can act on, a schema for its arguments. And in <a href="ch054-create-agent.html">the LangChain chapters</a> you saw a framework's own tool objects, with schemas generated from <a href="ch016-type-hints-and-pydantic.html">type hints</a>. Just last chapter, <a href="ch073-reading-deepagents-source.html">reading the deepagents source</a>, you watched a whole framework's built-in tools get registered the same way — as code compiled into that one framework.</p>
+      <p>Now notice something all those chapters quietly stepped around: every one of those tool formats was <em>different</em>. LangChain has its tool objects. The Anthropic API takes tool schemas in one JSON shape; OpenAI's API takes a slightly different one. An enterprise harness team invents a fourth shape in-house. Meanwhile, every capability worth having — a code repository, a ticket system, a database, a browser — sits behind its own API with its own authentication, its own pagination, its own error style.</p>
+      <p>So through 2024, connecting agents to the world was artisanal work. For each <em>pair</em> of (agent, tool), somebody wrote glue code by hand: fetch the credentials this way, call the API that way, reshape the result into whichever tool format this particular agent expects. That is the <dfn>M-by-N problem</dfn>: with M agents and N tools, you need M &#215; N bespoke integrations, because every pairing needs its own adapter. The cost grows multiplicatively — add one agent and you owe N new integrations; add one tool and you owe M.</p>
+      <p>Multiply it out and the numbers get silly fast. These are illustrative round figures, but the shape is exactly what platform teams lived through:</p>
+
+      <div data-bars data-title="Integrations to build and maintain (illustrative)" data-unit="integrations"
+           data-note="Four harnesses and twelve tools: bespoke wiring means 48 pieces of glue to write, secure, and keep updated. A shared protocol needs 16 adapters — and the gap widens with every addition.">
+        <div class="bar" data-label="Bespoke: 4 agents x 12 tools" data-value="48"></div>
+        <div class="bar" data-label="Protocol: 4 clients + 12 servers" data-value="16"></div>
+      </div>
+
+      <p>And it was worse than the count suggests, because each of those 48 glue pieces was written by a different person, at a different time, with different care. The same code-search integration existed five times across the industry — five sets of bugs, five auth implementations to audit, five things that silently broke when the upstream API changed. Mature industries always escape this trap the same way: they stop agreeing on <em>implementations</em> and agree on an <em>interface</em>. Electrical plugs. Shipping containers. HTTP for the web. And for device charging: USB-C.</p>
+
+      <p>Watch the wall grow, then watch the protocol knock it down:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="One pair">
+          <h3>1. One agent, one tool — one adapter</h3>
+          <div class="diagram">
+            <div class="d-box hot">Agent A<small>a chat app</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Glue #1<small>bespoke code</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Tool 1<small>code search</small></div>
+          </div>
+          <p class="step-cap">Day one is fine. One agent needs one tool, someone writes one adapter, everyone goes home happy. This is where every team starts.</p>
+        </div>
+        <div class="step" data-title="Add an agent">
+          <h3>2. Add an agent — rewrite the same integration</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Agent A</div>
+              <div class="d-box hot">Agent B<small>an IDE assistant</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">Glue #1</div>
+              <div class="d-box hot">Glue #2<small>same tool, again</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Tool 1</div>
+          </div>
+          <p class="step-cap">Agent B expects tools in a different format, so Glue #1 cannot be reused. Somebody re-implements the same integration — new bugs included, free of charge.</p>
+        </div>
+        <div class="step" data-title="The full grid">
+          <h3>3. Scale up — the glue outnumbers everything</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Agent A</div>
+              <div class="d-box">Agent B</div>
+              <div class="d-box">Agent C</div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">12 bespoke adapters<small>each with its own auth, bugs, and update lag</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">Tool 1</div>
+              <div class="d-box">Tool 2</div>
+              <div class="d-box">Tool 3</div>
+              <div class="d-box">Tool 4</div>
+            </div>
+          </div>
+          <p class="step-cap">Three agents, four tools: twelve adapters. The middle of the diagram — the part nobody wanted to build — is now the biggest, most fragile thing in the system.</p>
+        </div>
+        <div class="step" data-title="Insert the protocol">
+          <h3>4. Agree on one interface</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Agent A<small>speaks client</small></div>
+              <div class="d-box">Agent B<small>speaks client</small></div>
+              <div class="d-box">Agent C<small>speaks client</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">One protocol<small>list tools, call tool</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">Tool 1<small>speaks server</small></div>
+              <div class="d-box">Tool 2<small>speaks server</small></div>
+              <div class="d-box">Tool 3<small>speaks server</small></div>
+              <div class="d-box">Tool 4<small>speaks server</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Each agent implements the client side of the protocol once. Each tool implements the server side once. Three plus four: seven adapters, and the twelve bespoke ones go in the bin. M &#215; N becomes M + N.</p>
+        </div>
+        <div class="step" data-title="Adding is cheap">
+          <h3>5. Now adding anything costs one</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Agent A</div>
+              <div class="d-box dim">Agent B</div>
+              <div class="d-box dim">Agent C</div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">One protocol</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box dim">Tool 1</div>
+              <div class="d-box dim">Tool 2</div>
+              <div class="d-box good">Tool 5 — brand new<small>one server, every agent gets it</small></div>
+            </div>
+          </div>
+          <p class="step-cap">A new tool ships one server and is instantly usable by every agent in existence. A new agent ships one client and inherits every tool ever published. This flips the economics — and economics, not elegance, is what makes standards win.</p>
+        </div>
+      </div>
+
+      <h2>A USB-C port for AI</h2>
+      <p>The agreement that did this for agents is the <dfn>Model Context Protocol</dfn> (MCP) — an open standard, released by Anthropic in November 2024, that defines one common language for connecting AI applications to tools and data. The USB-C comparison is not marketing garnish; it is structurally exact. USB-C does not care whether the device is a phone or a monitor, or who manufactured the charger — if both ends implement the connector spec, power and data flow. MCP does not care which model, framework, or vendor sits on either side — if both ends speak the protocol, tools flow.</p>
+      <p>Three words carry the design. An <dfn>MCP server</dfn> is a small program that wraps some capability — a database, a browser, a file system — and exposes it in the standard format. An <dfn>MCP client</dfn> is the piece inside an agent application that connects to servers and relays tool calls. The <dfn>host</dfn> is the agent application itself — a chat app, an IDE assistant, an agent harness — which may hold many clients, one per server it is connected to. The conversation between client and server is always the same agreed handshake: connect, ask the server to list what it offers, call a tool by name with arguments, get a result back.</p>
+      <p>Two more facts, briefly, because the next chapter dissects the architecture properly. Servers can expose more than tools — the spec also covers resources (readable data) and prompts (reusable templates), and newer spec additions like elicitation and long-running tasks exist too. And the wire between client and server is called a <dfn>transport</dfn>: <code>stdio</code> for a local server running as a subprocess, streamable HTTP for a server across the network.</p>
+      <p>But the property that should make your operator instincts tingle is <strong>discovery</strong>. The <code>TOOLS</code> dict you built in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> was hardcoded at write time — the agent could only ever reach tools its author typed in. An MCP client instead asks the server what it offers <em>at connect time</em>, and receives names, descriptions, and argument schemas it has never seen before. That is why you can add one entry to a config file, restart nothing else, and your agent suddenly has twenty new abilities. You have done this — every MCP server you have ever wired into a harness worked exactly this way. Now you know what the config entry was actually doing.</p>
+
+      <p>Pin the vocabulary before we write code — flip each card until the back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">M-by-N problem</span><span class="flip-back">M agents and N tools need M &#215; N bespoke integrations if every pair is wired by hand. A shared protocol cuts it to M + N.</span></button>
+        <button class="flip" type="button"><span class="flip-front">MCP</span><span class="flip-back">Model Context Protocol — the open standard (Anthropic, November 2024) that lets any agent talk to any tool through one agreed handshake.</span></button>
+        <button class="flip" type="button"><span class="flip-front">MCP server</span><span class="flip-back">A small program wrapping a capability — database, browser, ticket system — and exposing it in the standard format. Built once, usable by every client.</span></button>
+        <button class="flip" type="button"><span class="flip-front">MCP client</span><span class="flip-back">The connector inside an agent app that talks to one server: lists its tools, relays calls, returns results to the model.</span></button>
+        <button class="flip" type="button"><span class="flip-front">host</span><span class="flip-back">The agent application itself — chat app, IDE assistant, harness. It holds one client per server it is connected to.</span></button>
+        <button class="flip" type="button"><span class="flip-front">transport</span><span class="flip-back">How the bytes travel between client and server: stdio for a local subprocess, streamable HTTP for a remote server.</span></button>
+      </div>
+
+      <h2>Prove it to yourself in Python</h2>
+      <p>Below is the whole argument of this chapter as a running program. Part 1 is the arithmetic. Part 2 builds a toy protocol: two "servers" from two different vendors that both answer the same two requests. Part 3 is the punchline — a generic agent that has never heard of either server, discovers their tools at connect time, and uses one. As in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, the model is a scripted stand-in so the loop runs entirely in your browser. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="The M-by-N problem, then the escape — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- Part 1: the arithmetic of the mess -------------------
+agents = ["desktop chat app", "IDE assistant", "support bot", "research agent"]
+tools  = ["code search", "ticket system", "database", "calendar", "browser"]
+
+bespoke  = len(agents) * len(tools)
+adapters = len(agents) + len(tools)
+print(f"Bespoke wiring: {len(agents)} agents x {len(tools)} tools "
+      f"= {bespoke} integrations")
+print(f"One protocol  : {len(agents)} clients + {len(tools)} servers "
+      f"= {adapters} adapters")
+print()
+
+# ---- Part 2: a toy protocol -------------------------------
+# The whole trick: every server, whoever built it, answers
+# the SAME two requests: list_tools() and call_tool().
+class ToyServer:
+    def __init__(self, name, tools):
+        self.name = name
+        self._tools = tools   # {"tool_name": (description, function)}
+
+    def list_tools(self):
+        return [(n, desc) for n, (desc, _fn) in self._tools.items()]
+
+    def call_tool(self, tool, arg):
+        return self._tools[tool][1](arg)
+
+# Two servers from two different 'vendors':
+weather = ToyServer("weather", {
+    "forecast": ("tomorrow's weather for a city",
+                 lambda city: f"31 C, humid, chance of rain in {city}"),
+})
+notes = ToyServer("notes", {
+    "save_note": ("save a short note for later",
+                  lambda text: f"saved note: {text!r}"),
+})
+
+# ---- Part 3: a generic client that has met NEITHER server --
+def fake_llm(menu, question):
+    # A real agent sends the menu + question to an LLM API.
+    # Our scripted stand-in picks the obvious tool.
+    if "weather" in question:
+        return ("forecast", "Pune")
+    return ("save_note", question)
+
+def run_agent(servers, question):
+    owners, menu = {}, []
+    for server in servers:
+        for name, desc in server.list_tools():   # discovery!
+            owners[name] = server
+            menu.append(f"{name}: {desc}")
+    print("Discovered at connect time:", ", ".join(owners))
+    tool, arg = fake_llm(menu, question)
+    result = owners[tool].call_tool(tool, arg)
+    print(f"Called {tool}({arg!r})")
+    print("Result:", result)
+
+run_agent([weather, notes], "what is the weather in Pune tomorrow?")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Read <code>run_agent</code> again: it mentions neither <code>weather</code> nor <code>notes</code>, and it would work unchanged with fifty servers. Try it — add a third <code>ToyServer</code> (a calculator, say) and pass it in. The client needs zero edits. That "add a server, touch nothing else" feeling is exactly what MCP gives real agents, and exactly what you experience as an operator when you add a server to a config file.</p></div>
+
+      <h2>If you build tools: build once</h2>
+      <p>Here is what the protocol means for the tool side of the economy. Before MCP, a company with a useful product had to ship an integration per framework per vendor, forever. After MCP, they write one server and are done — every MCP-speaking agent on Earth is now a potential user. The official Python SDK makes the server side almost embarrassingly small. Click through the annotated lines — you already know every technique in them:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">weather_server.py — a complete, real MCP server</div>
+        <div class="wl-line"><code>from mcp.server.fastmcp import FastMCP</code>
+          <div class="wl-note">The official Python SDK's high-level server class. One import; the protocol plumbing — handshakes, schemas, message framing — is all handled for you.</div></div>
+        <div class="wl-line"><code>mcp = FastMCP("weather")</code>
+          <div class="wl-note">Create the server and name it. This is the name clients display when they connect — the label you see next to tools in your own agent's config.</div></div>
+        <div class="wl-line"><code>@mcp.tool()</code>
+          <div class="wl-note">A <a href="ch017-decorators.html">decorator</a> — a function that wraps your function to register it. This one line publishes <code>forecast</code> to every MCP client that ever connects. Compare it with hand-writing an adapter per framework.</div></div>
+        <div class="wl-line"><code>def forecast(city: str) -&gt; str:</code>
+          <div class="wl-note">The <a href="ch016-type-hints-and-pydantic.html">type hints</a> are not decoration: the SDK reads them and generates the JSON argument schema that clients receive during discovery. <code>city: str</code> becomes "this tool takes one string argument named city".</div></div>
+        <div class="wl-line"><code>    """Tomorrow's forecast for the given city."""</code>
+          <div class="wl-note">The docstring becomes the tool's description — the text the <em>model</em> reads when deciding whether to call it. Everything you learned in <a href="ch046-tools.html">the tools chapter</a> about writing descriptions applies here, verbatim.</div></div>
+        <div class="wl-line"><code>    return f"31 C and humid in {city}"  # imagine a real API call</code>
+          <div class="wl-note">Ordinary Python. In a real server this line calls a weather API, queries a database, drives a browser — whatever the capability is.</div></div>
+        <div class="wl-line"><code>if __name__ == "__main__":</code></div>
+        <div class="wl-line"><code>    mcp.run(transport="stdio")</code>
+          <div class="wl-note">Start speaking the protocol over stdin/stdout — the transport a host uses when it launches the server as a local subprocess. Serving remote clients over the network is a transport swap, not a rewrite.</div></div>
+      </div>
+
+      <h2>If you build harnesses: consume anything</h2>
+      <p>Now the agent side. A harness that implements one MCP client inherits the entire catalogue of existing servers on day one — file systems, browsers, databases, ticket systems, search engines, thousands of community-built wrappers. That is why harness teams stopped writing tool integrations almost overnight: the build-versus-buy question collapsed when "buy" became "add three lines of config".</p>
+      <p>You have seen those three lines. This is the shape of an MCP entry in an agent's project config — the same shape whether the tool is a weather toy or a production browser:</p>
+
+      <div class="code-title">.mcp.json — wiring a server into an agent host</div>
+      <pre><code class="language-json">{
+  "mcpServers": {
+    "weather": {
+      "command": "python",
+      "args": ["weather_server.py"]
+    }
+  }
+}</code></pre>
+
+      <p>The host reads this, launches the server as a subprocess, speaks the handshake over stdio, and merges whatever tools come back into the model's menu. No agent code changed. And the frameworks you met in earlier acts plugged in the same way: LangChain's adapter package, <code>langchain-mcp-adapters</code>, provides a <code>MultiServerMCPClient</code> that connects to several servers at once and hands their tools to <a href="ch054-create-agent.html"><code>create_agent</code></a> as if they were ordinary LangChain tools. The same trick powers <a href="ch067-create-deep-agent-anatomy.html">deep agents</a> and every serious harness you operate: one client implementation, every server ever written.</p>
+
+      <h2>How a plug becomes a standard: the adoption year</h2>
+      <p>Standards usually take a decade and a committee. MCP took about a year, and the speed is worth understanding because it tells you the pain was real.</p>
+      <p>Anthropic released MCP in November 2024 — not as a product but as an open specification, with SDKs and a batch of reference servers anyone could run. The initial reception was polite scepticism: the industry had seen plugin systems before, and every previous one had been a walled garden that benefited its owner. Developer-tool companies wired it in first, because they felt the M-by-N pain most acutely — every editor and coding assistant wanted the same dozen integrations.</p>
+      <p>Then the dominoes went. In March 2025, OpenAI — Anthropic's most direct competitor — announced MCP support across its products. A rival adopting a rival's standard is the strongest possible signal that a spec has escaped its creator. Google confirmed MCP support for Gemini shortly after, and Microsoft wired it into its Copilot ecosystem and into Windows itself. Meanwhile the community had built thousands of servers — round number, still growing — covering practically every API, database, and SaaS product you can name.</p>
+
+      <div class="viz-tiles">
+        <div class="tile"><div class="tile-label">November 2024</div><div class="tile-value">Launch</div><div class="tile-delta">Open spec + SDKs + reference servers</div></div>
+        <div class="tile"><div class="tile-label">March 2025</div><div class="tile-value">OpenAI</div><div class="tile-delta">The chief rival adopts it</div></div>
+        <div class="tile"><div class="tile-label">Spring 2025</div><div class="tile-value">Google, Microsoft</div><div class="tile-delta">Gemini and the Copilot ecosystem follow</div></div>
+        <div class="tile"><div class="tile-label">Within a year</div><div class="tile-value">Thousands</div><div class="tile-delta">of community servers published</div></div>
+      </div>
+
+      <p>Why so fast? Network effects — the same force that made USB-C inevitable. Every new server made every client more valuable; every new client made writing a server more worthwhile. Once the flywheel spun, <em>not</em> supporting MCP meant your agent shipped with fewer abilities than the competition, and your tool reached fewer agents. Openness mattered too: because the spec was public and the governance open, competitors could adopt it without strengthening a rival's product. The pattern to remember, since Act IX meets it again with agent-to-agent protocols: <strong>an open interface wins when the cost of not joining exceeds the cost of joining.</strong></p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You are surrounded by this already. Open any project you operate and look for <code>.mcp.json</code>, or an <code>mcpServers</code> block inside a settings file — each entry is one server, one plug into the port. Claude Code's <code>claude mcp add</code> command, an IDE's "add MCP server" panel, and a harness's <code>MultiServerMCPClient</code> config are all the same act. In merge requests, "expose this as an MCP server" means "stop writing per-framework adapters — build the tool side once". And when a vendor's sales page says "works with any MCP-compatible agent", you can now translate precisely: they implemented the server side of the handshake, so your client — whoever built it — can discover and call their tools with zero custom glue.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Your platform team runs 4 different agent harnesses, and the business wants each connected to 12 internal systems. Without a shared protocol, roughly how many bespoke integrations must someone write and maintain?</p>
+          <div class="q-opts">
+            <button data-opt="a">16 — one per harness plus one per system</button>
+            <button data-opt="b">48 — one per (harness, system) pair</button>
+            <button data-opt="c">12 — one per internal system</button>
+          </div>
+          <p class="q-explain">That is the M-by-N problem: every pairing needs its own glue, so the count is 4 &#215; 12 = 48. With a shared protocol it drops to 4 clients + 12 servers = 16 — and each new addition costs one, not many.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Under MCP, who builds the integration for, say, a ticket system?</p>
+          <div class="q-opts">
+            <button data-opt="a">Every agent team writes its own wrapper, as before</button>
+            <button data-opt="b">Each model provider ships one inside the model</button>
+            <button data-opt="c">One MCP server is written once for the tool side, and every client can then use it</button>
+          </div>
+          <p class="q-explain">The tool side implements the server once; the agent side implements a client once. Neither side needs to know the other exists in advance — the protocol in the middle is the agreement that makes strangers compatible.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. You add one entry to <code>.mcp.json</code>, restart the agent, and it suddenly has twenty-five new browser tools. Which property of MCP makes that possible with zero code changes?</p>
+          <div class="q-opts">
+            <button data-opt="a">The tools were already baked into the model's weights</button>
+            <button data-opt="b">Discovery — the client asks the server to list its tools at connect time and receives names, descriptions, and schemas</button>
+            <button data-opt="c">The config file contains the tool implementations themselves</button>
+          </div>
+          <p class="q-explain">Unlike a hardcoded TOOLS dict, an MCP client learns what a server offers when it connects. The config entry only says how to reach the server; everything else arrives through the standard list-tools handshake.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Why did MCP adoption snowball instead of growing slowly like most standards?</p>
+          <div class="q-opts">
+            <button data-opt="a">Model providers required it for API access</button>
+            <button data-opt="b">Network effects — every new server made every client more valuable, and vice versa, until not joining cost more than joining</button>
+            <button data-opt="c">It made the underlying models measurably smarter</button>
+          </div>
+          <p class="q-explain">The flywheel is the story: more servers make clients more capable, more clients make servers more worth writing. Once OpenAI, Google, and Microsoft joined, an agent without MCP simply shipped with fewer abilities than its competitors.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. In the USB-C analogy, what plays the role of the connector's physical shape?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model — it is the thing doing the work</button>
+            <button data-opt="b">The protocol's agreed handshake — connect, list tools, call tool, return result</button>
+            <button data-opt="c">The Python SDK — you must use it for compatibility</button>
+          </div>
+          <p class="q-explain">The shape is the agreement, not any implementation. SDKs exist in many languages and any of them (or none) will do — what makes two strangers compatible is that both ends speak the same handshake, exactly as any USB-C plug fits any USB-C port.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>M agents &#215; N tools = M &#215; N bespoke integrations — the count grows multiplicatively, every adapter is duplicated effort, and the whole industry was paying this tax through 2024.</li>
+          <li>A shared protocol collapses M &#215; N to M + N: each agent implements one client, each tool implements one server, and strangers become compatible.</li>
+          <li>MCP is that protocol — a USB-C port for AI: one agreed handshake (connect, list tools, call tool) over stdio or streamable HTTP, open for anyone to implement.</li>
+          <li>Discovery is the superpower: clients learn a server's tools at connect time, which is why one config entry gives your agent new abilities with zero code changes.</li>
+          <li>Tool builders build once and reach every MCP-speaking agent; harness builders implement one client and inherit thousands of existing servers on day one.</li>
+          <li>Adoption took roughly a year — launch in November 2024, then OpenAI, Google, and Microsoft in 2025 — because network effects made not joining more expensive than joining.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

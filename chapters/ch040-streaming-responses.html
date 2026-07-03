@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Streaming responses — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch040">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IV · Talking to the Model</div>
+        <h1>Streaming responses</h1>
+        <p class="ch-tagline">The typing effect in every chat UI is not an animation. It is the model's actual heartbeat, forwarded to your screen one small piece at a time — and the machinery behind it is exactly the yield and await you just learned.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 41 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>There are two ways to follow a cricket match. The first: wait for tomorrow's newspaper. Complete, polished, every scorecard detail in place — but you spend the whole evening knowing nothing. The second: switch on the radio. The commentator cannot tell you the final score, because it does not exist yet. So she gives you the match the only way it exists right now — one ball at a time. <em>"Single taken."</em> <em>"Dropped at slip!"</em> <em>"Bowled him!"</em> Your radio stays tuned to one station for the whole innings. Small updates keep arriving down that single open connection. And you keep the running score in your head, revising it after every ball. When the innings ends, she says so — and the broadcast has nothing more to give.</p>
+        <p>An LLM answering your question is that match in progress. The answer genuinely does not exist yet; the model is producing it token by token, live. A non-streaming API is the newspaper: silence, then everything. Streaming is the radio: the same match, the same total length — but you hear every ball as it happens. This chapter is that broadcast, taken apart: the open connection (server-sent events), the ball-by-ball updates (chunks and deltas), and the running score you keep (accumulating the reply).</p>
+      </section>
+
+      <h2>You already own both halves of this machine</h2>
+      <p>Quick recap, because this chapter is where the last two finally pay off. In <a href="ch038-generators-and-yield.html">the generators chapter</a> you met functions that pause: a function with <code>yield</code> in it does not return one big result — it hands out values one at a time, freezing between each, resuming only when the consumer asks for the next. You learned that a generator is a promise of a sequence, delivered on demand. Then in <a href="ch039-async-await.html">the async chapter</a> you met <code>await</code>: a marker that says "I am waiting on the outside world here — someone else can use the CPU in the meantime", letting one Python process juggle many slow conversations at once instead of blocking on each.</p>
+      <p>Streaming is where those two ideas shake hands. A streamed LLM reply reaches your code as something you loop over — one piece per iteration, produced on demand, exactly the generator shape from ch038. And between pieces there is dead air on the network — gaps that, in a server handling many users, <code>await</code> converts from wasted time into time spent serving somebody else. Every chat product you have ever used is a generator being consumed inside an event loop. By the end of this page you will have built one.</p>
+
+      <h2>The problem: the model was never silent — you just couldn't hear it</h2>
+      <p>Recall from <a href="ch030-tokens-embeddings-context.html">the tokens chapter</a> that an LLM is autoregressive: it produces its answer one token at a time, each token conditioned on everything before it. There is no moment when the full reply exists inside the model but hasn't been "sent" — the reply comes into existence gradually, over seconds, token by token by token.</p>
+      <p>A plain, non-streaming API call — the kind you made in <a href="ch033-first-api-call.html">your first API call</a> — hides all of that. The server collects every token into a buffer, waits for the model to finish, then ships you the completed message in one lump. Correct, simple, and agonising: for a long answer you stare at a spinner for ten, twenty, thirty seconds while — behind the curtain — perfectly good words are piling up unread.</p>
+      <p>Streaming simply stops hiding the progress. You add one flag to the request, and the server forwards each small piece <em>the moment it exists</em>, down a connection it deliberately holds open. Nothing about the model changes. Nothing gets faster in total. What collapses is the wait before the <em>first</em> word — the number engineers call <dfn>time to first token</dfn>, the delay between sending your request and seeing the first sliver of the answer.</p>
+
+      <div data-bars data-title="Wait before the FIRST character appears (illustrative round numbers)" data-unit="ms"
+           data-note="Total generation time is identical either way — streaming just moves the wait to where you can watch it.">
+        <div class="bar" data-label="Non-streaming (whole reply buffered)" data-value="9000"></div>
+        <div class="bar" data-label="Streaming (first delta forwarded)" data-value="400"></div>
+      </div>
+
+      <p>That gap is why streamed UIs feel alive. Humans forgive slowness they can watch; a wall of text assembling itself is <em>progress</em>, while a spinner is a black box that might be broken. There is a practical bonus too: when you can see an answer going wrong from the second sentence, you press stop — instead of paying for twenty more seconds of a reply you were always going to throw away. (Paying for tokens is the whole of the <a href="ch041-tokens-and-cost.html">next chapter</a>.)</p>
+
+      <h2>Server-sent events: one response that refuses to end</h2>
+      <p>So how does a server keep sending after it has started answering? Not with anything exotic. The standard trick is <dfn>server-sent events</dfn> (SSE) — an ordinary HTTP response whose body never quite finishes, so the server can keep appending small text records to it, one per update, until it finally says "done" and closes. One request from you; one long, slow-motion response from them; many little messages inside it.</p>
+      <p>Each record in the body is a few lines of plain text: an optional <code>event:</code> line naming the kind of update, a <code>data:</code> line carrying a small JSON payload, and a blank line to say "record over". Here is what genuinely crosses the wire when you stream from the Anthropic API (a few bookkeeping events trimmed for space):</p>
+
+      <div class="code-title">What the wire actually carries (trimmed)</div>
+      <pre><code class="language-markup">HTTP/1.1 200 OK
+Content-Type: text/event-stream
+
+event: message_start
+data: {"type":"message_start","message":{"role":"assistant","content":[]}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Str"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"eaming"}}
+
+event: message_stop
+data: {"type":"message_stop"}</code></pre>
+
+      <p>Read it like the radio broadcast it is. <code>message_start</code> is the commentator clearing her throat. Each <code>content_block_delta</code> is one ball bowled — and notice its payload carries only the <em>new</em> fragment (<code>"Str"</code>, then <code>"eaming"</code>), never the text so far. <code>message_stop</code> is stumps. The OpenAI API speaks a dialect of the same thing — bare <code>data:</code> lines with no event names, closed by a literal <code>data: [DONE]</code> — but the shape of the conversation is identical.</p>
+      <p>Two vocabulary notes before we go on. A <dfn>chunk</dfn> is one of those records as your program receives it — one parcel off the wire. A <dfn>delta</dfn> is the payload inside: the increment, the change since last time, named after the Greek letter mathematicians use for "difference". And if you have heard of WebSockets: those are a two-way phone call, overkill here. An LLM reply only flows one direction — server to you — and SSE, riding on plain boring HTTP, is exactly one-way. That is why nearly every LLM API chose it.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Request goes out">
+          <h3>1. One ordinary request, one extra flag</h3>
+          <div class="diagram">
+            <div class="d-box hot">Chat UI<small>POST /v1/messages, stream: true</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">API server</div>
+            <div class="d-box dim">Model</div>
+          </div>
+          <p class="step-cap">The request is the same one you sent in ch033, plus a flag. The server replies with headers immediately — <code>Content-Type: text/event-stream</code> — and then leaves the response open, like a radio station going live before play begins.</p>
+        </div>
+        <div class="step" data-title="First token exists">
+          <h3>2. The model produces its first token</h3>
+          <div class="diagram">
+            <div class="d-box dim">Chat UI</div>
+            <div class="d-box">API server</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Model<small>token: "Str"</small></div>
+          </div>
+          <p class="step-cap">The model is autoregressive (ch030): tokens come into existence one at a time. In the non-streaming world this token would go into a buffer and wait. Here, it goes straight out the door.</p>
+        </div>
+        <div class="step" data-title="Delta crosses the wire">
+          <h3>3. A delta event crosses the wire</h3>
+          <div class="diagram">
+            <div class="d-box dim">Chat UI</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">API server<small>event: content_block_delta, text: "Str"</small></div>
+            <div class="d-box dim">Model</div>
+          </div>
+          <p class="step-cap">The server wraps the fragment in an SSE record and writes it into the still-open response. Note what it sends: only the new piece, never the accumulated text. Bandwidth-frugal, and it makes the client's job interesting.</p>
+        </div>
+        <div class="step" data-title="UI appends and repaints">
+          <h3>4. The UI appends the delta and repaints</h3>
+          <div class="diagram">
+            <div class="d-box hot">Chat UI<small>reply += "Str"; render</small></div>
+            <div class="d-box dim">API server</div>
+            <div class="d-box dim">Model</div>
+          </div>
+          <p class="step-cap">The client keeps a running string, glues each delta onto the end, and redraws. This append-and-repaint, dozens of times a second, IS the typing effect. It is not a cosmetic animation — it is the generation cadence made visible.</p>
+        </div>
+        <div class="step" data-title="Stop event, stream closes">
+          <h3>5. message_stop, and the broadcast ends</h3>
+          <div class="diagram">
+            <div class="d-box good">Chat UI<small>has the full reply — because it built it</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box good">API server<small>event: message_stop, then close</small></div>
+          </div>
+          <p class="step-cap">A final event says the message is complete, and the connection closes. Nothing re-sends the whole text at the end. If the client wants the full reply — to log it, save it, parse it — it has it only because it accumulated every delta along the way.</p>
+        </div>
+      </div>
+
+      <h2>Chunks, deltas, and the accumulator</h2>
+      <p>That last step deserves its own heading, because it is the single most common surprise for people meeting streaming in code: <strong>during a stream, the complete reply exists nowhere.</strong> Not on the wire, not in the final event, not in some hidden field. It exists only if your code builds it — an empty string before the first chunk, grown by <code>+=</code> on every delta, complete only after the stop event. That humble variable is called the <dfn>accumulator</dfn>: the running total you keep while increments flow past, exactly the running score you kept in your head at the radio.</p>
+      <p>Flip these until they feel obvious — they are the whole vocabulary of this chapter:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">streaming</span><span class="flip-back">Sending the reply piece by piece as it is generated, instead of holding it until complete. One request flag turns it on.</span></button>
+        <button class="flip" type="button"><span class="flip-front">server-sent events</span><span class="flip-back">The wire format: one HTTP response held open, carrying many small "event:" / "data:" records, one-way, until a final stop record.</span></button>
+        <button class="flip" type="button"><span class="flip-front">chunk</span><span class="flip-back">One parcel as your program receives it off the stream — a single event record, parsed into an object by the SDK.</span></button>
+        <button class="flip" type="button"><span class="flip-front">delta</span><span class="flip-back">The payload inside a chunk: just the new fragment since last time ("Str", then "eaming"), never the text so far.</span></button>
+        <button class="flip" type="button"><span class="flip-front">accumulator</span><span class="flip-back">The variable your code grows with += on every delta. The only place the full reply ever exists.</span></button>
+        <button class="flip" type="button"><span class="flip-front">time to first token</span><span class="flip-back">The delay between sending a request and seeing the first sliver of answer. Streaming collapses this; total time stays the same.</span></button>
+      </div>
+
+      <h2>Build the whole pipeline, right now</h2>
+      <p>Below is both ends of the broadcast in one runnable file. The server side is a <a href="ch038-generators-and-yield.html">generator</a> playing the LLM API — each <code>yield</code> is one SSE record leaving the tower, with a small <code>time.sleep</code> standing in for generation-plus-network delay. The client side is what every chat UI does: read events, parse the <code>data:</code> line, feed the accumulator. Press <strong>Run</strong> and watch the reply assemble itself.</p>
+
+      <div class="pyrun" data-title="A token stream, server and client — run me">
+<textarea class="py-src" spellcheck="false">
+import json, time
+
+TOKENS = ["Stream", "ing", " is", " the", " typing",
+          " effect", ",", " for", " real", "."]
+
+# ---- SERVER SIDE -------------------------------------------
+# A generator (ch038) playing the LLM API. Each yield is one
+# server-sent event crossing the wire. A real API does exactly
+# this, with a model producing the tokens.
+def sse_stream():
+    yield 'event: message_start\ndata: {"role": "assistant"}'
+    for tok in TOKENS:
+        time.sleep(0.05)              # generation + network gap
+        body = json.dumps({"delta": tok})
+        yield "event: content_block_delta\ndata: " + body
+    yield 'event: message_stop\ndata: {}'
+
+# ---- CLIENT SIDE -------------------------------------------
+# What every chat UI does: read events, keep an accumulator.
+reply = ""
+for event in sse_stream():
+    print(event.replace("\n", "   |   "))     # raw wire traffic
+    if "content_block_delta" in event:
+        data = json.loads(event.split("data: ")[1])
+        reply += data["delta"]                # accumulate!
+        print("    reply so far:", repr(reply))
+
+print()
+print("stream closed - final reply:", repr(reply))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Three experiments, each one lesson. First, replace the client's two print lines with <code>print(data["delta"], end="")</code> — congratulations, you have written the typing effect. Second, delete the <code>reply += data["delta"]</code> line and look at the final reply: empty, because the wire never re-sends the whole text — no accumulator, no answer. Third, add your own words to <code>TOKENS</code> and feel how the sleep between yields is the "dead air" the next section is about.</p></div>
+
+      <h2>stream=True: what the real SDKs look like</h2>
+      <p>In production you will never hand-parse <code>data:</code> lines — the SDK does the SSE plumbing and hands you Python objects. The switch is one argument: pass <code>stream=True</code> to the same <code>client.messages.create(...)</code> call you know from <a href="ch033-first-api-call.html">ch033</a>, and instead of returning one finished message, it returns an iterable of events — a generator you consume with a plain <code>for</code> loop, each iteration quietly waiting for the next chunk to arrive. The Anthropic SDK also offers a friendlier wrapper, <code>client.messages.stream(...)</code>, used as a <a href="ch018-context-managers.html">context manager</a> so the connection is always closed properly. Read it line by line:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">stream_reply.py — the real thing, Anthropic SDK</div>
+        <div class="wl-line"><code>from anthropic import Anthropic</code>
+          <div class="wl-note">The same SDK, the same import, as your first API call in <a href="ch033-first-api-call.html">ch033</a>. Streaming is not a different product — it is a different delivery mode for the same endpoint.</div></div>
+        <div class="wl-line"><code>client = Anthropic()</code></div>
+        <div class="wl-line"><code>reply = ""</code>
+          <div class="wl-note">The accumulator, empty before the first chunk. Everything the previous section said in prose is this one variable in code.</div></div>
+        <div class="wl-line"><code>with client.messages.stream(</code>
+          <div class="wl-note">The streaming helper, opened as a context manager (<a href="ch018-context-managers.html">ch18</a>): entering opens the SSE connection, leaving guarantees it closes — even if your code crashes mid-stream. The rawer form, <code>messages.create(..., stream=True)</code>, gives you the event objects directly.</div></div>
+        <div class="wl-line"><code>    model="claude-sonnet-4-5",</code></div>
+        <div class="wl-line"><code>    max_tokens=500,</code></div>
+        <div class="wl-line"><code>    messages=[{"role": "user", "content": "Explain SSE briefly"}],</code>
+          <div class="wl-note">The familiar messages list — nothing about the request body changes for streaming beyond the mode itself.</div></div>
+        <div class="wl-line"><code>) as stream:</code></div>
+        <div class="wl-line"><code>    for text in stream.text_stream:</code>
+          <div class="wl-note">The payoff line. <code>text_stream</code> is a generator (<a href="ch038-generators-and-yield.html">ch38</a>): each turn of this loop waits for the next SSE event, unwraps it, and yields just the text delta. Your cursor sits on this line during every gap between chunks.</div></div>
+        <div class="wl-line"><code>        reply += text</code>
+          <div class="wl-note">Feed the accumulator. Skip this and the text scrolls past your terminal once, unrecoverable — the classic first streaming bug.</div></div>
+        <div class="wl-line"><code>        print(text, end="", flush=True)</code>
+          <div class="wl-note">The typing effect in one line. <code>end=""</code> stops print adding a newline after every fragment; <code>flush=True</code> pushes each piece to the terminal immediately instead of letting Python batch output. Forget flush and your "stream" appears in frozen lumps.</div></div>
+      </div>
+
+      <p>Two conveniences worth knowing. The helper keeps its own accumulator too — after the loop, <code>stream.get_final_message()</code> hands you the assembled message with usage counts, so you can stream to the screen <em>and</em> log the complete reply. And the OpenAI SDK follows the same pattern with different spelling — the flag itself is in the call:</p>
+
+      <div class="code-title">openai_stream.py — same idea, OpenAI dialect</div>
+      <pre><code class="language-python">stream = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Explain SSE briefly"}],
+    stream=True,          # the whole feature is this one flag
+)
+reply = ""
+for chunk in stream:
+    delta = chunk.choices[0].delta.content or ""   # some chunks carry no text
+    reply += delta
+    print(delta, end="", flush=True)</code></pre>
+
+      <p>Notice the <code>or ""</code>: not every chunk carries text (the first mostly announces the assistant role, others carry tool-call fragments or finish reasons), and gluing <code>None</code> onto a string is a crash. Every streaming client you read will have some version of this guard.</p>
+
+      <h2>Where await joins the party</h2>
+      <p>Run the walkthrough code above in a plain script and it works beautifully — for one user. But look again at that <code>for text in stream.text_stream</code> line: between chunks, your program just sits there, blocked, doing nothing with the dead air. For a script, fine. For a server relaying streams to two hundred chat users at once, fatal — you would need two hundred blocked programs.</p>
+      <p>This is precisely the problem <a href="ch039-async-await.html">ch39</a> gave you the tool for. Swap in the async client and the loop gains two small words:</p>
+
+      <div class="code-title">relay.py — streaming inside an async server</div>
+      <pre><code class="language-python">from anthropic import AsyncAnthropic
+
+client = AsyncAnthropic()
+
+async def relay(question):
+    async with client.messages.stream(
+        model="claude-sonnet-4-5",
+        max_tokens=500,
+        messages=[{"role": "user", "content": question}],
+    ) as stream:
+        async for text in stream.text_stream:
+            print(text, end="", flush=True)  # or: push to this user's browser</code></pre>
+
+      <p><code>async for</code> means: "give me the next chunk — and while I wait for it, let the event loop serve everyone else." Each gap between deltas, a few tens of milliseconds of network silence, becomes time in which the same single Python process advances a hundred other users' streams. This is the honest answer to a question you may have been carrying since ch39: <em>why is agent and chat-server code so relentlessly async?</em> Because its defining workload — many simultaneous, slow, drip-fed LLM streams — is the exact shape async was invented for. Generators give streaming its interface; await gives it its scale.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Three traps that bite in production. One: when a model streams a <a href="ch035-tool-calling.html">tool call</a>, the arguments arrive as fragments of JSON — <code>{"loca</code>, then <code>tion": "Pu</code> — and feeding a fragment to <code>json.loads</code> raises instantly; you must accumulate until the block completes (the <a href="ch036-structured-output.html">structured-output chapter</a> feels this pain too). Two: because streaming commits to <code>200 OK</code> before generation finishes, an overloaded-server error can arrive <em>mid-stream</em> as an error event — a status-code check at the start is not enough. Three: streaming changes nothing about billing; every token costs the same whether it arrived in one lump or five hundred deltas. That meter is the next chapter.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open your browser's developer tools while any chat UI is answering and look at the network tab: one request, type <code>eventsource</code> or <code>fetch</code>, response header <code>Content-Type: text/event-stream</code>, body growing line by line — you can watch the raw <code>data:</code> records arrive. In codebases, grep for <code>stream=True</code>, <code>text_stream</code>, or <code>delta</code> and you will land in the relay code; in agent frameworks the same idea surfaces as LangGraph's <code>.stream(...)</code> with its <code>stream_mode</code> options (one of which yields token-by-token messages), and agent CLIs like Claude Code print their answers through exactly this machinery. In a merge request, "accumulate the deltas before parsing" or "flush per chunk" now reads as plain English to you.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What does <code>stream=True</code> actually change about an LLM API call?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model generates the answer faster</button>
+            <button data-opt="b">The server forwards each piece as it is generated, instead of buffering the whole reply</button>
+            <button data-opt="c">The browser applies a typing animation to the finished text</button>
+          </div>
+          <p class="q-explain">The model works at the same speed either way. Streaming only changes delivery: pieces are forwarded the moment they exist, so the wait before the first word collapses while total time stays the same.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. In server-sent events, how do many small updates reach the client?</p>
+          <div class="q-opts">
+            <button data-opt="a">The client sends a new request for each update, in a fast polling loop</button>
+            <button data-opt="b">A two-way WebSocket call is opened alongside the HTTP request</button>
+            <button data-opt="c">One HTTP response is held open and the server keeps appending small records to its body</button>
+          </div>
+          <p class="q-explain">SSE is one request and one long response that refuses to end: the server writes an "event:" / "data:" record per update into the open body until a final stop record. One-way is all an LLM reply needs, so no WebSocket is required.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. During a stream, where does the complete reply text live?</p>
+          <div class="q-opts">
+            <button data-opt="a">Nowhere — it exists only if the client accumulates every delta itself</button>
+            <button data-opt="b">In the final message_stop event, which re-sends the full text</button>
+            <button data-opt="c">In each chunk, which carries the text-so-far</button>
+          </div>
+          <p class="q-explain">Deltas carry only the new fragment, and the stop event carries no text at all. If your code never does <code>reply += delta</code>, the reply scrolls past once and is gone — which is why SDK helpers keep an accumulator for you.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Total generation time is identical with or without streaming. Why do streamed UIs still feel dramatically faster?</p>
+          <div class="q-opts">
+            <button data-opt="a">Streamed tokens are compressed, so they use less bandwidth</button>
+            <button data-opt="b">Time to first token collapses — visible progress replaces a spinner, and you can even stop bad answers early</button>
+            <button data-opt="c">The server prioritises streaming requests over buffered ones</button>
+          </div>
+          <p class="q-explain">Perceived speed is about the wait before the first sign of life. Watching text assemble is progress; a spinner is a black box. And seeing an answer go wrong at sentence two lets you cancel instead of paying for the rest.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. The SDK's <code>stream.text_stream</code> behaves like which Python idea from two chapters ago?</p>
+          <div class="q-opts">
+            <button data-opt="a">A list — all values exist up front, you just loop over them</button>
+            <button data-opt="b">A dictionary — deltas are looked up by index</button>
+            <button data-opt="c">A generator — values are produced one at a time, on demand, with pauses in between</button>
+          </div>
+          <p class="q-explain">Each turn of the for-loop asks for the next value and waits until one exists — the exact contract of yield from ch38. In async code the same loop becomes <code>async for</code>, so the pauses between chunks are handed to the event loop (ch39).</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>The typing effect is real: models generate token by token, and streaming just forwards each piece the moment it exists instead of buffering the finished reply.</li>
+          <li>The wire format is server-sent events — one HTTP response held open, carrying small <code>event:</code>/<code>data:</code> records (chunks) whose payloads (deltas) contain only the new fragment.</li>
+          <li>The full reply exists nowhere until your code builds it: keep an accumulator and <code>+=</code> every delta, or the text is gone once it scrolls past.</li>
+          <li><code>stream=True</code> (or the <code>messages.stream(...)</code> helper) turns the SDK's return value from one finished message into a generator you consume with a for-loop — ch38's yield, wearing production clothes.</li>
+          <li><code>async for</code> lets one server relay hundreds of streams at once by giving the dead air between chunks to other users — ch39's await, and the real reason chat and agent code is async.</li>
+          <li>Streaming changes delivery, not price: every token bills the same either way — which is exactly where the next chapter picks up.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

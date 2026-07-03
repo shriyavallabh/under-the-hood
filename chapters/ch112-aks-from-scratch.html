@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AKS from scratch: your first cluster — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch112">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XIII · The Deployment Platform</div>
+        <h1>AKS from scratch: your first cluster</h1>
+        <p class="ch-tagline">Ten commands separate an empty Azure subscription from your agent answering requests inside a Kubernetes pod. This chapter is every one of those commands — what each does, what you should see, and why the order matters.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 113 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You are opening a cloud kitchen. First you sign a lease on one unit in a food park — a named space where everything you build will live, and which you can hand back in one stroke when you are done. Then you stock a private warehouse with your ingredients; nobody cooks yet, but everything the kitchen will need is on a shelf with your name on it. Then the big call: a facilities company delivers a fully staffed kitchen — a shift manager who runs the floor, and two cooking stations ready for work. You hand the manager a keycard to your warehouse, because a kitchen that cannot fetch ingredients cooks nothing.</p>
+        <p>And here is the part that makes it a modern kitchen: you never shout instructions at the cooks. You pin <em>one ticket</em> on the board — "keep one biryani station running at all times" — and the manager makes it true, and keeps it true, even if a station catches fire at 2 a.m. Finally, before opening to the public, you taste the dish yourself through the service hatch.</p>
+        <p>Lease, warehouse, kitchen, keycard, ticket, taste. That is the exact sequence of this chapter — except the lease is a resource group, the warehouse is a container registry, and the kitchen is AKS.</p>
+      </section>
+
+      <h2>Where you're standing</h2>
+      <p>Quick recap of the last three chapters, because this one cashes them all in. In <a href="ch109-azure-mental-model.html">the Azure mental model</a> you learned the hierarchy — a <em>subscription</em> holds <em>resource groups</em>, and resource groups hold <em>resources</em> — and you ran <code>az login</code> to prove the CLI could act on your behalf. In <a href="ch110-containers-and-images.html">containers and images</a> you packaged your agent with <code>docker build</code>: the agent's code, its Python, its dependencies, frozen into one shippable image. And in <a href="ch111-kubernetes-plainly.html">Kubernetes, plainly</a> you met the cast — pods, nodes, Deployments, and the control plane that relentlessly makes reality match your declared wishes.</p>
+      <p>So far, though, it has all been theory and your laptop. Today you rent real machines in a real data centre and put your agent on them. <dfn>AKS</dfn> — Azure Kubernetes Service — is Kubernetes where Azure runs the control plane for you, so you get the whole machinery from chapter 111 without ever installing it. Everything below is copy-paste runnable in a sandbox subscription; that is precisely the point. Read it once for understanding, then run it for keeps.</p>
+
+      <h2>The map: what you are about to build</h2>
+      <p>Before the first command, watch the whole build-out happen once. Step through it — each step is one command from the sequence you'll run.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Empty subscription">
+          <h3>1. An empty subscription</h3>
+          <div class="diagram">
+            <div class="d-box hot">Subscription<small>your sandbox — nothing in it yet</small></div>
+          </div>
+          <p class="step-cap">A subscription is the billing boundary — the account everything else hangs off. Right now it is an empty plot. <code>az login</code> is your keys to it.</p>
+        </div>
+        <div class="step" data-title="Resource group">
+          <h3>2. A resource group appears</h3>
+          <div class="diagram">
+            <div class="d-box">Subscription</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Resource group<small>agent-rg — the lease on one unit</small></div>
+          </div>
+          <p class="step-cap"><code>az group create</code> signs the lease: a named folder in one Azure region. Everything you make today goes inside it — which means one delete command later cleans up everything.</p>
+        </div>
+        <div class="step" data-title="Registry + image">
+          <h3>3. The warehouse gets stocked</h3>
+          <div class="diagram">
+            <div class="d-box">agent-rg</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">ACR<small>container registry</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box good">image<small>support-agent:v1 pushed from your laptop</small></div>
+          </div>
+          <p class="step-cap"><code>az acr create</code> builds the private warehouse; <code>docker push</code> puts your agent image on its shelf. The cluster does not exist yet — and does not need to. Ingredients first.</p>
+        </div>
+        <div class="step" data-title="Cluster arrives">
+          <h3>4. The kitchen is delivered</h3>
+          <div class="diagram">
+            <div class="d-box">agent-rg</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">Control plane<small>run and paid for by Azure</small></div>
+              <div class="d-box">Node 1<small>a VM, ready for pods</small></div>
+              <div class="d-box">Node 2<small>a VM, ready for pods</small></div>
+            </div>
+          </div>
+          <p class="step-cap"><code>az aks create --node-count 2</code> provisions the shift manager (control plane, managed by Azure) and two cooking stations (worker VMs). This is the slow step — minutes, not seconds.</p>
+        </div>
+        <div class="step" data-title="Trust wired">
+          <h3>5. The keycard is handed over</h3>
+          <div class="diagram">
+            <div class="d-box">AKS cluster</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">pull allowed<small>az aks update --attach-acr</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">ACR</div>
+          </div>
+          <p class="step-cap">Two resources in the same subscription still do not trust each other by default. <code>--attach-acr</code> grants the cluster permission to pull images from your registry. Skip this and you will meet ImagePullBackOff.</p>
+        </div>
+        <div class="step" data-title="Pod running">
+          <h3>6. The ticket goes on the board</h3>
+          <div class="diagram">
+            <div class="d-box">deploy.yaml<small>"keep 1 pod of support-agent:v1 running"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Control plane</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Node 1<small>pod: support-agent — Running</small></div>
+          </div>
+          <p class="step-cap"><code>kubectl apply</code> pins the ticket; the control plane schedules a pod onto a node, the node pulls your image from ACR, and the status board flips to Running. Then <code>kubectl port-forward</code> is your taste through the hatch.</p>
+        </div>
+      </div>
+
+      <p>Six words to keep straight before the commands start flying. Flip until they're boring:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">resource group</span><span class="flip-back">A named folder inside your subscription, pinned to a region. Deleting the group deletes everything in it — which makes experiments cheap to clean up.</span></button>
+        <button class="flip" type="button"><span class="flip-front">ACR</span><span class="flip-back">Azure Container Registry — your private shelf for container images. Like Docker Hub, but yours, inside your subscription.</span></button>
+        <button class="flip" type="button"><span class="flip-front">control plane</span><span class="flip-back">The brain of the cluster: API server, scheduler, reconciliation loops. On AKS, Azure runs it for you — you never see its machines.</span></button>
+        <button class="flip" type="button"><span class="flip-front">node pool</span><span class="flip-back">The set of worker VMs that actually run pods. <code>--node-count 2</code> means two VMs in the default pool.</span></button>
+        <button class="flip" type="button"><span class="flip-front">kubeconfig</span><span class="flip-back">The file at ~/.kube/config where kubectl keeps cluster addresses and credentials. <code>az aks get-credentials</code> writes your new cluster into it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Deployment</span><span class="flip-back">A Kubernetes object that declares "keep N copies of this pod running". You state the wish; the control plane enforces it forever.</span></button>
+      </div>
+
+      <h2>Step 1: sign the lease — a resource group</h2>
+      <p>Make sure you are logged in and pointed at your sandbox subscription, then create the group:</p>
+
+      <div class="code-title">terminal — login and lease</div>
+      <pre><code class="language-bash">az login                       # opens a browser; pick your sandbox account
+az account show --output table # confirm WHICH subscription you're about to bill
+az group create --name agent-rg --location centralindia</code></pre>
+
+      <p>Line by line: <code>az login</code> gets the CLI a token, exactly as in <a href="ch109-azure-mental-model.html">chapter 109</a>. <code>az account show</code> is the two-second habit that saves careers — confirm you are in the sandbox, not production, before creating anything. Then <code>az group create</code> takes just two things: a <code>--name</code> you'll type constantly (keep it short) and a <code>--location</code>, the Azure region whose data centre will host your resources — <code>centralindia</code> here; any region near you works. It returns almost instantly with a JSON receipt. The only line you care about:</p>
+
+      <div class="code-title">expected output (trimmed)</div>
+      <pre><code class="language-json">{
+  "id": "/subscriptions/…/resourceGroups/agent-rg",
+  "location": "centralindia",
+  "name": "agent-rg",
+  "properties": { "provisioningState": "Succeeded" }
+}</code></pre>
+
+      <p><code>"provisioningState": "Succeeded"</code> is Azure's way of saying "lease signed". Almost every <code>az</code> command replies with a JSON blob like this; you will learn to skim for that one field.</p>
+
+      <h2>Step 2: stock the warehouse — registry, build, push</h2>
+      <p>Your cluster-to-be will need to fetch the agent's image from somewhere it can reach. Your laptop is not that place — a private registry in the same resource group is:</p>
+
+      <div class="code-title">terminal — create the registry</div>
+      <pre><code class="language-bash">az acr create --resource-group agent-rg --name agentacr7421 --sku Basic</code></pre>
+
+      <p><code>--resource-group agent-rg</code> files it under your lease. <code>--name</code> is the one annoying flag: ACR names must be globally unique across all of Azure (they become a public DNS name), lowercase letters and digits only — so suffix yours with some digits and expect <code>agentacr7421</code> to be taken by the time you read this. <code>--sku Basic</code> picks the cheapest tier, plenty for one image. In the JSON receipt, hunt for one field:</p>
+
+      <div class="code-title">expected output (the field that matters)</div>
+      <pre><code class="language-json">{ "loginServer": "agentacr7421.azurecr.io", "provisioningState": "Succeeded" }</code></pre>
+
+      <p>That <code>loginServer</code> is your registry's address, and it becomes part of your image's full name. Now the <a href="ch110-containers-and-images.html">chapter 110</a> muscle memory — build, tag, push — with one new twist: you log in to <em>your</em> registry first.</p>
+
+      <div class="code-title">terminal — build and push (recall ch110)</div>
+      <pre><code class="language-bash">az acr login --name agentacr7421            # => Login Succeeded
+docker build -t support-agent:v1 .          # bake the agent into an image
+docker tag support-agent:v1 agentacr7421.azurecr.io/support-agent:v1
+docker push agentacr7421.azurecr.io/support-agent:v1</code></pre>
+
+      <p>Walking through it: <code>az acr login</code> wires your local Docker to the registry using your Azure identity — no separate password. <code>docker build</code> is unchanged from chapter 110: Dockerfile in, image out. <code>docker tag</code> gives the image a second name that starts with the registry's address — that prefix is literally how Docker knows <em>where</em> to push. And <code>docker push</code> uploads it layer by layer; you'll see a progress line per layer, ending with a <code>v1: digest: sha256:…</code> receipt. Your agent is now on the shelf, reachable from inside Azure.</p>
+
+      <h2>Step 3: the big one — <code>az aks create</code></h2>
+      <p>Everything so far took seconds. This one is the real construction job:</p>
+
+      <div class="code-title">terminal — commission the kitchen</div>
+      <pre><code class="language-bash">az aks create \
+  --resource-group agent-rg \
+  --name agent-cluster \
+  --node-count 2 \
+  --generate-ssh-keys</code></pre>
+
+      <p>Flag by flag: <code>--resource-group</code> and <code>--name</code> you know — the lease and the cluster's own name. <code>--node-count 2</code> is the consequential one: it asks for two worker VMs in the default node pool. Two, not one, so that later chapters can show you pods rescheduling when a node dies. <code>--generate-ssh-keys</code> quietly creates SSH keys if your machine has none — a box-ticking requirement you'll almost never use.</p>
+      <p>What does this actually provision? Three things. A <strong>control plane</strong> — the API server, scheduler, and reconciliation brain from <a href="ch111-kubernetes-plainly.html">chapter 111</a> — which Azure hosts, patches, and (on the free tier) doesn't even charge you for. A <strong>node pool</strong> — two real VMs that will run your pods, and that <em>do</em> bill by the hour. And the plumbing between them: a virtual network, an identity for the cluster, monitoring hooks. Azure tucks the node VMs into a second, auto-created resource group named <code>MC_agent-rg_agent-cluster_centralindia</code> — don't touch that one; it's the cluster's engine room, managed for you.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>This command takes <strong>five to ten minutes</strong>. The terminal shows a spinner with <code>Running…</code> and it is genuinely working: creating VMs, wiring networks, booting Kubernetes. Make chai. When it finally returns a huge JSON blob, the field to skim for is the same old <code>"provisioningState": "Succeeded"</code>.</p></div>
+
+      <h2>Step 4: wire up kubectl — <code>get-credentials</code></h2>
+      <p>The cluster exists, but <code>kubectl</code> — your Kubernetes remote control from chapter 111 — has never heard of it. One command fixes that:</p>
+
+      <div class="code-title">terminal — point kubectl at the cluster</div>
+      <pre><code class="language-bash">az aks get-credentials --resource-group agent-rg --name agent-cluster
+# => Merged "agent-cluster" as current context in /Users/you/.kube/config
+
+kubectl get nodes</code></pre>
+
+      <p><code>az aks get-credentials</code> downloads the cluster's address and access credentials and merges them into your <dfn>kubeconfig</dfn> — the file at <code>~/.kube/config</code> where kubectl keeps a phone book of every cluster you can talk to. "Merged … as current context" means: from now on, plain <code>kubectl</code> commands go to <em>this</em> cluster. Then <code>kubectl get nodes</code> is the handshake — your first real Kubernetes command against your own cluster:</p>
+
+      <div class="code-title">expected output</div>
+      <pre><code class="language-bash">NAME                                STATUS   ROLES   AGE     VERSION
+aks-nodepool1-24816504-vmss000000   Ready    agent   3m12s   v1.32.6
+aks-nodepool1-24816504-vmss000001   Ready    agent   3m18s   v1.32.6</code></pre>
+
+      <p>Two nodes, both <code>Ready</code>. (Your random suffixes and version numbers will differ — that's fine.) Pause on this moment: that command left your laptop, crossed the internet to a control plane Azure runs in a data centre, and came back with the state of two machines you now rent. The kitchen is real.</p>
+
+      <h2>Step 5: the keycard — <code>--attach-acr</code></h2>
+      <p>Here is the step everyone forgets once and never again. Your cluster and your registry live in the same resource group, made by the same you — and still, by default, the cluster is <em>not allowed</em> to pull your images. Azure trusts nothing implicitly. Grant it:</p>
+
+      <div class="code-title">terminal — let the cluster pull from your registry</div>
+      <pre><code class="language-bash">az aks update --resource-group agent-rg --name agent-cluster \
+  --attach-acr agentacr7421</code></pre>
+
+      <p><code>az aks update</code> modifies an existing cluster; <code>--attach-acr</code> names the registry to trust. Under the hood it grants the cluster's identity the <em>AcrPull</em> role on your registry — permission to read images, nothing more. If you skip this, everything ahead still <em>appears</em> to work: the manifest applies cleanly, the pod is scheduled — and then it sticks forever in <code>ImagePullBackOff</code>, the pod state that means "the node tried to fetch the image and was refused or found nothing". You met that state in <a href="ch111-kubernetes-plainly.html">chapter 111</a>; this flag is its most common cure on AKS.</p>
+
+      <h2>Step 6: the order ticket — your first manifest</h2>
+      <p>Now the Kubernetes half begins, and the style of conversation changes. With <code>az</code> you gave orders; with Kubernetes you declare <em>desired state</em> in a YAML file and let the control plane do the ordering. Here is the smallest useful ticket — save it as <code>deploy.yaml</code>. Click through the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">deploy.yaml — "keep one copy of my agent running"</div>
+        <div class="wl-line"><code>apiVersion: apps/v1</code>
+          <div class="wl-note">Which dialect of the Kubernetes API this object speaks. Deployments live in the <code>apps/v1</code> group — this line is boilerplate you will type a thousand times and question never.</div></div>
+        <div class="wl-line"><code>kind: Deployment</code>
+          <div class="wl-note">What we are declaring. A <dfn>Deployment</dfn> is the "keep N copies running" object from chapter 111 — not the pod itself, but the standing order that pods should exist.</div></div>
+        <div class="wl-line"><code>metadata:</code></div>
+        <div class="wl-line"><code>  name: support-agent</code>
+          <div class="wl-note">The Deployment's name — how you will refer to it in every kubectl command from now on.</div></div>
+        <div class="wl-line"><code>spec:</code></div>
+        <div class="wl-line"><code>  replicas: 1</code>
+          <div class="wl-note">How many identical pods to keep alive. One, for now. Scaling to three later is changing this number and re-applying — that is the entire procedure.</div></div>
+        <div class="wl-line"><code>  selector:</code></div>
+        <div class="wl-line"><code>    matchLabels:</code></div>
+        <div class="wl-line"><code>      app: support-agent</code>
+          <div class="wl-note">How the Deployment recognises which pods are "its" pods: by label. This MUST match the labels in the template below — if they differ, Kubernetes rejects the manifest outright. The classic first-day YAML error.</div></div>
+        <div class="wl-line"><code>  template:</code>
+          <div class="wl-note">Everything under here is the recipe for each pod the Deployment stamps out — a pod template, cookie-cutter style.</div></div>
+        <div class="wl-line"><code>    metadata:</code></div>
+        <div class="wl-line"><code>      labels:</code></div>
+        <div class="wl-line"><code>        app: support-agent</code>
+          <div class="wl-note">The label each stamped pod wears — the other half of the selector handshake above. Same string, or nothing works.</div></div>
+        <div class="wl-line"><code>    spec:</code></div>
+        <div class="wl-line"><code>      containers:</code></div>
+        <div class="wl-line"><code>      - name: agent</code>
+          <div class="wl-note">A pod can hold several containers (that dash starts a list) — sidecars come in chapter 113. Today: one.</div></div>
+        <div class="wl-line"><code>        image: agentacr7421.azurecr.io/support-agent:v1</code>
+          <div class="wl-note">The full image name you pushed in step 2 — registry address included, so the node knows exactly which warehouse shelf to pull from. A typo here is the other classic route to ImagePullBackOff.</div></div>
+        <div class="wl-line"><code>        ports:</code></div>
+        <div class="wl-line"><code>        - containerPort: 8000</code>
+          <div class="wl-note">Documents the port your agent listens on inside the container. Port-forwarding and Services (chapter 113) will aim at this.</div></div>
+      </div>
+
+      <p>Pin the ticket to the board:</p>
+
+      <div class="code-title">terminal — apply the manifest</div>
+      <pre><code class="language-bash">kubectl apply -f deploy.yaml
+# => deployment.apps/support-agent created</code></pre>
+
+      <p><code>apply</code> means "make reality match this file"; <code>-f</code> points at the file. The response is instant — but read it carefully: it says <em>created</em>, not <em>running</em>. You have registered a wish. The control plane is only now springing into action.</p>
+
+      <h2>Step 7: watch the pod come alive</h2>
+      <p>This is the best free show in DevOps. The <code>-w</code> flag means <em>watch</em> — the command keeps streaming status changes instead of returning:</p>
+
+      <div class="code-title">terminal — watch the status board</div>
+      <pre><code class="language-bash">kubectl get pods -w
+
+NAME                             READY   STATUS              RESTARTS   AGE
+support-agent-6d5f7c9b4-qx2lp    0/1     Pending             0          0s
+support-agent-6d5f7c9b4-qx2lp    0/1     ContainerCreating   0          1s
+support-agent-6d5f7c9b4-qx2lp    1/1     Running             0          14s</code></pre>
+
+      <p>Three states, three phases of the machinery. <code>Pending</code>: the pod exists only as a record in the control plane; the scheduler is choosing which of your two nodes has room. <code>ContainerCreating</code>: a node has been chosen and is pulling <code>support-agent:v1</code> from your registry — the step that <code>--attach-acr</code> made possible — then starting the container. <code>Running</code>: your agent's process is alive on a VM in a data centre, <code>READY 1/1</code>. The whole journey usually takes seconds (the first pull is the slow part). Press <code>Ctrl+C</code> to stop watching — the pod keeps running; you were only observing.</p>
+      <p>Want to feel the state machine in your fingers? Here is a toy version of what the control plane just did. Run it, then break it the two classic ways — the comments show you how:</p>
+
+      <div class="pyrun" data-title="a toy scheduler — cause Pending and ImagePullBackOff yourself">
+<textarea class="py-src" spellcheck="false">
+# What AKS does between `kubectl apply` and Running, as a toy.
+REGISTRY = {"agentacr7421.azurecr.io/support-agent:v1"}   # images on the shelf
+NODES = {"vmss000000": 2, "vmss000001": 3}                # free CPU per node
+
+def run_pod(image, cpu_needed=1):
+    print(f"apply: want 1 pod of {image} (needs {cpu_needed} CPU)")
+    print("  STATUS: Pending            (scheduler hunting for a node)")
+    node = None
+    for name, free in NODES.items():
+        if free &gt;= cpu_needed:
+            node = name
+            break
+    if node is None:
+        print("  STATUS: Pending (stuck)    -- no node has room; add nodes")
+        return
+    print(f"  scheduler picked node {node}")
+    print("  STATUS: ContainerCreating  (node pulling the image)")
+    if image not in REGISTRY:
+        print("  STATUS: ImagePullBackOff   -- no such image; check the")
+        print("          name/tag, and that --attach-acr was run")
+        return
+    print("  STATUS: Running            (your agent is live)")
+
+run_pod("agentacr7421.azurecr.io/support-agent:v1")
+print()
+# Break it! Try a typo'd tag (:v2), or cpu_needed=9, and re-run:
+run_pod("agentacr7421.azurecr.io/support-agent:v2")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>The two failures you just simulated are the two you will actually meet this week. A pod parked in <code>Pending</code> means no node has room — count your nodes and their sizes. <code>ImagePullBackOff</code> means the image could not be fetched — check the image name and tag in the manifest, then check the registry attachment. <code>kubectl describe pod &lt;name&gt;</code> tells you which story you're in; that command gets the full treatment in <a href="ch114-kubectl-fluency.html">chapter 114</a>.</p></div>
+
+      <h2>Step 8: taste through the hatch — <code>port-forward</code></h2>
+      <p>Your agent is running, but nothing outside the cluster can reach it yet — no public address, no open door. Deliberate and good: exposure should be a decision, not a default. For a private taste, kubectl can tunnel a port from your laptop straight to the pod:</p>
+
+      <div class="code-title">terminal — private tunnel to the pod</div>
+      <pre><code class="language-bash">kubectl port-forward deployment/support-agent 8000:8000
+# => Forwarding from 127.0.0.1:8000 -&gt; 8000
+
+# in a SECOND terminal:
+curl http://localhost:8000/health
+# => {"status": "ok", "agent": "support-agent", "version": "v1"}</code></pre>
+
+      <p>Read the port pair as <em>local:remote</em> — connections to port 8000 on your laptop are piped into port 8000 of the pod. The command occupies its terminal while the tunnel is open, so the <code>curl</code> happens in a second one. And that unremarkable JSON reply deserves a moment of ceremony: your laptop just spoke, through an encrypted tunnel, to your agent, in a container, in a pod, on a VM, in a cluster you built from nothing with ten commands.</p>
+      <p>Be clear about what port-forward is: a debugging hatch, alive only while the command runs, reaching only your laptop. Giving the agent a real, stable front door — a Service, and the rest of production wiring — is exactly where <a href="ch113-agent-in-a-pod.html">the next chapter</a> picks up.</p>
+
+      <h2>The whole sequence, on one page</h2>
+      <p>Here is the complete ritual, start to finish. This is the block to keep; every line is annotated above. Run it in a <strong>sandbox subscription</strong> — it was written to be run, not admired:</p>
+
+      <div class="code-title">from nothing to a running agent — the full sequence</div>
+      <pre><code class="language-bash">az login
+az group create --name agent-rg --location centralindia
+az acr create --resource-group agent-rg --name agentacr7421 --sku Basic
+
+az acr login --name agentacr7421
+docker build -t support-agent:v1 .
+docker tag support-agent:v1 agentacr7421.azurecr.io/support-agent:v1
+docker push agentacr7421.azurecr.io/support-agent:v1
+
+az aks create --resource-group agent-rg --name agent-cluster \
+  --node-count 2 --generate-ssh-keys          # 5-10 minutes
+az aks get-credentials --resource-group agent-rg --name agent-cluster
+kubectl get nodes
+az aks update --resource-group agent-rg --name agent-cluster \
+  --attach-acr agentacr7421
+
+kubectl apply -f deploy.yaml
+kubectl get pods -w
+kubectl port-forward deployment/support-agent 8000:8000</code></pre>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Those two nodes are real VMs billing real money by the hour, whether or not pods are running on them. When you finish experimenting, return the lease — one command deletes the cluster, the registry, and everything else in the group: <code>az group delete --name agent-rg --yes --no-wait</code>. This is why step 1 put everything in one resource group. Make it a reflex in sandboxes: build, learn, delete.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will rarely see a team member type <code>az aks create</code> by hand twice — real teams freeze this exact sequence into infrastructure-as-code (Terraform or Bicep files in the repo), and the CI pipeline replays it. But read one of those files and you will recognise every field: resource group, registry, node count, the ACR attachment — the same ten commands wearing a suit. The kubectl half never goes away, though: <code>kubectl get pods</code> is the first command typed in virtually every production incident, and "it's stuck in ImagePullBackOff" is a sentence you will hear in standups for the rest of your career. As of the current AKS docs this command set is stable; if a flag ever moans at you, <code>az aks create --help</code> shows the current spelling.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What does <code>az aks get-credentials</code> actually do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Creates admin passwords for the cluster's virtual machines</button>
+            <button data-opt="b">Writes the cluster's address and access credentials into ~/.kube/config so kubectl talks to it</button>
+            <button data-opt="c">Grants the cluster permission to pull images from your registry</button>
+          </div>
+          <p class="q-explain">It merges an entry into your kubeconfig and sets it as the current context — from then on, plain kubectl commands go to that cluster. (Option c is what <code>--attach-acr</code> does.)</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. What did <code>--node-count 2</code> buy you, exactly?</p>
+          <div class="q-opts">
+            <button data-opt="a">Two control planes, for redundancy</button>
+            <button data-opt="b">Two copies of your agent pod</button>
+            <button data-opt="c">Two worker VMs that run pods — the control plane is provided separately by Azure</button>
+          </div>
+          <p class="q-explain">Node count is worker VMs only. Azure hosts the control plane for you, and pod copies are set by <code>replicas:</code> in the Deployment — three different dials.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. You ran this chapter's sequence but skipped one command, and now the pod sits in <code>ImagePullBackOff</code>. Which command did you most likely skip?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>az aks update --attach-acr</code> — the cluster has no permission to pull from your registry</button>
+            <button data-opt="b"><code>kubectl get nodes</code> — the nodes were never activated</button>
+            <button data-opt="c"><code>az group create</code> — the resource group is missing</button>
+          </div>
+          <p class="q-explain">ImagePullBackOff means the node tried to fetch the image and failed — on a fresh AKS-plus-ACR setup, a missing registry attachment (or a typo in the image name) is almost always the cause. <code>kubectl get nodes</code> only reads state, and without the resource group nothing else would exist at all.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. In the Deployment manifest, what must <code>selector.matchLabels</code> agree with?</p>
+          <div class="q-opts">
+            <button data-opt="a">The name of the container image</button>
+            <button data-opt="b">The labels in <code>template.metadata.labels</code> — otherwise the manifest is rejected</button>
+            <button data-opt="c">The name of the resource group</button>
+          </div>
+          <p class="q-explain">The selector is how the Deployment recognises its own pods, and the template's labels are what the pods wear. Kubernetes refuses the manifest if the two halves of that handshake don't match — a rite-of-passage YAML error.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. Why is <code>kubectl port-forward</code> not how real users will reach your agent?</p>
+          <div class="q-opts">
+            <button data-opt="a">It is too slow for production traffic</button>
+            <button data-opt="b">It only works on Deployments with exactly one replica</button>
+            <button data-opt="c">It is a temporary tunnel from your own laptop, alive only while the command runs — a debugging tool, not a front door</button>
+          </div>
+          <p class="q-explain">Port-forward pipes one local port to the pod for as long as you keep the command running — perfect for a private taste-test. Real exposure uses a Service (and friends), which is where the next chapter begins.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>The from-zero ritual is short and ordered: <code>az group create</code> → <code>az acr create</code> → build and push → <code>az aks create --node-count 2</code> → <code>az aks get-credentials</code> → <code>az aks update --attach-acr</code> → <code>kubectl apply -f</code> → watch → <code>port-forward</code>.</li>
+          <li><code>az aks create</code> provisions a control plane (hosted by Azure, invisible to you) plus a node pool of real, hourly-billed VMs — and it legitimately takes minutes.</li>
+          <li><code>get-credentials</code> writes the cluster into your kubeconfig; <code>--attach-acr</code> grants it pull rights on your registry. Forget the latter and ImagePullBackOff will remind you.</li>
+          <li>The <code>az</code> half of the sequence is imperative (do this now); the <code>kubectl</code> half is declarative — you apply a Deployment stating desired state, and the control plane makes it true and keeps it true.</li>
+          <li>Pending → ContainerCreating → Running is the healthy pod journey: scheduler finds a node, node pulls your image, container starts. Each stuck state points at a specific culprit.</li>
+          <li>Everything lives in one resource group on purpose: <code>az group delete --name agent-rg</code> returns the lease and stops the meter. In sandboxes: build, learn, delete.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

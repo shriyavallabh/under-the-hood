@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tokens, embeddings, and context windows — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch030">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act III · The Data Scientist's World</div>
+        <h1>Tokens, embeddings, and context windows</h1>
+        <p class="ch-tagline">Three quantities govern every model you operate: what a token costs, where an embedding sits, and how much fits on the desk. Learn them once and half of your production mysteries dissolve on sight.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 30 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>There is an old telegram office where you pay per rubber stamp, not per word. Decades of traffic taught the clerks which phrases keep recurring — ARRIVING TUESDAY, WEDDING CONFIRMED, SEND MONEY — so each of those was carved as a single stamp. One stamp, one charge, however long the phrase. But hand the clerk an unusual surname or a chemical formula and he shrugs and spells it out letter by letter: eleven stamps, eleven charges. Behind him stands a vast pigeonhole wall where old telegrams are filed by what they are <em>about</em>, not alphabetically — wedding messages cluster in one warm corner, condolences a shelf below, shipping notices far across the wall. Even a brand-new clerk can find "messages like this one" just by reaching into the same neighbourhood. And the clerk works at a small desk. He can spread out only so many forms at once; when a long exchange overflows it, the oldest pages get swept into a drawer — out of sight, and as far as his work is concerned, out of existence.</p>
+        <p>That office is a large language model. The stamps are <strong>tokens</strong>. The pigeonhole wall is <strong>embeddings</strong>. The desk is the <strong>context window</strong>. This chapter is a tour of all three.</p>
+      </section>
+
+      <h2>Where we are coming from</h2>
+      <p>Two chapters ago, <a href="ch028-why-text-broke-ml.html">why text broke ML</a> ended on a cliffhanger: models can only eat numbers, so text had to become numbers somehow, and doing it badly loses the meaning. Then <a href="ch029-transformers-plainly.html">the transformer chapter</a> showed you the machine that reads a sequence of those numbers and lets every position pay attention to every other. What we skipped, deliberately, was the plumbing on either side of that machine: how your sentence gets chopped into pieces on the way in, what each piece turns into, and how many pieces the machine can hold at once. That plumbing is this chapter — and it is where the practical consequences live. Bills, rate limits, "context length exceeded" errors, agents that mysteriously forget: all of it traces back to these three ideas.</p>
+
+      <h2>Tokens: the stamps in the drawer</h2>
+      <p>A <dfn>token</dfn> is the smallest unit of text a language model reads, writes, and bills for — usually a chunk of a word, sometimes a whole word, sometimes a single character. The model never sees letters or words as you do; it sees a sequence of token IDs, plain integers, one per stamp.</p>
+      <p>The <dfn>tokenizer</dfn> is the component that does the chopping — a completely deterministic, non-AI piece of code that converts text to token IDs and back. It owns a fixed vocabulary of chunks, typically somewhere around 100,000 of them, and here is the part worth remembering: <em>that vocabulary was learned from frequency, not grammar</em>. The standard recipe is called <dfn>Byte-Pair Encoding</dfn> (BPE) — start with bare characters, scan a mountain of training text, and repeatedly merge the pair of chunks that occurs most often, until the vocabulary is full. Common sequences earn their own stamp. Rare ones never do.</p>
+      <p>The consequences are exactly the telegram clerk's rulebook:</p>
+      <ul>
+        <li>"the" is one token. So are most common English words — often with the preceding space glued on, as <code>" the"</code>.</li>
+        <li>"internationalization" is rare enough that it gets assembled from a few sub-word chunks.</li>
+        <li>A rare proper noun, a typo, or a serial number shatters into many tiny pieces — each one billed.</li>
+        <li>A useful rule of thumb for English: one token is about four characters, or about three-quarters of a word. A thousand tokens is roughly 750 words.</li>
+      </ul>
+      <p>Do not take my word for it. Below is a toy tokenizer with the same personality as the real thing — a hand-picked vocabulary, longest-match-first, characters as the fallback. Real tokenizers learn their 100,000 chunks from data and match by merge order rather than length, but the feel is identical. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A toy BPE-style tokenizer — run me">
+<textarea class="py-src" spellcheck="false">
+# A toy tokenizer with the same personality as the real thing.
+# Real models learn ~100,000 chunks from data; we hand-pick a few.
+
+VOCAB = [
+    " the", " total", " of", " is", " and", " in",
+    " invoice", " pay", "ment", " token", " model",
+    " intern", "ation", "aliz", "ing", "ed", "er", "es",
+]
+# Longest chunks first, so " invoice" wins before " in" gets a look.
+VOCAB = sorted(VOCAB, key=len, reverse=True)
+
+def tokenize(text):
+    text = " " + text        # real tokenizers glue the space onto words too
+    tokens = []
+    i = 0
+    while i &lt; len(text):
+        for chunk in VOCAB:
+            if text.startswith(chunk, i):
+                tokens.append(chunk)
+                i += len(chunk)
+                break
+        else:                # no chunk matched: spell out one character
+            tokens.append(text[i])
+            i += 1
+    return tokens
+
+total = 0
+for sentence in [
+    "the total of the invoice is 4500",
+    "the payment is pending",
+    "internationalization",
+    "Tiruchirappalli",       # rare word: watch it shatter
+]:
+    toks = tokenize(sentence)
+    total += len(toks)
+    print(f"{sentence!r}")
+    print(f"  {len(toks):&gt;2} tokens: {'|'.join(toks)}")
+    print()
+
+price_per_million = 3.00     # illustrative input price, dollars
+print(f"All four lines: {total} tokens.")
+print(f"At ${price_per_million}/million tokens: ${total / 1_000_000 * price_per_million:.6f}")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now experiment. Add <code>" Tiruchirappalli"</code> to <code>VOCAB</code> and watch a sixteen-token word collapse into one — that is literally what happens when a vendor retrains a tokenizer on more multilingual data. Delete <code>"ment"</code> and watch "payment" get more expensive. Try a sentence full of digits and see why numbers are famously costly to tokenize.</p></div>
+
+      <p>Read the heart of it the way a reviewer would — click the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">toy_tokenizer.py — the greedy heart</div>
+        <div class="wl-line"><code>VOCAB = sorted(VOCAB, key=len, reverse=True)</code>
+          <div class="wl-note">Longest stamp first. Without this, <code>" in"</code> would greedily eat the start of <code>" invoice"</code> and the word would never match as one chunk. Real BPE uses learned merge priorities instead of raw length, but the spirit — prefer the biggest known chunk — is the same.</div></div>
+        <div class="wl-line"><code>    text = " " + text</code>
+          <div class="wl-note">Real tokenizers treat the space <em>before</em> a word as part of its token. That is why, in any tokenizer playground, you see chunks like <code>" the"</code> with a leading space — and why the same word can be a different token at the start of a line.</div></div>
+        <div class="wl-line"><code>    while i &lt; len(text):</code>
+          <div class="wl-note">One pass, left to right, no backtracking. Tokenization is fast, cheap, deterministic string surgery — there is no intelligence in this step at all.</div></div>
+        <div class="wl-line"><code>            if text.startswith(chunk, i):</code>
+          <div class="wl-note"><code>startswith</code> with an offset checks for a match at position <code>i</code> without slicing a new string each time (the string methods from <a href="ch003-strings-and-fstrings.html">ch3</a> keep paying rent).</div></div>
+        <div class="wl-line"><code>        else:</code>
+          <div class="wl-note">A <code>for&#8230;else</code> — the else runs only if the loop finished <em>without</em> hitting <code>break</code> (the loop fine print from <a href="ch006-control-flow.html">ch6</a>). Here it is the safety net: if no known chunk fits, fall back to a single character. Any text can always be spelled out, so a tokenizer never fails.</div></div>
+        <div class="wl-line"><code>            tokens.append(text[i])</code>
+          <div class="wl-note">The fallback stamp. This is why rare words are expensive: no big chunks match, so they get billed letter by letter — sixteen stamps for one city name.</div></div>
+      </div>
+
+      <h2>Why the count matters: money and walls</h2>
+      <p>Tokens would be a charming curiosity if they were free. They are not — they are the billing unit and the rationing unit of the entire LLM economy.</p>
+      <p><strong>Money.</strong> Every model API prices in tokens, quoted per million: one price for input tokens (everything you send) and a separate, usually several-times-higher price for output tokens (everything the model writes back). Rate limits are set in tokens per minute. And remember, from operating agents, that each turn of a conversation re-sends the whole transcript so far — so a long-running session's token meter climbs faster and faster as it goes. <a href="ch041-tokens-and-cost.html">Chapter 41</a> does the full economics, including prompt caching, which exists precisely because re-sending the same prefix thousands of times was too expensive to ignore.</p>
+      <p><strong>Walls.</strong> Every model has a maximum number of tokens it can consider at once (the context window — patience, one section to go) and a maximum number it will write in a single reply, often a settable <code>max_tokens</code> parameter. When output stops mid-sentence, you usually hit the second wall, not a bug.</p>
+      <p>One consequence surprises almost everyone the first time: the same content costs wildly different amounts depending on <em>how it is written</em>. Tokenizer vocabularies are trained mostly on English and code, so common English is dense — and everything else pays a surcharge:</p>
+
+      <div data-bars data-title="The same 100-word announcement, tokenized" data-unit="tokens"
+           data-note="Round, illustrative numbers — the shape is the lesson: English is what tokenizers are best at compressing; other scripts and noisy formats shatter into more, smaller chunks.">
+        <div class="bar" data-label="Plain English" data-value="130"></div>
+        <div class="bar" data-label="Wrapped in verbose JSON" data-value="210"></div>
+        <div class="bar" data-label="Hindi (Devanagari script)" data-value="400"></div>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>"Token" is not "word", and estimating cost by word count undercounts badly for JSON payloads, logs, code, and non-Latin scripts. When the number matters, count properly: every provider ships a token-counting endpoint or library (OpenAI's is <code>tiktoken</code>; Anthropic has a count-tokens API), and every tokenizer playground on the web will show you the exact chunks.</p></div>
+
+      <h2>Embeddings: the pigeonhole wall</h2>
+      <p>Tokens answer "what does text <em>cost</em>?" Embeddings answer a deeper question: "what does text <em>mean</em> — and what else means nearly the same thing?"</p>
+      <p>An <dfn>embedding</dfn> is a list of numbers — a <dfn>vector</dfn>, in maths speak — that places a piece of text at a point in a space of meaning, arranged so that texts with similar meaning land near each other. Two numbers (latitude, longitude) are enough to place you anywhere on Earth. Meaning is bigger than Earth, so embedding models use hundreds or thousands of numbers — 1,536 is a common size — but the idea is exactly a map: every text gets coordinates, and <em>nearby means similar</em>.</p>
+      <p>Nobody sat down and decided that axis 407 means "royalty". The coordinates are learned, using the training machinery you met in <a href="ch024-what-is-a-model.html">what is a model</a>: texts that show up in similar contexts get nudged closer together, millions of times, until the geometry itself encodes meaning. The famous party trick — the vector from "king" to "queen" points the same way as the vector from "man" to "woman" — is not programmed in. It falls out of the geometry.</p>
+      <p>Once meaning is a coordinate, similarity becomes measurable. The standard measure is <dfn>cosine similarity</dfn> — in plain words, the angle between two arrows: pointing the same way scores near 1, unrelated directions score near 0. That single trick unlocks search by meaning rather than by keyword — "refund not received" finds "my money hasn't come back", zero words in common. Run it:</p>
+
+      <div class="pyrun" data-title="Meaning as coordinates — nearest-neighbour search">
+<textarea class="py-src" spellcheck="false">
+# Hand-made 4-axis meaning coordinates.
+# Axes: [royalty, food, tech, warmth]. Real embedding models
+# learn 1,536+ axes from data — the idea is identical.
+import math
+
+EMBEDDINGS = {
+    "king":    [0.9, 0.0, 0.0, 0.4],
+    "queen":   [0.9, 0.0, 0.0, 0.5],
+    "emperor": [1.0, 0.0, 0.0, 0.3],
+    "samosa":  [0.0, 0.9, 0.0, 0.8],
+    "biryani": [0.0, 1.0, 0.0, 0.9],
+    "laptop":  [0.0, 0.0, 0.9, 0.3],
+    "server":  [0.0, 0.0, 1.0, 0.1],
+}
+
+def cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    mag_a = math.sqrt(sum(x * x for x in a))
+    mag_b = math.sqrt(sum(y * y for y in b))
+    return dot / (mag_a * mag_b)
+
+query = "king"          # change me to "samosa" or "laptop"
+print(f"Nearest neighbours of {query!r}:")
+scores = [(cosine(EMBEDDINGS[query], vec), word)
+          for word, vec in EMBEDDINGS.items() if word != query]
+for score, word in sorted(scores, reverse=True):
+    bar = "#" * int(score * 24)
+    print(f"  {word:&lt;8} {score:.2f} {bar}")
+</textarea>
+      </div>
+
+      <p>Twenty lines, and you have built the core of every semantic search engine: embed everything once, embed the query, sort by cosine, take the top few. Hold onto that shape — in <a href="ch042-rag.html">the RAG chapter</a> you will bolt it onto an LLM and it becomes retrieval-augmented generation, the pattern behind "chat with your documents".</p>
+      <p>One distinction keeps people out of trouble. Embeddings show up in two different jobs. <em>Inside</em> an LLM, step one of the transformer you met in <a href="ch029-transformers-plainly.html">the previous chapter</a> is converting each token into exactly this kind of vector before attention does its work — internal, invisible, not something you touch. <em>Outside</em>, standalone embedding models (with names like <code>text-embedding-3-small</code>) do nothing but convert whole sentences or documents into one vector each, so <em>your</em> systems can file and search them — the pigeonhole wall as a rentable service, priced per token like everything else.</p>
+
+      <h2>The context window: the size of the desk</h2>
+      <p>The <dfn>context window</dfn> is the maximum number of tokens a model can consider in one request — its working memory, the size of the clerk's desk. Everything must fit on it at once: the system prompt, the tool definitions, the whole conversation so far, any documents you paste in, <em>and</em> the reply the model is writing. One desk, shared by all of it.</p>
+      <p>Sizes have exploded — from a few thousand tokens in the early days to 128,000 or 200,000 on today's frontier models, with some stretching past a million. Two hundred thousand tokens is roughly a 500-page book spread out on the desk at once, which sounds infinite until you meet a real agent session: a system prompt, forty tool definitions, three hours of back-and-forth, and a handful of pasted log files will eat it comfortably.</p>
+      <p>Because here is the rule that explains more production behaviour than any other in this chapter: <strong>what is not on the desk does not exist.</strong> A model has no hard drive and no memory between requests. If a fact fell off the desk, the model is not being forgetful or lazy — the fact is simply, physically absent from its input. Watch a session fill up:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Empty desk">
+          <h3>1. The desk starts full-ish already</h3>
+          <div class="diagram">
+            <div class="d-box hot">System prompt<small>2k tokens</small></div>
+            <div class="d-box">Tool definitions<small>6k tokens</small></div>
+            <div class="d-box dim">Free space<small>192k tokens</small></div>
+          </div>
+          <p class="step-cap">Before the user types a single word, the standing instructions and the tool catalogue have claimed their corner of a 200k desk. Every request re-sends these — and pays for them.</p>
+        </div>
+        <div class="step" data-title="Conversation grows">
+          <h3>2. The conversation stacks up</h3>
+          <div class="diagram">
+            <div class="d-box">System prompt<small>2k</small></div>
+            <div class="d-box">Tools<small>6k</small></div>
+            <div class="d-box hot">History<small>34k and growing</small></div>
+            <div class="d-box dim">Free space<small>158k</small></div>
+          </div>
+          <p class="step-cap">Every turn — user message, model reply, tool result — is appended to the transcript and re-sent in full on the next turn. The desk fills from the left; the meter runs.</p>
+        </div>
+        <div class="step" data-title="A big dump lands">
+          <h3>3. A tool dumps a huge file</h3>
+          <div class="diagram">
+            <div class="d-box">System<small>2k</small></div>
+            <div class="d-box">Tools<small>6k</small></div>
+            <div class="d-box">History<small>34k</small></div>
+            <div class="d-box hot">Log file dump<small>120k tokens</small></div>
+            <div class="d-box dim">Free<small>38k</small></div>
+          </div>
+          <p class="step-cap">One careless "read the whole log" and most of the desk is gone in a single turn. Big pastes, big query results, and whole-file reads are the fastest way to fill a context window.</p>
+        </div>
+        <div class="step" data-title="The desk is full">
+          <h3>4. The next request does not fit</h3>
+          <div class="diagram">
+            <div class="d-box">System<small>2k</small></div>
+            <div class="d-box">Tools<small>6k</small></div>
+            <div class="d-box">History<small>34k</small></div>
+            <div class="d-box">Log dump<small>120k</small></div>
+            <div class="d-box hot">New turn + reply room<small>60k — over the limit</small></div>
+          </div>
+          <p class="step-cap">Two things can happen: the API refuses outright ("context length exceeded"), or the harness quietly evicts the oldest pages to make room — and whatever it evicted no longer exists for the model.</p>
+        </div>
+        <div class="step" data-title="Compaction">
+          <h3>5. Compaction sweeps the desk</h3>
+          <div class="diagram">
+            <div class="d-box">System<small>2k</small></div>
+            <div class="d-box">Tools<small>6k</small></div>
+            <div class="d-box good">Summary of turns 1-40<small>3k tokens</small></div>
+            <div class="d-box good">Free space<small>189k</small></div>
+          </div>
+          <p class="step-cap">The rescue every serious harness performs: summarise the old transcript into a short note and carry on. Space is recovered — but detail is genuinely lost. When your coding agent announces it is "compacting the conversation", this diagram is what is happening.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Even within the window, position matters. Research and hard-won operator experience agree that models attend best to the start and end of a long context and can gloss over the middle — the "lost in the middle" effect. A fact on page 300 of the 500-page desk is <em>present</em> but may be under-used. Bigger windows reduce how often you truncate; they do not make attention uniformly perfect.</p></div>
+
+      <h2>Three dials, one machine</h2>
+      <p>Here is how the three ideas snap together. Tokens are the units — the currency in which everything else is denominated. The context window is a budget <em>written in tokens</em>: a hard cap on how much the model can see at once. And embeddings are the escape hatch from that cap: instead of piling every document you own onto the desk, you file them all on the pigeonhole wall — embed once, store the coordinates — and fetch only the few most relevant pages for the question at hand. That fetch-just-what-you-need pattern is <a href="ch042-rag.html">RAG</a>, two acts from now, and the cost arithmetic that makes it necessary is <a href="ch041-tokens-and-cost.html">chapter 41</a>. Both chapters lean on today's material with their full weight.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Quantity</th><th>The question it answers</th><th>Where it bites you</th></tr>
+        <tr><td>Token</td><td>How is text measured and billed?</td><td>Invoices, rate limits, truncated replies</td></tr>
+        <tr><td>Embedding</td><td>What does this text mean — and what is similar to it?</td><td>Search quality, RAG relevance, dedupe and clustering</td></tr>
+        <tr><td>Context window</td><td>How much can the model consider at once?</td><td>Forgotten instructions, compaction losses, "context length exceeded"</td></tr>
+      </table></div>
+
+      <p>The vocabulary you will now hear differently in standups — flip each card until the back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">token</span><span class="flip-back">The model's unit of reading, writing, and billing. Roughly three-quarters of an English word; learned from frequency, so common text is cheap and rare text is expensive.</span></button>
+        <button class="flip" type="button"><span class="flip-front">tokenizer</span><span class="flip-back">The deterministic chopper that converts text to token IDs and back. No AI inside — pure string surgery with a learned vocabulary.</span></button>
+        <button class="flip" type="button"><span class="flip-front">BPE</span><span class="flip-back">Byte-Pair Encoding — build the vocabulary by repeatedly merging the most frequent pair of chunks. Frequency, not grammar, decides what becomes a token.</span></button>
+        <button class="flip" type="button"><span class="flip-front">embedding</span><span class="flip-back">A list of numbers placing a text on a map of meaning. Nearby points mean similar things, even with zero shared words.</span></button>
+        <button class="flip" type="button"><span class="flip-front">cosine similarity</span><span class="flip-back">The angle between two embedding arrows: near 1 means same direction (similar meaning), near 0 means unrelated. The workhorse of semantic search.</span></button>
+        <button class="flip" type="button"><span class="flip-front">context window</span><span class="flip-back">The maximum tokens one request can hold — system prompt, tools, history, documents, and the reply, all sharing one desk. Outside it, nothing exists.</span></button>
+        <button class="flip" type="button"><span class="flip-front">compaction</span><span class="flip-back">Summarising older conversation turns into a short note to free desk space. Recovers room, loses detail — by design.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet all three constantly. Pricing pages quote "$ per 1M input tokens / $ per 1M output tokens". Configs and merge requests carry <code>max_tokens</code>, <code>context_window</code>, and chunk-size settings; failures show up as <code>context_length_exceeded</code> in error logs. Token counters live in every serious tool — a library like <code>tiktoken</code>, a provider count-tokens endpoint, the running total in your coding agent's status line. Embeddings appear as model names (<code>text-embedding-3-small</code> and kin) in RAG pipelines, and as database columns — a Postgres table with a <code>vector(1536)</code> column, courtesy of the pgvector extension, is a pigeonhole wall in production. And when an agent harness prints "compacting conversation history", you now know exactly which desk is being swept, and what is quietly falling into the drawer.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. "the" is one token, but "Tiruchirappalli" comes out as a dozen. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">The tokenizer splits on syllables, and long words have more syllables</button>
+            <button data-opt="b">The vocabulary was built from frequency — common chunks earned their own token, rare strings fall back to smaller pieces</button>
+            <button data-opt="c">Proper nouns are always spelled out, for safety</button>
+          </div>
+          <p class="q-explain">BPE merges whatever chunk pairs occur most often in the training text. Frequency, not grammar or word length, decides what gets a single stamp — so common words are cheap and rare ones are billed piece by piece.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. A team translates its prompts from English to Hindi and the API bill jumps, even though the text says the same thing. The most likely cause?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model thinks more slowly in Hindi and bills for the extra time</button>
+            <button data-opt="b">Hindi sentences carry more information, so more output is generated</button>
+            <button data-opt="c">The tokenizer's vocabulary is mostly English chunks, so Devanagari text shatters into far more tokens per word</button>
+          </div>
+          <p class="q-explain">Billing is per token, and tokenizers compress best what they saw most during vocabulary training — overwhelmingly English and code. The same meaning in a less-represented script simply costs more tokens.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Two support tickets have embeddings that sit very close together. What do you actually know?</p>
+          <div class="q-opts">
+            <button data-opt="a">They mean similar things — even if they share no words at all</button>
+            <button data-opt="b">They share most of their keywords</button>
+            <button data-opt="c">They were written by the same customer</button>
+          </div>
+          <p class="q-explain">Embeddings are coordinates of meaning: nearby means semantically similar. "Refund not received" and "my money hasn't come back" land close together with zero shared keywords — which is precisely why semantic search beats keyword search.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. An agent halfway through a long session suddenly "forgets" the contents of a file it read an hour ago. The most likely explanation?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model's weights were updated mid-session</button>
+            <button data-opt="b">The conversation outgrew the context window, and older content was evicted or compacted away</button>
+            <button data-opt="c">The file's embedding expired</button>
+          </div>
+          <p class="q-explain">The model has no memory between requests — only what is re-sent on the desk. When a transcript outgrows the window, harnesses truncate or compact, and whatever was dropped no longer exists for the model. Check the desk before blaming the brain.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. What counts against the context window in a single request?</p>
+          <div class="q-opts">
+            <button data-opt="a">Only the user's latest message</button>
+            <button data-opt="b">Only the input — the model's reply is free space</button>
+            <button data-opt="c">Everything: system prompt, tool definitions, the whole history, pasted documents, and the reply being generated</button>
+          </div>
+          <p class="q-explain">It is one shared desk. The system prompt and tool catalogue claim space before the user types a word, and the model's own output needs room at the end — which is why a "nearly full" context can fail even though your message was short.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A token is the model's unit of reading, writing, and billing — roughly three-quarters of an English word, decided by frequency (BPE), so common text is cheap and rare, numeric, or non-English text costs more.</li>
+          <li>Token counts drive both money (priced per million, input and output separately, output pricier) and walls (context limits, <code>max_tokens</code> caps, rate limits) — never estimate by word count when the number matters.</li>
+          <li>An embedding is a list of numbers placing text on a map of meaning; nearby means similar, cosine similarity measures the angle, and that one trick powers search by meaning — the seed of <a href="ch042-rag.html">RAG</a>.</li>
+          <li>The context window is the model's desk: system prompt, tools, history, documents, and the reply all share it, and whatever is not on the desk does not exist for the model.</li>
+          <li>When an agent "forgets", suspect the desk before the brain: eviction and compaction explain most production amnesia, and compaction trades detail for space by design.</li>
+          <li>None of this is magic — in this one page you tokenized text, embedded meaning, and ran a nearest-neighbour search with nothing but plain Python.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conditional edges and routing — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch059">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VII · LangGraph</div>
+        <h1>Conditional edges and routing</h1>
+        <p class="ch-tagline">Fixed edges make a pipeline. One routing function at the right junction makes it an agent — and the ReAct loop you built by hand turns out to be exactly two stations and a signal box.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 60 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A freight yard at night. Nearly all of the track layout is fixed: from the loading dock every wagon rolls to the weighbridge, from the weighbridge every wagon rolls to the junction. No decisions anywhere — just steel rails. But at the junction stands a raised signal box, and in it sits a signalwoman with two levers. She never loads cargo. She never drives a train. Her entire job is one glance and one pull: as each wagon pauses beneath her window, she reads the last line of its manifest. If it says <em>"needs sealing"</em>, she pulls lever one and the wagon curves back around the loop to the sealing shed — from where the rails will carry it straight back to her. If it says <em>"sealed"</em>, she pulls lever two and the wagon glides off to the dispatch platform, done.</p>
+        <p>Notice the elegant split of power. The <em>decision</em> is live — made fresh for every wagon, based on whatever the manifest says right now. But the <em>options</em> are fixed — there are exactly two levers, wired to exactly two tracks, and she cannot improvise a third. That signal box is a conditional edge. The woman is a routing function. The lever-to-track wiring is the mapping. And a surprising amount of this act is about putting the right person in that box.</p>
+      </section>
+
+      <h2>The one piece ch058 left out</h2>
+      <p>Quick recap of <a href="ch058-stategraph-anatomy.html">StateGraph anatomy</a>, because this chapter stands directly on it. A LangGraph app has three parts: a <strong>state schema</strong> (a TypedDict describing the shared clipboard every step reads and writes), <strong>nodes</strong> (plain Python functions that take the state and return only the fields they changed), and <strong>edges</strong> (the route card wiring nodes together, from <code>START</code> to <code>END</code>). You even traced a three-node pipeline through the engine by hand. But every edge in that chapter was fixed — <code>add_edge("a", "b")</code> means <em>after a, always b</em>, no exceptions, forever.</p>
+      <p>Fixed edges can only build pipelines: straight lines whose route was settled at design time, before any real data arrived. They cannot build the thing this whole course orbits — the <a href="ch045-react-loop-by-hand.html">ReAct loop</a>, where the system keeps going around <em>until the model says it is done</em>. "Until" is a decision made at run time, from live data. Pipelines cannot decide. Something at the junction has to look at the state and choose.</p>
+      <p>That something is a <dfn>routing function</dfn> — a plain Python function that receives the current state, inspects it, and returns a <em>string</em>: the name of wherever the graph should go next. Read that sentence again, because it contains the whole chapter. A node returns a <em>dict of state updates</em> — it changes the world. A routing function returns a <em>name</em> — it changes nothing; it only points. The signalwoman never touches the cargo.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>This split — nodes do work, routers only point — is a deliberate design rule, not an accident. Because a routing function cannot modify state, you can read any LangGraph app and know that every state change lives inside a node and every decision lives inside a router. Two short lists to audit instead of one tangled loop. Enterprises, as <a href="ch057-why-graphs.html">the why-graphs chapter</a> put it, are metro people — this is a big part of why.</p></div>
+
+      <h2>add_conditional_edges: wiring the signal box</h2>
+      <p>Here is the API, and then we will take it apart piece by piece:</p>
+
+      <div class="code-title">wiring a junction after the "agent" node</div>
+      <pre><code class="language-python">def should_continue(state):
+    last = state["messages"][-1]
+    if last.tool_calls:          # the model asked for a tool
+        return "act"
+    return "done"                # no tool calls: it answered
+
+builder.add_conditional_edges(
+    "agent",                          # 1. junction sits AFTER this node
+    should_continue,                  # 2. the routing function
+    {"act": "tools", "done": END},    # 3. mapping: label to destination
+)</code></pre>
+
+      <p><code>add_conditional_edges</code> takes three things. First, the <strong>source node</strong> — the junction is placed on the track leaving this node, so the router runs every single time this node finishes. Second, the <strong>routing function</strong> itself. Third, the <dfn>mapping</dfn> (the docs call it a path map) — a dict translating whatever label the router returns into an actual destination: another node's name, or <code>END</code> to stop the run. Router says <code>"act"</code>, the mapping says that means the <code>tools</code> node; router says <code>"done"</code>, the mapping says that means <code>END</code>. Levers on one side, tracks on the other, wiring in between.</p>
+      <p>Two pieces of small print worth knowing. You may skip the mapping entirely and have the router return real node names directly — LangGraph accepts that — but the mapping earns its keep twice over: it keeps the router's vocabulary decoupled from your node names (rename a node, touch one dict), and it declares every possible destination up front, so the picture LangGraph can draw of your compiled graph shows the decision arrows without ever running your code. And if the router returns a label that is in neither the mapping nor the node list — say a typo like <code>"tols"</code> — the run fails loudly at that step with an unknown-destination error. The signalwoman has no third lever; she cannot send a wagon down a track that was never laid. Compare that with the hand-written loop from <a href="ch045-react-loop-by-hand.html">ch045</a>, where a typo in the branch logic just… did something, silently, and you found out from the logs.</p>
+
+      <h2>The punchline: ReAct is a two-node graph</h2>
+      <p>Now the promise in this chapter's tagline. Take the fifty-line ReAct loop you built by hand — think, act, observe, repeat until FINAL ANSWER — and redraw it as a graph. It comes out almost embarrassingly small:</p>
+      <ul>
+        <li>An <strong>agent</strong> node: calls the model with the message history, appends the reply. (One node.)</li>
+        <li>A <strong>tools</strong> node: executes whatever tool calls the model requested, appends the results. (Two nodes. That is all of them.)</li>
+        <li>A fixed edge <code>START &#8594; agent</code>; a fixed edge <code>tools &#8594; agent</code>, because results must always go back to the model — remember from <a href="ch045-react-loop-by-hand.html">ch045</a> what happens when the observation never returns; and <em>one</em> conditional edge after <code>agent</code>: tool calls pending? Go to <code>tools</code>. None? Go to <code>END</code>.</li>
+      </ul>
+      <p>The famous loop is not written as a loop anywhere. It <em>emerges</em> from the cycle in the wiring — <code>agent &#8594; tools &#8594; agent &#8594; tools…</code> — until the router finally pulls the other lever. The while-loop you wrote in ch045 has dissolved into topology. Watch one complete run move through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="START">
+          <h3>1. The task enters at START</h3>
+          <div class="diagram">
+            <div class="d-box hot">START<small>"What is 20% GST on 1,500?"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">agent</div>
+            <div class="d-box dim">junction</div>
+            <div class="d-box dim">tools</div>
+          </div>
+          <p class="step-cap">The user's question becomes the first entry in <code>state["messages"]</code>, and the fixed edge from START delivers the state to the agent node. No decisions yet — this stretch is plain rail.</p>
+        </div>
+        <div class="step" data-title="agent">
+          <h3>2. The agent node calls the model</h3>
+          <div class="diagram">
+            <div class="d-box dim">START</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">agent<small>reply: tool call — calculate(1500 * 0.20)</small></div>
+            <div class="d-box dim">junction</div>
+            <div class="d-box dim">tools</div>
+          </div>
+          <p class="step-cap">The agent node sends the whole history to the LLM. The model replies with a tool call — a request, not an action, exactly as in <a href="ch035-tool-calling.html">the tool-calling chapter</a>. The node appends that reply to state and finishes. Note what it does not do: decide where to go next.</p>
+        </div>
+        <div class="step" data-title="junction: act">
+          <h3>3. The router reads the manifest — lever one</h3>
+          <div class="diagram">
+            <div class="d-box dim">agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">junction<small>last message has tool calls &#8594; "act"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">tools</div>
+          </div>
+          <p class="step-cap">The agent node finished, so the conditional edge fires. <code>should_continue</code> looks at the last message, finds a pending tool call, and returns <code>"act"</code>. The mapping translates: next stop, the tools node.</p>
+        </div>
+        <div class="step" data-title="tools, and back">
+          <h3>4. Tools run, and fixed rail carries us back</h3>
+          <div class="diagram">
+            <div class="d-box dim">junction</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">tools<small>calculate(1500 * 0.20) = 300.0</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">agent<small>sees the result</small></div>
+          </div>
+          <p class="step-cap">The tools node executes the real function and appends the result to the messages. Then the fixed edge <code>tools &#8594; agent</code> — no decision needed, results always return to the model — carries the state back. The loop just happened, and it was made of track.</p>
+        </div>
+        <div class="step" data-title="junction: done">
+          <h3>5. Second visit to the junction — lever two</h3>
+          <div class="diagram">
+            <div class="d-box dim">agent<small>reply: "GST is 300 rupees" — no tool calls</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">junction<small>no tool calls &#8594; "done"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">END<small>answer returned</small></div>
+          </div>
+          <p class="step-cap">The agent node runs again, and this time the model answers in plain text — no tool calls. The same router, reading the same field, returns <code>"done"</code>; the mapping says END, and the run finishes. Two nodes, three edges, one of them conditional. That is ReAct.</p>
+        </div>
+      </div>
+
+      <p>Sit with how little machinery that took, because it is the mental unlock of Act VII: <strong>loops are not a special feature — they are cycles in the wiring, and conditional edges are the exit doors.</strong> Once you can see the ReAct loop as two stations and a signal box, bigger graphs stop being intimidating. A research agent with a planner, three specialists, and a reviewer is the same picture with more stations — and every "revise or ship?" moment inside it is a junction exactly like this one.</p>
+
+      <h2>The vocabulary of junctions</h2>
+      <p>Five terms carry the rest of the act. Flip until each back feels obvious:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">routing function</span><span class="flip-back">A plain function given the current state that returns a string naming where to go next. It reads; it never writes. The signalwoman.</span></button>
+        <button class="flip" type="button"><span class="flip-front">conditional edge</span><span class="flip-back">A junction placed after a node, wired by add_conditional_edges. Every time the node finishes, the router runs and picks the next hop.</span></button>
+        <button class="flip" type="button"><span class="flip-front">mapping (path map)</span><span class="flip-back">The dict translating router labels into destinations, e.g. {"act": "tools", "done": END}. Levers on one side, tracks on the other.</span></button>
+        <button class="flip" type="button"><span class="flip-front">END</span><span class="flip-back">The virtual terminus. Routing to END finishes the run and returns the final state — the graph's version of FINAL ANSWER.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Send</span><span class="flip-back">A special return value for fan-out: the router returns a list of Send objects and each one launches a parallel copy of a node with its own private payload.</span></button>
+      </div>
+
+      <h2>Build the junction yourself</h2>
+      <p>In ch057 and ch058 you built a toy graph engine in roughly twenty lines. Here it grows its one missing organ: junctions. The engine below runs the actual two-node ReAct graph from the stepper, with a scripted <code>fake_llm</code> standing in for the paid API (the same trick as <a href="ch045-react-loop-by-hand.html">ch045</a> — first reply requests a tool, second reply answers). Press <strong>Run</strong> and read the trace: you will see the router pull lever one, the loop go around, and the router pull lever two.</p>
+
+      <div class="pyrun" data-title="A graph engine with conditional edges — run me">
+<textarea class="py-src" spellcheck="false">
+START, END = "__start__", "__end__"
+
+nodes = {}        # name : function(state) returning an update
+edges = {}        # name : fixed next stop
+junctions = {}    # name : (routing function, mapping)
+
+def add_node(name, fn):            nodes[name] = fn
+def add_edge(src, dst):            edges[src] = dst
+def add_conditional_edges(src, router, mapping):
+    junctions[src] = (router, mapping)
+
+# ---- a scripted stand-in for a real LLM ------------------
+script = [
+    {"content": "", "tool_call": "calculate(1500 * 0.20)"},
+    {"content": "GST at 20% on 1,500 rupees is 300 rupees.",
+     "tool_call": None},
+]
+def fake_llm(state):
+    return script[state["llm_calls"]]
+
+# ---- the two nodes (they CHANGE state) -------------------
+def agent(state):
+    reply = fake_llm(state)
+    return {"messages": state["messages"] + [reply],
+            "llm_calls": state["llm_calls"] + 1}
+
+def tools(state):
+    call = state["messages"][-1]["tool_call"]
+    expr = call[call.index("(") + 1 : call.rindex(")")]
+    result = {"content": f"OBSERVATION: {eval(expr)}",
+              "tool_call": None}
+    return {"messages": state["messages"] + [result]}
+
+# ---- the routing function (it only POINTS) ---------------
+def should_continue(state):
+    if state["messages"][-1]["tool_call"]:
+        return "act"
+    return "done"
+
+# ---- wire the graph: 2 nodes, 3 edges, 1 junction --------
+add_node("agent", agent)
+add_node("tools", tools)
+add_edge(START, "agent")
+add_conditional_edges("agent", should_continue,
+                      {"act": "tools", "done": END})
+add_edge("tools", "agent")
+
+# ---- the engine: walk the rails until END ----------------
+def run(state):
+    current = edges[START]
+    while current != END:
+        print(f"node '{current}' runs")
+        state = {**state, **nodes[current](state)}
+        if current in junctions:
+            router, mapping = junctions[current]
+            label = router(state)
+            current = mapping[label]
+            print(f"  junction: router says '{label}', "
+                  f"next stop {current}")
+        else:
+            current = edges[current]
+            print(f"  fixed edge, next stop {current}")
+    return state
+
+task = {"content": "TASK: 20% GST on 1500?", "tool_call": None}
+final = run({"messages": [task], "llm_calls": 0})
+print()
+print("FINAL:", final["messages"][-1]["content"])
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it, gently. Change the mapping's <code>"act"</code> key to <code>"go"</code> without changing the router, run it, and read the <code>KeyError</code> — that is the unknown-destination failure from earlier, in miniature. Then add a third scripted reply with another tool call and watch the loop go around twice. The engine does not care: once junctions exist, cycles are free.</p></div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>One honest simplification: our toy engine has no reducers, so its nodes hand back the <em>whole</em> messages list. Real LangGraph nodes return only their new messages, and the <code>add_messages</code> reducer from <a href="ch058-stategraph-anatomy.html">ch058</a> appends them. Same choreography, tidier luggage handling.</p></div>
+
+      <h2>The same graph in real LangGraph</h2>
+      <p>Now the production version — every idea identical, only the imports change. Click the annotated lines and make sure each one is boring to you:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">react_graph.py — ReAct in LangGraph, complete</div>
+        <div class="wl-line"><code>from typing import Annotated, TypedDict</code></div>
+        <div class="wl-line"><code>from langgraph.graph import StateGraph, START, END</code>
+          <div class="wl-note">The same three imports as <a href="ch058-stategraph-anatomy.html">ch058</a>. Nothing extra is needed for conditional edges — they are a method on the builder, not a separate import.</div></div>
+        <div class="wl-line"><code>from langgraph.graph.message import add_messages</code>
+          <div class="wl-note">The message-appending reducer from ch058, so nodes can return just their new messages. (LangGraph's prebuilt <code>MessagesState</code> is this exact schema, ready-made.)</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>class State(TypedDict):</code></div>
+        <div class="wl-line"><code>    messages: Annotated[list, add_messages]</code></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>def agent(state: State):</code>
+          <div class="wl-note">Node one. In production this calls a real chat model with tools bound to it — the model may reply with plain text or with structured tool calls, the native version of ch045's ACTION lines.</div></div>
+        <div class="wl-line"><code>    reply = model.invoke(state["messages"])</code></div>
+        <div class="wl-line"><code>    return {"messages": [reply]}</code>
+          <div class="wl-note">Only the new page, not the whole binder — the reducer appends it. Note what this node does NOT do: it does not decide where to go next. Work in nodes, decisions at junctions.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>def should_continue(state: State):</code>
+          <div class="wl-note">The routing function. It receives the same state a node would, but look at what it returns — a string, never a dict. LangGraph calls it automatically each time the agent node finishes.</div></div>
+        <div class="wl-line"><code>    last = state["messages"][-1]</code></div>
+        <div class="wl-line"><code>    if last.tool_calls:</code>
+          <div class="wl-note">Chat-model replies carry a <code>tool_calls</code> attribute — a list of structured requests, empty when the model simply answered in text. This one attribute is the entire manifest the signalwoman reads.</div></div>
+        <div class="wl-line"><code>        return "act"</code></div>
+        <div class="wl-line"><code>    return "done"</code>
+          <div class="wl-note">Labels, not node names — the mapping below owns the translation. Keep routers dumb and legible: a reviewer should grasp every possible flow of your agent from this one small function.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>builder = StateGraph(State)</code></div>
+        <div class="wl-line"><code>builder.add_node("agent", agent)</code></div>
+        <div class="wl-line"><code>builder.add_node("tools", tools_node)</code>
+          <div class="wl-note">The tool-executor node — a function that runs each requested tool and appends the results as messages. This shape is so common that LangGraph ships a prebuilt one, <code>ToolNode</code>.</div></div>
+        <div class="wl-line"><code>builder.add_edge(START, "agent")</code></div>
+        <div class="wl-line"><code>builder.add_conditional_edges(</code>
+          <div class="wl-note">The chapter's headline API. Source node, router, mapping — this call wires the junction onto the track leaving <code>agent</code>.</div></div>
+        <div class="wl-line"><code>    "agent", should_continue,</code></div>
+        <div class="wl-line"><code>    {"act": "tools", "done": END})</code>
+          <div class="wl-note"><code>END</code> is a legal destination in the mapping — routing there finishes the run and returns the final state. This line IS the stop condition of the whole agent.</div></div>
+        <div class="wl-line"><code>builder.add_edge("tools", "agent")</code>
+          <div class="wl-note">The return rail that closes the cycle. Fixed, because tool results should ALWAYS go back to the model — there is no decision to make, so no junction is wasted on it.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>graph = builder.compile()</code>
+          <div class="wl-note">Blueprint becomes runnable machine. What compile, invoke, and stream each do — and what those calls return — is the whole of <a href="ch060-compile-invoke-stream.html">the next chapter</a>.</div></div>
+      </div>
+
+      <p>Twenty-odd lines, and you have rebuilt <code>create_agent</code> from <a href="ch054-create-agent.html">Act VI</a> — because that convenience function literally constructs this graph for you: an agent node, a tool node, and this exact conditional edge. You have now seen behind that curtain, which is precisely what <a href="ch064-bring-your-own-graph.html">bring your own graph</a> will exploit later in this act: when the prebuilt loop is not the flow you want, you lay your own track and put junctions only where a live decision genuinely belongs.</p>
+
+      <h2>One paragraph on fan-out: the Send API</h2>
+      <p>Everything so far picks <em>one</em> next stop. Sometimes you want many at once — thirty documents to summarise, and you would like thirty parallel copies of a <code>summarise</code> node, each holding its own document. For that, a routing function can return a list of <code>Send</code> objects instead of a label: <code>from langgraph.types import Send</code>, then <code>return [Send("summarise", {"doc": d}) for d in state["docs"]]</code>. Each <code>Send</code> names a node and hands it a private payload as its state; LangGraph runs the copies in parallel, and their returned updates merge back into the shared state through reducers — which is exactly why <a href="ch058-stategraph-anatomy.html">ch058</a> made such a fuss about append-style reducers and parallel writes. That is the map-reduce pattern expressed in one routing decision, and it is as far as we take it here; it returns in force with the multi-agent patterns of <a href="ch063-subgraphs-multi-agent.html">ch063</a>.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any LangGraph repository and search for <code>add_conditional_edges</code> — the hits are a complete inventory of every decision the system can make, which is why reviewers read them first. The router is almost always named something like <code>should_continue</code>, <code>route_after_agent</code>, or <code>next_step</code>, and nine times out of ten its body checks <code>tool_calls</code> on the last message, exactly as here. In merge requests you will meet comments like "this belongs in the router, not the node" (someone buried a decision inside work code) or "route this to END instead of raising" (turning a crash into a clean stop). And when a teammate says "the graph has a cycle between agent and tools", you can nod and picture the signal box that keeps that cycle from spinning forever.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. What does a routing function return, and what may it change?</p>
+          <div class="q-opts">
+            <button data-opt="a">A dict of state updates — it is a node that also picks the next hop</button>
+            <button data-opt="b">True or False, which LangGraph turns into continue-or-stop</button>
+            <button data-opt="c">A string naming the next destination — and it changes nothing at all</button>
+          </div>
+          <p class="q-explain">Routers read state and point; only nodes write. That separation is what makes a graph auditable: all changes live in nodes, all decisions live in routers.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. In the two-node ReAct graph, what does the conditional edge after the agent node actually check?</p>
+          <div class="q-opts">
+            <button data-opt="a">Whether the tools node succeeded on its last run</button>
+            <button data-opt="b">Whether the model's latest reply contains tool calls — if yes go to tools, if no go to END</button>
+            <button data-opt="c">Whether the recursion limit has been reached</button>
+          </div>
+          <p class="q-explain">The router inspects the last message: pending tool calls mean the model wants to act, so route to the tools node; a plain answer means it is done, so route to END. That one check is the entire stop condition of ReAct.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What is the mapping (path map) in <code>add_conditional_edges("agent", router, {"act": "tools", "done": END})</code> for?</p>
+          <div class="q-opts">
+            <button data-opt="a">It translates the router's labels into real destinations, and declares every possible exit up front</button>
+            <button data-opt="b">It caches the router's decisions so the function only runs once</button>
+            <button data-opt="c">It is mandatory — routers cannot work without one</button>
+          </div>
+          <p class="q-explain">The mapping is the lever-to-track wiring: labels stay decoupled from node names, and the full set of destinations is visible without running any code. It is technically optional — a router may return node names directly — but the decoupling and the drawable diagram make it the usual style.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Where is the ReAct loop actually written in the two-node graph?</p>
+          <div class="q-opts">
+            <button data-opt="a">Inside the agent node, as a for-loop over turns</button>
+            <button data-opt="b">In a while-loop that LangGraph asks you to supply at compile time</button>
+            <button data-opt="c">Nowhere as a loop — it emerges from the cycle agent to tools to agent in the wiring, with the conditional edge as the exit</button>
+          </div>
+          <p class="q-explain">The while-loop from ch045 dissolves into topology: a fixed edge back from tools to agent creates the cycle, and the junction after agent decides on every pass whether to go around again or leave for END.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Your router returns a list like <code>[Send("summarise", {"doc": d}) for d in docs]</code>. What happens?</p>
+          <div class="q-opts">
+            <button data-opt="a">LangGraph raises an error — routers must return exactly one string</button>
+            <button data-opt="b">One parallel copy of the summarise node launches per Send, each with its own payload, and their updates merge back through reducers</button>
+            <button data-opt="c">The summarise node runs once, receiving the whole list as its input</button>
+          </div>
+          <p class="q-explain">That is the Send API's fan-out: each Send names a node and hands it a private state, the copies run in parallel, and append-style reducers gather the results — map-reduce inside one routing decision.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A routing function is a plain function that reads the state and returns a string naming the next destination — it points, it never writes. Nodes do the work; routers make the decisions.</li>
+          <li><code>add_conditional_edges(source, router, mapping)</code> places a junction after a node; the mapping translates the router's labels into node names or <code>END</code>, and declares every possible exit up front.</li>
+          <li>The decision is live but the options are fixed: a router can only choose among destinations that exist in the graph — bounded autonomy, drawn in track.</li>
+          <li>The ReAct loop is secretly a two-node graph: agent and tools, a fixed return edge, and one conditional edge whose tool-calls check is the entire stop condition. Loops are cycles in the wiring, with a junction as the exit door.</li>
+          <li><code>create_agent</code> from Act VI builds exactly this graph for you — conditional edges are how you build it yourself when the prebuilt loop is not the flow you need.</li>
+          <li>For fan-out, a router can return a list of <code>Send</code> objects — each launches a parallel copy of a node with its own private payload, merged back through reducers.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

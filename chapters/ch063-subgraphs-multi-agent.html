@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subgraphs and multi-agent patterns — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch063">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VII · LangGraph</div>
+        <h1>Subgraphs and multi-agent patterns</h1>
+        <p class="ch-tagline">A compiled graph is just a node waiting to happen. Once you see that, supervisors, swarms, and whole hierarchies of agents stop being architecture-diagram mysticism and become three arrangements of the same trick.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 64 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You walk into a large bank branch with a messy request: close a fixed deposit, wire part of it abroad, and update your address. The woman at the front desk does none of these things herself. She listens, then routes you: "FD counter first. Then forex, desk seven." Each officer has their own desk, their own drawers of forms, their own screen — the forex officer never sees the FD officer's paperwork, and would only be confused by it. But they all write into one thing: your customer file, which travels with you from desk to desk.</p>
+        <p>Sometimes the front desk is not involved at all. Mid-way through your wire transfer, the forex officer realises you need a compliance sign-off — and simply walks you across to the compliance desk herself. Colleague to colleague. No trip back to reception.</p>
+        <p>And here is the detail everyone misses: each officer at each desk is running a little procedure of their own — verify, stamp, sign, file — a routine inside the bigger routine of the branch. The branch is a graph. Every desk is a graph. Desks pass you around either by a router's rules or by a colleague's judgement. Your file is shared state; their drawers are isolated state. This chapter is that branch, in code.</p>
+      </section>
+
+      <h2>From one graph to graphs of graphs</h2>
+      <p>Quick recap of where you stand, because this chapter is the payoff for the last five. In <a href="ch058-stategraph-anatomy.html">StateGraph anatomy</a> you built a graph: a shared state object, nodes that return updates to it, edges that say what runs next. In <a href="ch059-conditional-edges.html">conditional edges</a> you let the graph choose its own path. In <a href="ch061-checkpointing.html">checkpointing</a> you gave it a save file, and in <a href="ch062-human-in-the-loop.html">the interrupts chapter</a> you learned to pause it mid-run and resume with a human's answer. Every one of those tricks carries forward unchanged today.</p>
+      <p>Now the one idea this whole chapter stands on. Ask yourself: what <em>is</em> a node, really? It is anything that takes the current state and returns an update to it. State in, updates out. And what does a <em>compiled graph</em> do when you invoke it? It takes state in and returns state out. The shapes match. Which means a finished, compiled graph can be dropped into a bigger graph <em>as a node</em> — no adapter, no ceremony.</p>
+      <p>That embedded graph is called a <dfn>subgraph</dfn> — a complete graph used as a single step inside a larger one. From the outside, the parent graph sees one box called <code>research</code>. Inside that box, an entire multi-node pipeline runs: search, filter, summarise, loop if needed. The parent neither knows nor cares.</p>
+
+      <div class="code-title">a graph as a node — the two-line version</div>
+      <pre><code class="language-python">research = research_builder.compile()   # a whole graph, finished
+
+team = StateGraph(State)
+team.add_node("research", research)      # ...used as ONE node</code></pre>
+
+      <p>There are two ways to wire a subgraph in, and the difference is exactly the shared-file-versus-private-drawer split from the bank branch:</p>
+      <ul>
+        <li><strong>Shared keys.</strong> If the subgraph's state schema shares keys with the parent's (say, both have a <code>messages</code> list), you pass the compiled subgraph straight to <code>add_node</code>, as above. They read and write the same customer file.</li>
+        <li><strong>Different schemas.</strong> If the subgraph keeps its own private state shape, you wrap it in an ordinary node function: translate the parent's state into the subgraph's input, invoke the subgraph, translate the result back. The drawer stays private; only the distilled outcome lands in the shared file.</li>
+      </ul>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>This is why LangGraph never needed a separate "multi-agent framework" bolted on. An agent, as you built it in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>, is a loop — and in LangGraph a loop is a small graph. So "multiple agents" is just "multiple subgraphs", and everything you already know about state, edges, and checkpoints applies to teams of agents for free.</p></div>
+
+      <h2>The vocabulary of teams</h2>
+      <p>Six terms carry every multi-agent conversation you will ever sit in. Flip until fluent:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">subgraph</span><span class="flip-back">A compiled graph used as a single node inside a bigger graph. Possible because a graph and a node have the same shape: state in, updates out.</span></button>
+        <button class="flip" type="button"><span class="flip-front">supervisor</span><span class="flip-back">A router agent that decides who works next and never does specialist work itself. Workers report back to it after every job. The front desk.</span></button>
+        <button class="flip" type="button"><span class="flip-front">handoff</span><span class="flip-back">One agent passing control directly to another, mid-conversation, without going through a boss. The forex officer walking you to compliance.</span></button>
+        <button class="flip" type="button"><span class="flip-front">swarm</span><span class="flip-back">A team built entirely from handoffs: no central router, whichever agent currently holds the conversation decides who gets it next.</span></button>
+        <button class="flip" type="button"><span class="flip-front">shared state</span><span class="flip-back">The keys every agent can read and write — usually the messages list. Your customer file, travelling desk to desk.</span></button>
+        <button class="flip" type="button"><span class="flip-front">context isolation</span><span class="flip-back">Each specialist sees only what its job needs, not everyone else's clutter. The number-one genuine reason multi-agent beats single-agent.</span></button>
+      </div>
+
+      <h2>Pattern one: the supervisor</h2>
+      <p>The <dfn>supervisor pattern</dfn> is hub-and-spoke: one router agent in the middle, specialists around it, and control returning to the middle after every job. The supervisor is usually the cheapest kind of agent imaginable — an LLM call whose only output is a name: <code>"research"</code>, <code>"write"</code>, or <code>"FINISH"</code>. It is a decision, not a worker. (In practice you force that decision through <a href="ch036-structured-output.html">structured output</a> so it cannot ramble.)</p>
+      <p>Watch one ticket move through the branch:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Task arrives">
+          <h3>1. The task lands on the supervisor's desk</h3>
+          <div class="diagram">
+            <div class="d-box hot">User<small>"Research GST changes and draft a client note"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Supervisor</div>
+            <div class="d-box dim">Research<small>subgraph</small></div>
+            <div class="d-box dim">Write<small>subgraph</small></div>
+          </div>
+          <p class="step-cap">The parent graph's entry edge points at the supervisor. The specialists — each a subgraph — sit idle. The shared state so far holds only the task.</p>
+        </div>
+        <div class="step" data-title="Supervisor routes">
+          <h3>2. The supervisor decides, and only decides</h3>
+          <div class="diagram">
+            <div class="d-box dim">User</div>
+            <div class="d-box hot">Supervisor<small>"next: research"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Research</div>
+            <div class="d-box dim">Write</div>
+          </div>
+          <p class="step-cap">One LLM call reads the state and returns a worker's name. No searching, no writing — routing is its entire job. Small job, small prompt, small bill.</p>
+        </div>
+        <div class="step" data-title="Specialist works">
+          <h3>3. The specialist runs its own private pipeline</h3>
+          <div class="diagram">
+            <div class="d-box dim">Supervisor</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Research<small>search &#8594; filter &#8594; summarise</small></div>
+          </div>
+          <p class="step-cap">Inside the box, a whole graph executes — its own nodes, its own loops, its own scratch state. The parent only ever sees the box. This is the subgraph earning its keep.</p>
+        </div>
+        <div class="step" data-title="Control returns">
+          <h3>4. Findings go into the shared file; control returns</h3>
+          <div class="diagram">
+            <div class="d-box">Research<small>returns distilled notes</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Supervisor<small>reads updated state</small></div>
+          </div>
+          <p class="step-cap">A fixed edge leads from every worker back to the supervisor. The researcher's forty raw web pages stay in its drawer; only the summary enters the shared state.</p>
+        </div>
+        <div class="step" data-title="Route again or finish">
+          <h3>5. Loop until the supervisor says FINISH</h3>
+          <div class="diagram">
+            <div class="d-box dim">Research</div>
+            <div class="d-box">Supervisor<small>"next: write"... then "FINISH"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Done<small>draft delivered</small></div>
+          </div>
+          <p class="step-cap">The supervisor routes to the writer, gets the draft back, and finally answers FINISH — which routes to END. Decide, delegate, collect, repeat. It is the ReAct loop one level up: tools replaced by whole agents.</p>
+        </div>
+      </div>
+
+      <h2>Run a two-agent team, right now</h2>
+      <p>Below is a working supervisor team. As in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>, the "models" are tiny scripted stand-ins so the whole thing runs in your browser — but the shape (shared state, a router that only routes, specialists with private scratchpads) is exactly what production teams do. Watch the printed word counts: they are the entire argument for context isolation, made visible. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A supervisor and two specialists — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- Specialists: each sees a SMALL, job-shaped context ------
+
+def researcher(state):
+    # Private drawer: raw findings stay LOCAL to this agent.
+    raw_dump = "scraped-page-text " * 200   # imagine 200 words of web pages
+    notes = ("NOTES: three rate slabs confirmed; registration "
+             "threshold unchanged; e-invoicing mandatory above limit.")
+    print(f"   [researcher] chewed through {len(raw_dump.split())} words privately")
+    print(f"   [researcher] returned only {len(notes.split())} words to the team")
+    return {"from": "researcher", "text": notes}
+
+def writer(state):
+    # Sees the task plus the researcher's NOTES -- never the raw dump.
+    notes = " ".join(m["text"] for m in state["messages"]
+                     if m["from"] == "researcher")
+    context = state["task"] + " " + notes
+    print(f"   [writer] context seen: {len(context.split())} words total")
+    return {"from": "writer",
+            "text": "DRAFT: Dear client, here is your one-page tax summary..."}
+
+AGENTS = {"researcher": researcher, "writer": writer}
+
+# ---- The supervisor: decides who works next, never works -----
+def fake_supervisor(state):
+    done = [m["from"] for m in state["messages"]]
+    if "researcher" not in done:
+        return "researcher"
+    if "writer" not in done:
+        return "writer"
+    return "FINISH"
+
+# ---- The loop: ch45's ReAct loop, one level up ---------------
+def run_team(task, max_hops=6):
+    state = {"task": task, "messages": []}   # the shared customer file
+    for hop in range(1, max_hops + 1):
+        route = fake_supervisor(state)
+        print(f"--- hop {hop}: supervisor routes to {route} ---")
+        if route == "FINISH":
+            return state["messages"][-1]["text"]
+        state["messages"].append(AGENTS[route](state))
+    return "Gave up: hit the max-hops limit."
+
+print()
+print("TEAM RETURNED:", run_team("Draft a tax-changes note for a client"))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it the useful way: make <code>fake_supervisor</code> always return <code>"researcher"</code> and watch <code>max_hops</code> save you — the multi-agent version of a runaway loop. Then add a third specialist (a "reviewer") to <code>AGENTS</code> and teach the supervisor to route to it after the writer. You have just re-organised a team without touching either existing worker. That independence is the operational win.</p></div>
+
+      <h2>Pattern two: the swarm — handoffs without a boss</h2>
+      <p>The supervisor pattern has a tax built in: after <em>every</em> job, control returns to the hub, which means one extra LLM call per hop and a hub prompt that must understand everything. The <dfn>swarm pattern</dfn> removes the hub. Agents pass the conversation directly to each other using a <dfn>handoff</dfn> — a special tool an agent can call whose effect is "transfer this whole conversation to my colleague". Whoever currently holds the conversation owns it, answers the user directly, and decides when a colleague would serve better.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="One agent owns the chat">
+          <h3>1. The billing agent owns the conversation</h3>
+          <div class="diagram">
+            <div class="d-box">User<small>"Why was I charged twice?"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Billing agent<small>tools: lookup_invoice, handoff_to_refunds</small></div>
+            <div class="d-box dim">Refunds agent</div>
+          </div>
+          <p class="step-cap">No front desk. The user talks straight to a specialist, which carries its normal tools plus one odd one: a handoff tool for each colleague it may pass work to.</p>
+        </div>
+        <div class="step" data-title="The question shifts">
+          <h3>2. The job drifts outside its lane</h3>
+          <div class="diagram">
+            <div class="d-box dim">User<small>"...so refund the duplicate"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Billing agent<small>calls handoff_to_refunds</small></div>
+            <div class="d-box dim">Refunds agent</div>
+          </div>
+          <p class="step-cap">The billing agent recognises this is refunds territory — by judgement, mid-conversation, exactly like the forex officer walking you to compliance. It calls the handoff tool instead of answering.</p>
+        </div>
+        <div class="step" data-title="Control jumps peer-to-peer">
+          <h3>3. Control jumps sideways, not upward</h3>
+          <div class="diagram">
+            <div class="d-box dim">Billing agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Refunds agent<small>inherits the conversation</small></div>
+          </div>
+          <p class="step-cap">Under the hood the handoff tool returns a routing command naming the destination agent, and the graph transfers control there — sibling to sibling in the parent graph, no supervisor consulted, no extra routing call billed.</p>
+        </div>
+        <div class="step" data-title="The new owner sticks">
+          <h3>4. The refunds agent keeps the chair</h3>
+          <div class="diagram">
+            <div class="d-box good">Refunds agent<small>"Refund issued. Anything else?"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">User</div>
+          </div>
+          <p class="step-cap">The swarm remembers who is active: the user's next message goes straight to the refunds agent, not back to billing. Ownership persists until someone hands off again.</p>
+        </div>
+      </div>
+
+      <p>In LangGraph terms, a handoff tool returns a <code>Command</code> — the same routing object you will meet again below — that names the destination node; when the handing-off agent is itself a subgraph, the command targets the <em>parent</em> graph so control can jump to a sibling. LangChain also ships prebuilt libraries for both patterns (<code>langgraph-supervisor</code> and <code>langgraph-swarm</code>) so you rarely wire either by hand — check the current docs for the exact constructors before you build.</p>
+      <p>Choosing between them is a management-style question. A supervisor gives you predictability: every decision passes one desk, so tracing "why did the writer run twice?" means reading one agent's log. A swarm gives you fluidity and fewer hops — but "who decided that?" now has as many answers as you have agents. And the two compose: a supervisor's specialists can themselves be supervisors of smaller teams, which is all a <dfn>hierarchical team</dfn> is — subgraphs inside subgraphs, the branch inside the bank's regional network.</p>
+
+      <h2>Shared versus isolated state</h2>
+      <p>The customer file versus the desk drawers. Getting this split right is most of multi-agent design, so make it explicit:</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>Shared state (the file)</th><th>Isolated state (the drawer)</th></tr>
+        <tr><td>What lives there</td><td>The task, the conversation, distilled results every agent may need</td><td>Raw tool output, scratch work, retries, a specialist's inner monologue</td></tr>
+        <tr><td>Who sees it</td><td>Every agent in the team</td><td>Only the subgraph that owns it</td></tr>
+        <tr><td>How it is wired</td><td>Subgraph shares state keys with the parent (same <code>messages</code> key)</td><td>Subgraph has its own schema; a wrapper node translates in and out</td></tr>
+        <tr><td>Failure smell when misused</td><td>Every agent drowns in everyone else's clutter; prompts balloon; the writer quotes raw HTML</td><td>An agent is missing facts it genuinely needed; teammates repeat each other's work</td></tr>
+      </table></div>
+
+      <p>The default that serves most teams: share the conversation, isolate the work. A researcher should chew through forty pages in its own drawer and file a one-paragraph summary. If instead every raw page lands in shared state, you have rebuilt the original problem — one giant context — and paid for a team on top. When you meet deep agents in <a href="ch070-subagents.html">the subagents chapter</a>, you will find this exact principle running Claude-Code-style harnesses: a subagent burns thousands of tokens privately and returns one tidy report.</p>
+
+      <h2>The real thing: a supervisor team in LangGraph</h2>
+      <p>Here is the pattern in genuine LangGraph 1.x, condensed to its skeleton. Click the annotated lines — by now, most of them should feel like old friends wearing team jerseys.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">team.py — a graph made of graphs</div>
+        <div class="wl-line"><code>from langgraph.graph import StateGraph, START, END</code>
+          <div class="wl-note">The same three imports as every graph since <a href="ch058-stategraph-anatomy.html">ch58</a>. Nothing new is needed to go multi-agent — that is the point.</div></div>
+        <div class="wl-line"><code>from langgraph.types import Command</code>
+          <div class="wl-note"><code>Command</code> lets a node return "and go THERE next" along with its state update — routing decided inside the node, no separate conditional edge required. Its cousin <code>Command(resume=...)</code> restarted interrupted runs in <a href="ch062-human-in-the-loop.html">ch62</a>.</div></div>
+        <div class="wl-line"><code>rb = StateGraph(State)</code>
+          <div class="wl-note">A builder for the research team's own graph. <code>State</code> here is the shared schema — this subgraph will read and write the same <code>messages</code> key as the parent.</div></div>
+        <div class="wl-line"><code>rb.add_node("search", search)</code></div>
+        <div class="wl-line"><code>rb.add_node("summarise", summarise)</code></div>
+        <div class="wl-line"><code>rb.add_edge(START, "search")</code></div>
+        <div class="wl-line"><code>rb.add_edge("search", "summarise")</code></div>
+        <div class="wl-line"><code>research = rb.compile()</code>
+          <div class="wl-note">Compile the subgraph exactly as you would any graph. The result is a runnable: state in, state out. Hold that thought for four lines.</div></div>
+        <div class="wl-line"><code>def supervisor(state: State) -&gt; Command:</code>
+          <div class="wl-note">The supervisor is a plain node function that returns a <code>Command</code>. The type hint advertises the contract: this node's job is a routing decision.</div></div>
+        <div class="wl-line"><code>    nxt = pick_next(state)   # an LLM call returning a name</code>
+          <div class="wl-note">One structured-output LLM call (<a href="ch036-structured-output.html">ch36</a>) constrained to the worker names or FINISH. The whole intelligence of the hub is this one line.</div></div>
+        <div class="wl-line"><code>    if nxt == "FINISH":</code></div>
+        <div class="wl-line"><code>        return Command(goto=END)</code>
+          <div class="wl-note">Routing to <code>END</code> stops the run — the team's FINAL ANSWER moment, decided by the hub rather than by a worker.</div></div>
+        <div class="wl-line"><code>    return Command(goto=nxt)</code>
+          <div class="wl-note">Otherwise: hand control to whichever specialist was named. Because the routing lives in the returned <code>Command</code>, you do not write conditional edges for the supervisor at all.</div></div>
+        <div class="wl-line"><code>tb = StateGraph(State)</code></div>
+        <div class="wl-line"><code>tb.add_node("supervisor", supervisor)</code></div>
+        <div class="wl-line"><code>tb.add_node("research", research)   # a compiled graph as a node</code>
+          <div class="wl-note">The headline line of the chapter. The compiled research graph is passed to <code>add_node</code> like any function — legal because their schemas share keys. The parent will treat the entire pipeline as one step.</div></div>
+        <div class="wl-line"><code>tb.add_node("write", write)</code>
+          <div class="wl-note">Specialists can be subgraphs, single functions, or full <code>create_agent</code> agents from <a href="ch054-create-agent.html">ch54</a> — a node is a node.</div></div>
+        <div class="wl-line"><code>tb.add_edge(START, "supervisor")</code></div>
+        <div class="wl-line"><code>tb.add_edge("research", "supervisor")</code>
+          <div class="wl-note">The hub-and-spoke shape in one line: whenever research finishes, control flows back to the supervisor. Same for every worker.</div></div>
+        <div class="wl-line"><code>tb.add_edge("write", "supervisor")</code></div>
+        <div class="wl-line"><code>team = tb.compile(checkpointer=saver)</code>
+          <div class="wl-note">And because a team is just a graph, everything from this act comes free: <a href="ch061-checkpointing.html">checkpointing</a> persists mid-team runs, <a href="ch062-human-in-the-loop.html">interrupts</a> can pause any specialist for approval, and streaming shows you every hop live.</div></div>
+      </div>
+
+      <h2>When a team genuinely beats a solo agent</h2>
+      <p>Now the judgement call this chapter's title promises, because "we made it multi-agent" is somehow both a brag and a confession. There are exactly three honest reasons to split one agent into several:</p>
+      <ul>
+        <li><strong>Context isolation.</strong> One agent doing research, analysis, and writing carries <em>all three jobs' clutter</em> in every single LLM call — and as you saw in <a href="ch047-memory-and-context.html">the memory chapter</a>, bloated context degrades quality while raising cost. Specialists each see a small, job-shaped context. This is the big one.</li>
+        <li><strong>Parallelism.</strong> Independent work can fan out simultaneously — three researchers on three subtopics, results merged downstream, using the same branching machinery you met in <a href="ch057-why-graphs.html">why graphs</a>. A solo agent does everything in single file.</li>
+        <li><strong>Permissions.</strong> Different agents can hold different tools. The researcher gets read-only search; only the executor holds the tool that can send email or touch a database — and that one node is where you attach the <a href="ch062-human-in-the-loop.html">interrupt</a>. A security boundary you can point to in a review beats a paragraph of prompt begging the model to be careful.</li>
+      </ul>
+      <p>Set against those wins, the costs are just as concrete. Every hop through a supervisor is an extra LLM call. Every handoff risks the telephone game — the writer receives a summary of a summary, and the nuance the client actually cared about dies in transit. And debugging stops being "read one transcript" and becomes "reconstruct a conversation between four transcripts". Illustrative round numbers — not benchmarks — to make the trade-off visible:</p>
+
+      <div data-bars data-title="Context carried per LLM call (illustrative round numbers)" data-unit="tokens"
+           data-note="The mega-agent pays its full context on every turn; the team pays a small hub fee per hop plus modest specialist contexts — but makes more calls overall. Where the crossover falls depends entirely on your task.">
+        <div class="bar" data-label="Solo mega-agent, per turn" data-value="12000"></div>
+        <div class="bar" data-label="Supervisor, per routing hop" data-value="900"></div>
+        <div class="bar" data-label="Specialist, per turn" data-value="3500"></div>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The failure mode to watch for in real systems is the org-chart agent team: one agent per department because the diagram looked impressive, each hop adding latency, cost, and a chance to lose information — for a task a single well-tooled agent handled fine. The honest default is one agent until something measurable forces the split: a tool menu the model fumbles, a context that will not fit or visibly degrades quality, or a permission boundary you must be able to point to. Split along <em>those</em> seams, never along job titles.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet subgraphs the moment a LangGraph repo grows past one file: look for <code>compile()</code> calls in modules like <code>research_graph.py</code> whose results get <code>add_node</code>-ed in a top-level <code>team.py</code> or <code>supervisor.py</code>. In merge requests, "extract the retrieval flow into a subgraph" is the agent world's "extract this into a function" — same instinct, one level up. Handoffs appear as tools named <code>transfer_to_*</code> or <code>handoff_to_*</code> in customer-support codebases. And when a colleague at a large bank says "our harness runs a planner that dispatches to worker agents", you can now translate instantly: supervisor pattern, workers as subgraphs, shared messages, isolated scratchpads — and you know exactly which two questions to ask next: what state do the workers share, and who holds the dangerous tools?</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. What makes it possible to use a whole compiled graph as a single node in a bigger graph?</p>
+          <div class="q-opts">
+            <button data-opt="a">A special SubgraphNode class that wraps it</button>
+            <button data-opt="b">Compiling twice, once for each level</button>
+            <button data-opt="c">A compiled graph has the same shape as a node: state in, state updates out</button>
+          </div>
+          <p class="q-explain">No adapter is needed — <code>add_node</code> accepts anything callable with the node contract, and an invoked graph satisfies it. Composition falls out of the design rather than being a bolted-on feature.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. In the supervisor pattern, what does the supervisor actually do?</p>
+          <div class="q-opts">
+            <button data-opt="a">The hardest parts of each specialist's work, to guarantee quality</button>
+            <button data-opt="b">It only decides who works next — and control returns to it after every job</button>
+            <button data-opt="c">It merges the specialists' outputs into the final answer</button>
+          </div>
+          <p class="q-explain">The supervisor routes; it never does specialist work. That is why it can run on a small prompt (often a single structured-output call) and why every worker has an edge leading back to it.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What distinguishes a swarm from a supervisor team?</p>
+          <div class="q-opts">
+            <button data-opt="a">Agents hand the conversation directly to each other; there is no central router, and the receiving agent keeps ownership</button>
+            <button data-opt="b">A swarm uses more agents than a supervisor team</button>
+            <button data-opt="c">Swarm agents share no state at all</button>
+          </div>
+          <p class="q-explain">A swarm is built entirely from peer-to-peer handoffs — the forex officer walking you to compliance. Whoever holds the conversation owns it until they hand off, and the user's next message goes to the current owner, not back through a hub.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Your writer agent keeps producing confused drafts, and you notice the shared state contains forty raw web-page dumps from the researcher. What is the fix?</p>
+          <div class="q-opts">
+            <button data-opt="a">A stronger model for the writer</button>
+            <button data-opt="b">More detailed instructions in the writer's prompt</button>
+            <button data-opt="c">Isolate the researcher's raw work in its own subgraph state and share only distilled notes</button>
+          </div>
+          <p class="q-explain">This is a state-design bug, not a model or prompt problem. Raw tool output belongs in the specialist's private drawer; only the distilled summary belongs in the shared file. Share the conversation, isolate the work.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Which of these is a genuine reason to split one agent into several?</p>
+          <div class="q-opts">
+            <button data-opt="a">Multiple agents are inherently smarter than one</button>
+            <button data-opt="b">Only one agent should hold the dangerous tools, giving you a permission boundary you can point to</button>
+            <button data-opt="c">The architecture diagram looks more impressive with more boxes</button>
+          </div>
+          <p class="q-explain">Permissions — along with context isolation and parallelism — are the three honest wins. More agents mean more LLM calls, more latency, and more places to lose information, so each split must earn its keep against a measurable problem.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A compiled graph is state-in, state-out — the same shape as a node — so graphs compose into bigger graphs with a plain <code>add_node</code>, and "multi-agent" is just "multiple subgraphs".</li>
+          <li>The supervisor pattern is hub-and-spoke: a router agent that only decides who works next, with every worker's edge leading back to it. Predictable, traceable, one extra LLM call per hop.</li>
+          <li>The swarm pattern removes the hub: agents transfer the conversation peer-to-peer via handoff tools, and whoever holds it owns it until the next handoff. Fewer hops, fuzzier accountability.</li>
+          <li>Share the conversation, isolate the work: distilled results go in shared state, raw dumps and scratch work stay in each subgraph's private schema.</li>
+          <li>Multiple agents genuinely beat one for exactly three reasons — context isolation, parallelism, and permission boundaries; absent those, every added agent is added cost, latency, and telephone-game information loss.</li>
+          <li>Because a team is just a graph, everything from this act transfers for free: checkpointing persists team runs, interrupts gate the dangerous specialist, and streaming narrates every hop.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

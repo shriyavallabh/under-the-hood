@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generators and yield — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch038">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IV · Talking to the Model</div>
+        <h1>Generators and yield</h1>
+        <p class="ch-tagline">A function that can pause mid-sentence, hand you one piece, and resume exactly where it stopped. Master this one Python trick and streaming — the typewriter effect you watch every day — stops being magic.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 39 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Every night at nine, a grandmother settles into her chair and continues the great family story — one instalment at a time. She never tells it all in one sitting; nobody could stay awake that long. When the clock strikes ten she stops <em>mid-scene</em> — "and just as the merchant lifted the lid of the box…" — and sends everyone to bed. Here is the remarkable part: the next night she resumes from that exact half-sentence. Not a recap from the beginning. Not roughly where she was. <em>Exactly</em> there — every character's name, every plot thread, every unfinished sentence held perfectly in her head between sittings.</p>
+        <p>Python has a kind of function that works precisely like this grandmother. An ordinary function is a printed book: the whole thing is produced up front and delivered in one heavy lump. This other kind pauses mid-story, hands you tonight's instalment, keeps all its memories, and resumes on request. It is called a <strong>generator</strong>, the pause is spelt <code>yield</code> — and it is the exact mechanism by which an LLM's reply appears on your screen word by word.</p>
+      </section>
+
+      <h2>A function that can pause</h2>
+      <p>Everything you know about functions so far comes from <a href="ch007-functions.html">the functions chapter</a>: you call one, it runs top to bottom, it hits a <code>return</code>, it hands back a value — and then it <em>dies</em>. All its local variables vanish. Call it again and it starts from scratch, remembering nothing. That is the printed-book model: one delivery, then it is over.</p>
+      <p><code>yield</code> changes the deal. A <dfn>generator function</dfn> is any function with the keyword <code>yield</code> in its body — and that single keyword rewires how the whole function behaves. When execution reaches a <code>yield</code>, the function hands out a value <em>and pauses right there</em>, mid-body, with every local variable frozen in place. Ask for the next value and it wakes up on the very next line, memories intact, and runs until it reaches another <code>yield</code>. Return says "here is everything, goodbye". Yield says "here is the next piece, I will wait".</p>
+      <p>There is a second surprise, and it trips up almost everyone once: <em>calling</em> a generator function runs none of its code. Instead it hands you a <dfn>generator</dfn> — a small object that holds the paused function, ready to start. Think of it as the grandmother sitting down in her chair: the story exists, but not a single word has been spoken yet. Code only runs when someone asks for a piece.</p>
+      <p>Words are cheap; proof is better. Run this — and read the output carefully, because the order of the printed lines <em>is</em> the lesson:</p>
+
+      <div class="pyrun" data-title="Watch a function pause — run me">
+<textarea class="py-src" spellcheck="false">
+def three_course_meal():
+    print("  (kitchen) cooking the starter...")
+    yield "starter: tomato soup"
+    print("  (kitchen) starter served. Cooking the main...")
+    yield "main: dal, rice, bhindi"
+    print("  (kitchen) main served. Plating dessert...")
+    yield "dessert: shrikhand"
+    print("  (kitchen) all courses out. Closing up.")
+
+# Calling the function runs NOTHING -- no kitchen sounds yet.
+meal = three_course_meal()
+print("We got a:", type(meal).__name__)
+print()
+
+# Each next() runs the kitchen ONLY as far as the next yield.
+print("SERVED --&gt;", next(meal))
+print("SERVED --&gt;", next(meal))
+print("SERVED --&gt;", next(meal))
+print()
+
+# Ask a fourth time: the function body ends, and Python
+# raises StopIteration -- the polite "kitchen is closed".
+try:
+    next(meal)
+except StopIteration:
+    print("StopIteration: no more courses.")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now break it, gently. Add a fourth <code>yield</code> and see the extra course appear. Move the first <code>print</code> above the function and watch it fire immediately. Comment out the last <code>next(meal)</code> block and note that the closing-up line never prints — a paused generator that is never asked again simply never finishes. Each experiment is thirty seconds and worth a page of theory.</p></div>
+
+      <p>Notice what the output proves. <code>three_course_meal()</code> printed nothing — creating the generator is free. The first <code>next()</code> ran the body <em>only</em> up to the first <code>yield</code>. The second <code>next()</code> resumed on the line after that yield — the kitchen "remembered" it had already served the starter. And when the body finally ran out, Python raised <dfn>StopIteration</dfn> — an exception (remember <a href="ch009-errors-and-tracebacks.html">errors and tracebacks</a>) whose only job is to say "this generator is finished". You will almost never catch it by hand the way we just did, and the next section explains why.</p>
+
+      <h2>What a for loop really does</h2>
+      <p>Here is the payoff of that odd <code>StopIteration</code> ending: it is exactly the signal a <code>for</code> loop listens for. Ever since <a href="ch006-control-flow.html">the control-flow chapter</a> you have written <code>for item in something:</code> without asking how Python actually pulls items out of the <code>something</code>. The answer is a tiny, universal handshake called the <dfn>iteration protocol</dfn> — the agreed set of moves by which any loop asks any object for its next item. Lists, dicts, files, and generators all speak it, which is why one loop syntax works on all of them. Step through the handshake:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Loop begins">
+          <h3>1. The loop asks for an iterator</h3>
+          <div class="diagram">
+            <div class="d-box hot">for loop<small>for course in meal:</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">iter(meal)</div>
+            <div class="d-box dim">generator<small>paused at the top</small></div>
+          </div>
+          <p class="step-cap">Behind the scenes, <code>for</code> first calls <code>iter()</code> on the object to get an <em>iterator</em> — the thing that will actually be asked for items. A generator is already its own iterator, so it just says "that's me".</p>
+        </div>
+        <div class="step" data-title="First ask">
+          <h3>2. The loop calls next()</h3>
+          <div class="diagram">
+            <div class="d-box dim">for loop</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">next()<small>"give me one"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">generator<small>runs to the first yield</small></div>
+          </div>
+          <p class="step-cap">Each turn of the loop is secretly a <code>next()</code> call. The generator's body runs from wherever it was paused until it hits a <code>yield</code>, hands out that value, and freezes again.</p>
+        </div>
+        <div class="step" data-title="Body runs">
+          <h3>3. Your loop body uses the value</h3>
+          <div class="diagram">
+            <div class="d-box hot">for loop<small>course = "starter: tomato soup"</small></div>
+            <div class="d-box dim">next()</div>
+            <div class="d-box dim">generator<small>frozen, locals intact</small></div>
+          </div>
+          <p class="step-cap">While your loop body works with the value, the generator sits paused. No wasted work: piece two is not cooked until someone actually asks for it.</p>
+        </div>
+        <div class="step" data-title="Ask again">
+          <h3>4. Repeat: next(), yield, freeze</h3>
+          <div class="diagram">
+            <div class="d-box dim">for loop</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">next()<small>"another, please"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">generator<small>resumes AFTER the last yield</small></div>
+          </div>
+          <p class="step-cap">The resume point is the line after the previous <code>yield</code>, with every local variable exactly as it was — the grandmother picking up mid-sentence.</p>
+        </div>
+        <div class="step" data-title="Loop ends">
+          <h3>5. StopIteration ends the loop, silently</h3>
+          <div class="diagram">
+            <div class="d-box">generator<small>body finished</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">StopIteration</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">for loop<small>ends cleanly, no error shown</small></div>
+          </div>
+          <p class="step-cap">When the generator's body runs out, <code>next()</code> raises <code>StopIteration</code>. The <code>for</code> loop catches it for you and simply stops. That is the entire reason your loops end gracefully instead of crashing.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>This protocol is why <code>for line in open("agent.log"):</code> works, why <code>for row in cursor:</code> works, and why — in the very next chapters — <code>for chunk in stream:</code> works on a live LLM response. Anything that answers <code>next()</code> and eventually raises <code>StopIteration</code> can be looped over. Generators are just the easiest way to build such a thing yourself.</p></div>
+
+      <h2>The streaming mental model: a sentence, piece by piece</h2>
+      <p>Now the demo this whole chapter has been building towards. When you watch an AI assistant "type" its answer, here is what is actually happening: the server sends the reply in small chunks over a long-lived connection, the SDK wraps those chunks in an iterator, and the chat UI runs a plain <code>for</code> loop — appending each chunk to the screen as it arrives. Producer pauses, consumer asks, producer resumes. It is <em>exactly</em> the generator handshake you just learned.</p>
+      <p>We cannot call a paid streaming API from this page, so — as always in this course — the model is played by a scripted stand-in. The point survives fully: <code>fake_llm_stream</code> below has the same shape as the object a real SDK hands you. Press <strong>Run</strong> and watch a sentence arrive in pieces:</p>
+
+      <div class="pyrun" data-title="A generator streaming a sentence — the mental model for LLM streaming">
+<textarea class="py-src" spellcheck="false">
+def fake_llm_stream(prompt):
+    """Scripted stand-in for a streaming LLM call.
+    A real SDK hands you an iterator shaped just like this."""
+    reply = ("Generators let a function hand out its answer "
+             "piece by piece, pausing between pieces.")
+    for word in reply.split(" "):
+        yield word + " "     # pause here until asked for more
+
+print("PROMPT: explain generators in one line")
+print()
+
+# -- the consumer: what a chat UI does with the stream --
+received = []
+for chunk in fake_llm_stream("explain generators"):
+    received.append(chunk)
+    print("chunk arrived:", repr(chunk))
+
+print()
+print("What the user saw, assembled on screen:")
+print("".join(received))
+</textarea>
+      </div>
+
+      <p>Read the output bottom-up: the finished sentence the user "saw" was never produced in one go. It existed only as thirteen small deliveries, assembled by the consumer. A real streaming response works the same way, just slower — chunks arrive over the network across several seconds, which is precisely why streaming feels alive while a non-streaming call feels like staring at a spinner. Now read the same code the way a reviewer would, line by line:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">fake_llm_stream — the shape of every streaming SDK</div>
+        <div class="wl-line"><code>def fake_llm_stream(prompt):</code>
+          <div class="wl-note">One keyword below makes this a generator function: because <code>yield</code> appears in the body, calling <code>fake_llm_stream(...)</code> runs no code at all — it returns a paused generator, ready to be asked.</div></div>
+        <div class="wl-line"><code>    reply = ("Generators let a function hand out its answer "</code>
+          <div class="wl-note">Our canned "model output". In production this text does not exist up front — chunks arrive from the network as the model produces them. The consumer code cannot tell the difference, which is the whole beauty of the protocol.</div></div>
+        <div class="wl-line"><code>             "piece by piece, pausing between pieces.")</code></div>
+        <div class="wl-line"><code>    for word in reply.split(" "):</code>
+          <div class="wl-note"><code>split</code> chops the sentence into a list of words (<a href="ch003-strings-and-fstrings.html">strings, ch3</a>). Real LLM chunks are token-sized rather than word-sized, but the rhythm is identical.</div></div>
+        <div class="wl-line"><code>        yield word + " "</code>
+          <div class="wl-note">The pause point. Hand out one piece, freeze with the loop position intact, wait to be asked again. Every streaming system you have ever watched is this one line wearing a suit.</div></div>
+        <div class="wl-line"><code>for chunk in fake_llm_stream("explain generators"):</code>
+          <div class="wl-note">The consumer. The <code>for</code> loop drives the generator through the iteration protocol — <code>next()</code>, yield, freeze, repeat — until <code>StopIteration</code> ends it silently. This is the exact line you will write against a real stream object soon.</div></div>
+        <div class="wl-line"><code>    received.append(chunk)</code>
+          <div class="wl-note">Consumers usually do two things per chunk: show it immediately, and accumulate it so the full reply exists at the end (for logging, for the conversation history, for the next agent turn).</div></div>
+      </div>
+
+      <h2>Why not just build the whole list?</h2>
+      <p>Fair question. <a href="ch004-collections.html">Lists</a> have served you well for thirty-seven chapters — why bother with a function that dribbles values out one at a time? Two reasons, and both matter daily in agent work.</p>
+      <p><strong>Reason one: memory.</strong> A list must hold <em>every</em> item at once. A generator holds <em>one</em> — plus a bookmark. This is <dfn>lazy evaluation</dfn>: values are produced only at the moment they are asked for, never stockpiled. For ten items the difference is nothing. For ten million log lines, it is the difference between a script that hums along and one that eats your machine's RAM and gets killed. The numbers below are illustrative round figures, but the shape is honest:</p>
+
+      <div data-bars data-title="Memory held while processing 10 million readings (illustrative)" data-unit="MB"
+           data-note="The list must hold all 10 million items before work begins; the generator holds one item and a bookmark, no matter how long the stream runs.">
+        <div class="bar" data-label="Build the full list first" data-value="400"></div>
+        <div class="bar" data-label="Generator, one piece at a time" data-value="1"></div>
+      </div>
+
+      <p><strong>Reason two: time-to-first-item.</strong> A list-builder must finish <em>everything</em> before you see <em>anything</em>. A generator hands over piece one immediately. That is why streaming an LLM reply feels fast even when the total generation time is identical — the first word lands in half a second instead of the whole answer landing after twenty. You already know this trade-off as a user; now you know its name.</p>
+      <p>You have been using lazy iteration without knowing it. File objects speak the same protocol:</p>
+
+      <div class="code-title">reading a huge log, the lazy way</div>
+      <pre><code class="language-python"># The eager way: pulls the ENTIRE file into memory at once
+lines = open("agent.log").readlines()   # 2 GB file -&gt; ~2 GB of RAM
+
+# The lazy way: the file object is an iterator -- one line at a time
+for line in open("agent.log"):          # ~one line of RAM, total
+    if "ERROR" in line:
+        print(line.rstrip())</code></pre>
+
+      <p>(In real code you would wrap that <code>open</code> in a <code>with</code> block — <a href="ch018-context-managers.html">context managers</a> — so the file closes itself. Kept bare here so the laziness is the only idea on the page.)</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Generators are <strong>single-use</strong>. Once a generator has raised <code>StopIteration</code>, it is exhausted — loop over it a second time and you get <em>nothing</em>, instantly, with no error. If you see a "my loop ran zero times" bug where the data definitely exists, check whether the iterable was a generator that something else already consumed. When you need to go over the data twice, either recreate the generator or collect it into a list first with <code>list(gen)</code> — deliberately paying the memory cost.</p></div>
+
+      <h2>Generator expressions: the lazy sibling of comprehensions</h2>
+      <p>Cast your mind back to <a href="ch008-comprehensions.html">comprehensions</a>: <code>[w.upper() for w in words]</code> — the one-line recipe that builds a whole list. Swap the square brackets for round ones and you get a <dfn>generator expression</dfn> — the same recipe, but lazy: it builds a generator that produces each item on demand instead of a list that holds them all.</p>
+
+      <div class="code-title">brackets decide: eager list or lazy generator</div>
+      <pre><code class="language-python">words = ["stream", "chunk", "token", "yield"]
+
+eager = [w.upper() for w in words]   # list: all 4 exist right now
+lazy  = (w.upper() for w in words)   # generator: nothing computed yet
+
+print(eager)      # ['STREAM', 'CHUNK', 'TOKEN', 'YIELD']
+print(lazy)       # &lt;generator object ...&gt; -- a paused recipe
+
+# Feed a generator expression straight into a consumer:
+total = sum(len(w) for w in words)   # no throwaway list ever built</code></pre>
+
+      <p>That last line is the idiom you will meet constantly in real codebases: <code>sum(...)</code>, <code>max(...)</code>, <code>any(...)</code>, and <code>"".join(...)</code> all happily drink from a generator expression, item by item, without a temporary list ever existing. When the expression is the only argument, you may even drop the inner brackets — <code>sum(len(w) for w in words)</code> — which is why the pattern looks so bare in the wild. If you can read a comprehension, you can read this: same recipe, different delivery schedule.</p>
+
+      <p>Time to pin the vocabulary down. Flip each card until the back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">generator function</span><span class="flip-back">Any function containing yield. Calling it runs no code — it returns a paused generator object instead.</span></button>
+        <button class="flip" type="button"><span class="flip-front">yield</span><span class="flip-back">Hand out one value and pause right here, all local variables frozen. Resume on the next line when asked again.</span></button>
+        <button class="flip" type="button"><span class="flip-front">next()</span><span class="flip-back">The "give me one more" call. Runs the generator from its bookmark to the next yield. A for loop calls it for you on every turn.</span></button>
+        <button class="flip" type="button"><span class="flip-front">StopIteration</span><span class="flip-back">The exception raised when a generator's body finishes. A for loop catches it silently — that is how loops know when to end.</span></button>
+        <button class="flip" type="button"><span class="flip-front">lazy evaluation</span><span class="flip-back">Produce each value only at the moment it is asked for. Costs almost no memory; delivers the first item immediately.</span></button>
+        <button class="flip" type="button"><span class="flip-front">exhausted</span><span class="flip-back">A generator that has finished. Looping over it again yields nothing at all — recreate it or collect it into a list if you need two passes.</span></button>
+      </div>
+
+      <h2>Why this chapter sits exactly here</h2>
+      <p>Look at where you are standing in Act IV. You know what messages look like on the wire, how tool calls come back, how prompts shape behaviour. The very next chapters put you in front of live model responses — and the good ones <em>stream</em>. Over the wire, a streaming response is one long-lived HTTP reply that dribbles out small chunks; every Python SDK wraps that dribble in — you guessed it — an iterator, so that consuming a live model reply is a plain <code>for chunk in stream:</code> loop. Without today's chapter, that line looks like magic. With it, you can see the machinery: a producer pausing at a yield, a consumer calling next, and StopIteration ending things politely when the model finishes.</p>
+      <p>The chapter after next closes the trilogy: <code>async</code> and <code>await</code>, which answer a question you can now phrase precisely — "what should my program do <em>while</em> the generator is paused waiting for the network?" Pause-and-resume is the seed of that idea too; async functions are, under the hood, close cousins of generators. One keyword, an unreasonable amount of leverage.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Search any serious Python codebase for <code>yield</code> and you will find the load-bearing walls. LangChain's <code>.stream()</code> methods hand back exactly this kind of lazy iterator of chunks, consumed with a plain for loop. Web frameworks stream responses by accepting a generator and sending each yielded piece to the browser as it is produced. Data pipelines chain generators so a terabyte flows through a laptop one record at a time. Test suites use yield inside fixtures to run setup, pause for the test, then resume for cleanup. And in a merge request, when someone writes "made the export lazy so it stops loading everything into memory", the diff is usually three characters: a <code>return</code> that became a <code>yield</code>.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. You write <code>stream = fake_llm_stream("hello")</code>, where the function body contains a <code>yield</code>. How much of the function's code has run?</p>
+          <div class="q-opts">
+            <button data-opt="a">All of it — functions run when called</button>
+            <button data-opt="b">Up to and including the first yield</button>
+            <button data-opt="c">None of it — you got a paused generator object</button>
+          </div>
+          <p class="q-explain">Calling a generator function runs zero lines of its body. It returns a generator, frozen at the top. Code only executes when something asks for a value — a <code>next()</code> call or a for loop turn.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. What does <code>yield</code> do that <code>return</code> does not?</p>
+          <div class="q-opts">
+            <button data-opt="a">It hands back multiple values in a single delivery</button>
+            <button data-opt="b">It pauses the function with all local variables intact, so it can resume from that exact spot</button>
+            <button data-opt="c">It makes the function run faster</button>
+          </div>
+          <p class="q-explain">Return ends a function and destroys its locals. Yield suspends it — position and variables frozen — so the next request resumes on the following line, memories intact. That pause-and-resume is the entire trick.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. How does a <code>for</code> loop know when a generator has no more values?</p>
+          <div class="q-opts">
+            <button data-opt="a">The generator raises StopIteration, and the loop catches it silently</button>
+            <button data-opt="b">The generator yields None as a signal</button>
+            <button data-opt="c">The loop counts the items in advance using len()</button>
+          </div>
+          <p class="q-explain">When the generator's body finishes, <code>next()</code> raises <code>StopIteration</code> and the for loop treats that as "we are done" — no error shown. There is no advance count; a generator does not know its own length, which is exactly what lets it be endless or network-fed.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. You loop over a generator once, then loop over the same variable again. What does the second loop see?</p>
+          <div class="q-opts">
+            <button data-opt="a">The same values, replayed from the start</button>
+            <button data-opt="b">A crash with StopIteration shown on screen</button>
+            <button data-opt="c">Nothing — the generator is exhausted, so the loop body runs zero times</button>
+          </div>
+          <p class="q-explain">Generators are single-use. Once exhausted, further loops end immediately and silently — a classic source of "my loop mysteriously did nothing" bugs. Recreate the generator, or collect it with <code>list()</code> if you truly need two passes.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Your script must scan a 2 GB log file for errors on a small machine. Why is <code>for line in open(path):</code> better than <code>open(path).readlines()</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">It is not — readlines is always faster and safer</button>
+            <button data-opt="b">The lazy version holds roughly one line in memory at a time instead of the whole 2 GB</button>
+            <button data-opt="c">readlines cannot handle files that contain errors</button>
+          </div>
+          <p class="q-explain"><code>readlines()</code> builds a full list — the entire file in RAM before any work starts. The file object itself is a lazy iterator: one line at a time, constant memory, and the first line is available immediately.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A generator function — any function containing <code>yield</code> — pauses at each yield with all local state frozen, and resumes exactly there on the next request. Return ends; yield waits.</li>
+          <li>Calling a generator function runs none of its code: it returns a paused generator object. Values are produced only when asked — by <code>next()</code>, or by a for loop calling it for you.</li>
+          <li>The iteration protocol is the universal handshake behind every for loop: get an iterator, call next() per turn, stop silently on StopIteration. Lists, files, and live LLM streams all speak it.</li>
+          <li>Generators beat full lists on memory (one item plus a bookmark, versus everything at once) and on time-to-first-item — the exact reason streaming replies feel fast.</li>
+          <li>Generator expressions are comprehensions with round brackets: the same recipe from <a href="ch008-comprehensions.html">chapter 8</a>, delivered lazily instead of built eagerly.</li>
+          <li>Generators are single-use — an exhausted one silently yields nothing. Recreate it or collect it into a list when you need a second pass.</li>
+          <li>Streaming an LLM reply is this chapter wearing a network cable: the SDK hands you an iterator of chunks, and your code is just <code>for chunk in stream:</code>.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

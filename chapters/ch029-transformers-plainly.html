@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transformers, in plain terms — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch029">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act III · The Data Scientist's World</div>
+        <h1>Transformers, in plain terms</h1>
+        <p class="ch-tagline">The architecture behind every LLM you operate, explained with a meeting room, a stack of knobs, and one very repetitive guessing game — plus the honest truth about "it just predicts the next word".</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 29 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Seven people sit around a meeting-room table. Each holds a card with one word on it: <em>The — server — crashed — because — it — was — overloaded.</em> The facilitator explains the rules: "Nobody leaves until every one of you can say, precisely, what your own word means <em>in this sentence</em>. You may look at everyone else's card. You decide for yourself whose cards matter to yours."</p>
+        <p>The person holding <em>it</em> has the hardest job. Alone, the card is meaningless. So she scans the table: <em>server</em>? Very relevant. <em>crashed</em>? Somewhat. <em>because</em>? Barely. She quietly weighs each colleague's card, blends what she learns, and writes on her own card: "it — almost certainly the server." Around the table, everyone is doing the same thing at the same time — even <em>The</em> is glancing at <em>server</em> to know what it introduces. The facilitator calls time, then grins: "Lovely. Now do it again, using your improved notes." They run the round again. And again. Twelve rounds later, every card carries a rich, situated meaning, and the room as a whole understands the sentence.</p>
+        <p>That meeting is a <strong>transformer</strong>. The glancing-and-weighing is <strong>attention</strong>. Each repeated round is a <strong>layer</strong>. And the reason the room exists at all is a guessing game we will get to shortly.</p>
+      </section>
+
+      <h2>Where the last chapter left us</h2>
+      <p>In <a href="ch028-why-text-broke-ml.html">why text broke classical ML</a>, you watched the old toolkit fail at language: bag-of-words models threw away word order, and models that read strictly left-to-right kept forgetting the start of the sentence by the time they reached the end. The core unsolved problem was <em>context</em> — the meaning of a word depends on other words that may sit far away, in either direction. And from <a href="ch024-what-is-a-model.html">what a model actually is</a>, remember the working definition: a model is just a function full of numbers that were tuned on data rather than typed in by a programmer.</p>
+      <p>This chapter is where those threads meet. In 2017, a research paper with the cheeky title "Attention Is All You Need" proposed an architecture that solved the context problem head-on. Every LLM you have used since — GPT, Claude, the open-weight models your colleagues download — is its descendant.</p>
+
+      <h2>Attention: every word looks at every word</h2>
+      <p><dfn>Attention</dfn> is a mechanism that lets each word in a piece of text look at every other word, score how relevant each one is to itself, and blend in information from the relevant ones — exactly like the people around that meeting table. No word is processed alone, and no word has to wait its turn in a left-to-right queue: the whole table works simultaneously.</p>
+      <p>That simultaneity matters twice. It fixes the forgetting problem — word 900 can look <em>directly</em> at word 3, no whispering chain in between. And it is why transformers took over so fast: all those glances happen as a few giant batches of arithmetic, which is exactly what GPUs — graphics cards repurposed as maths engines — do brilliantly. The old read-one-word-at-a-time models could never use the hardware this well.</p>
+      <p>Watch one attention pass happen, slowly, for the sentence from the story:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Words arrive">
+          <h3>1. The sentence takes its seats</h3>
+          <div class="diagram">
+            <div class="d-box">The</div>
+            <div class="d-box">server</div>
+            <div class="d-box">crashed</div>
+            <div class="d-box">because</div>
+            <div class="d-box">it</div>
+            <div class="d-box">was</div>
+            <div class="d-box">overloaded</div>
+          </div>
+          <p class="step-cap">Each word enters as a bundle of numbers (the next chapter shows exactly how). Right now every word only knows itself — "it" has no idea what it refers to.</p>
+        </div>
+        <div class="step" data-title="'it' asks the room">
+          <h3>2. One word broadcasts its question</h3>
+          <div class="diagram">
+            <div class="d-box dim">The</div>
+            <div class="d-box">server</div>
+            <div class="d-box">crashed</div>
+            <div class="d-box dim">because</div>
+            <div class="d-box hot">it<small>"who am I standing in for?"</small></div>
+            <div class="d-box dim">was</div>
+            <div class="d-box">overloaded</div>
+          </div>
+          <p class="step-cap">Follow the word "it". It effectively asks the whole room a question shaped by what it is — a pronoun hunting for its owner.</p>
+        </div>
+        <div class="step" data-title="The room answers">
+          <h3>3. Every other word gets a relevance score</h3>
+          <div class="diagram">
+            <div class="d-box dim">The<small>0.01</small></div>
+            <div class="d-box good">server<small>0.71</small></div>
+            <div class="d-box">crashed<small>0.09</small></div>
+            <div class="d-box dim">because<small>0.02</small></div>
+            <div class="d-box hot">it</div>
+            <div class="d-box dim">was<small>0.03</small></div>
+            <div class="d-box">overloaded<small>0.14</small></div>
+          </div>
+          <p class="step-cap">"it" compares its question against what every other word offers, producing a relevance score for each (illustrative numbers — the real ones are learned). "server" wins by a mile.</p>
+        </div>
+        <div class="step" data-title="Blend and update">
+          <h3>4. "it" blends what it learned</h3>
+          <div class="diagram">
+            <div class="d-box dim">The</div>
+            <div class="d-box">server</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">it<small>now means "the server", mostly</small></div>
+          </div>
+          <p class="step-cap">The word mixes in information from its neighbours in proportion to those scores — 71% server-flavoured, a dash of overloaded. Its bundle of numbers is rewritten. "it" is no longer a bare pronoun; it carries its referent inside it.</p>
+        </div>
+        <div class="step" data-title="Everyone, at once">
+          <h3>5. Every word did this simultaneously</h3>
+          <div class="diagram">
+            <div class="d-box hot">The</div>
+            <div class="d-box hot">server</div>
+            <div class="d-box hot">crashed</div>
+            <div class="d-box hot">because</div>
+            <div class="d-box hot">it</div>
+            <div class="d-box hot">was</div>
+            <div class="d-box hot">overloaded</div>
+          </div>
+          <p class="step-cap">We followed "it" for clarity, but all seven words asked, scored, and blended in parallel during the same pass. "crashed" was busy absorbing "server" and "overloaded"; even "The" learned what it introduces.</p>
+        </div>
+        <div class="step" data-title="Again, deeper">
+          <h3>6. That was one layer. Now stack them.</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">layer 1<small>grammar, neighbours</small></div>
+              <span class="d-arrow">&#8595;</span>
+              <div class="d-box">layer 12<small>who did what to whom</small></div>
+              <span class="d-arrow">&#8595;</span>
+              <div class="d-box hot">layer 40<small>tone, facts, intent</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The whole meeting runs again on the improved notes, then again — dozens of times. Each round starts from richer input, so later rounds can capture things earlier rounds could not.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>If you ever read a technical write-up, you will meet the words <em>queries, keys, and values</em> — the machinery behind steps 2 to 4. A query is the question a word asks; a key is what each word offers for matching; a value is the information handed over once a match scores well. You do not need the matrix algebra to reason correctly about LLMs — the meeting room is a faithful mental model.</p></div>
+
+      <h2>Layers: running the meeting again and again</h2>
+      <p>A <dfn>layer</dfn> is one complete round of that meeting — every word attends to every word, blends, and updates — followed by a small private "digest what you just heard" step for each word. A transformer is simply many of these layers stacked, so the output of round one becomes the input of round two.</p>
+      <p>Stacking is where depth comes from. Early layers sort out local, mechanical things: adjacency, basic grammar, which noun a pronoun leans towards. Middle layers assemble relationships: who did what to whom. Deep layers deal in abstractions: sentiment, the fact being referenced, sarcasm, genre. None of this division of labour was designed — it emerges from training, and researchers map it after the fact the way biologists map a brain. The models you use daily stack dozens to around a hundred layers.</p>
+
+      <h2>Parameters: billions of learned knobs</h2>
+      <p>Everything in that meeting that involved judgement — how "it" phrases its question, how strongly "server" answers, how the blend is weighted, what each word's private digest step does — is controlled by numbers. These numbers are the model's <dfn>parameters</dfn>: knobs whose settings were learned during training rather than chosen by a human. Recall the definition from <a href="ch024-what-is-a-model.html">what is a model</a> — a function plus learned numbers. A transformer is exactly that, just with an extravagant number of numbers.</p>
+      <p>When your colleagues say "the 7B" or "a 70-billion-parameter model", this is what they are counting: total knobs. More knobs generally means more capacity to store patterns and facts — and more memory and compute to run. Two things trip newcomers up. Parameters are <em>frozen</em> after training: while you chat, no knob moves, and the model learns nothing permanent from your conversation. And no single knob means anything readable — knowledge lives smeared across millions of them at once.</p>
+
+      <div class="viz-tiles">
+        <div class="tile"><div class="tile-label">GPT-2 (2019)</div>
+          <div class="tile-value">1.5 billion</div><div class="tile-delta">parameters — shocking at the time</div></div>
+        <div class="tile"><div class="tile-label">GPT-3 (2020)</div>
+          <div class="tile-value">175 billion</div><div class="tile-delta">roughly 100x in one year</div></div>
+        <div class="tile"><div class="tile-label">Llama 3.1 (2024)</div>
+          <div class="tile-value">405 billion</div><div class="tile-delta">open weights you can download</div></div>
+        <div class="tile"><div class="tile-label">Frontier models</div>
+          <div class="tile-value">undisclosed</div><div class="tile-delta">vendors stopped publishing counts</div></div>
+      </div>
+
+      <h2>Pretraining: one game, played at planetary scale</h2>
+      <p>So far we have an architecture — a meeting room capable of understanding text, with billions of unset knobs. How do the knobs get set? With a game so simple it sounds like a joke.</p>
+      <p><dfn>Pretraining</dfn> is the phase where the model is shown a fragment of real text with the ending hidden, and asked to predict the next <dfn>token</dfn> — a word or word-piece, the model's unit of text (the next chapter is devoted to them). The model guesses, the guess is compared with what actually came next, and every knob is nudged a hair's breadth towards making the right answer more likely. Repeat trillions of times, across a huge slice of the public internet, books, and code, on warehouses of GPUs, for months.</p>
+      <p>Here is the deep trick: <em>the game is trivial to state but brutally hard to play well</em>. To predict the next token of "The capital of France is", you must know a fact. To continue "She placed the flask on the burner and the liquid began to", you need a whiff of physics. To finish a half-written Python function, you must model what the programmer intends. Nobody taught the model grammar, geography, or code — those abilities are what a system is <em>forced to grow</em> when the only way to keep winning the game is to genuinely model the world that produced the text.</p>
+      <p>You can build a laughably small next-token predictor yourself, right now, and feel both the power and the poverty of the idea. This one learns by counting which word follows which in a tiny corpus — no attention, no layers, just bookkeeping with a dict (<a href="ch004-collections.html">ch4</a>):</p>
+
+      <div class="pyrun" data-title="A miniature next-word predictor — run me">
+<textarea class="py-src" spellcheck="false">
+import random
+from collections import defaultdict, Counter
+random.seed(7)
+
+# ---- "Pretraining data": a tiny corpus -------------------
+corpus = """
+the agent read the invoice and the agent paid the invoice
+the agent read the report and the agent filed the report
+the customer read the invoice and the customer paid the agent
+the model read the report and the model wrote a summary
+"""
+words = corpus.split()
+
+# ---- "Training": count what follows each word ------------
+# follows maps word -&gt; Counter of next words. These counts
+# are this toy's entire set of learned "knobs".
+follows = defaultdict(Counter)
+for w, nxt in zip(words, words[1:]):
+    follows[w][nxt] += 1
+
+# ---- A prediction is a PROBABILITY LIST, not one word ----
+def predict(word):
+    counts = follows[word]
+    total = sum(counts.values())
+    return {w: round(c / total, 2) for w, c in counts.most_common()}
+
+print("After 'the'  :", predict("the"))
+print("After 'read' :", predict("read"))
+print("After 'paid' :", predict("paid"))
+
+# ---- "Inference": sample a next word, append, repeat -----
+def generate(start, n=11):
+    out = [start]
+    for _ in range(n):
+        counts = follows[out[-1]]
+        if not counts:
+            break
+        choices, weights = zip(*counts.items())
+        out.append(random.choices(choices, weights=weights)[0])
+    return " ".join(out)
+
+print()
+for _ in range(3):
+    print("Generated:", generate("the"))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Run it, then play. Add your own sentences to the corpus and watch the probabilities shift — that <em>is</em> training, in miniature. Notice the generated text is locally plausible and globally aimless: this toy only ever looks at ONE previous word. A transformer plays the identical game — probability list over next tokens, sample, append, repeat — but its attention layers let every guess consult the <em>entire</em> preceding text. That single upgrade is the difference between this babble and Claude.</p></div>
+
+      <p>Two details from the toy carry over exactly. A model's output is never "the next word" — it is a probability score for <em>every token it knows</em>, and the running system samples from that list (the <em>temperature</em> knob in every API you call controls how adventurously). And generation is a loop: predict one token, append it, feed the whole thing back, predict again. Every fluent paragraph an LLM has ever produced was assembled one token at a time by that loop.</p>
+
+      <h2>From autocomplete to assistant: instruction tuning and RLHF</h2>
+      <p>Pretraining alone produces a <dfn>base model</dfn> — a pure continuation engine that finishes text the way the internet statistically would. Ask a base model "What is the capital of France?" and it may well reply "What is the capital of Germany? What is the capital of Spain?" — because on the internet, that question most often appears in lists of quiz questions. It is not being obtuse; it is doing exactly what it was trained to do. Nothing in pretraining ever said "you are an assistant and this is a question addressed to you".</p>
+      <p>Two further phases close that gap, and both are refreshingly plain once de-jargoned.</p>
+      <p><dfn>Instruction tuning</dfn> is a second, much smaller round of the same next-token training — but on a curated dataset of instruction-and-good-response pairs written or vetted by humans: here is a question and a helpful answer; here is a request to summarise and a good summary. The knobs shift towards a new prior: text shaped like a request should be continued with a <em>fulfilment</em>, not with more requests. Finishing school for an extremely well-read student who has never held a job.</p>
+      <p><dfn>RLHF</dfn> — reinforcement learning from human feedback — polishes further. The model generates several candidate answers to the same prompt; human reviewers rank them; a separate small model learns to predict those rankings; and the main model is then nudged towards answers that stand-in for human taste scores highly. In plain words: the model practises, a learned copy of human preference marks its homework, and the knobs drift towards answers people actually prefer — more helpful, less rambling, more willing to say "I do not know", more likely to refuse harmful requests. When a model politely declines something dangerous, that behaviour came from this phase, not from pretraining.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">transformer</span><span class="flip-back">The neural-network architecture behind all modern LLMs: stacked layers of attention, introduced in 2017. The meeting room, industrialised.</span></button>
+        <button class="flip" type="button"><span class="flip-front">attention</span><span class="flip-back">The mechanism letting every word score every other word for relevance and blend in what matters. Runs for all words in parallel.</span></button>
+        <button class="flip" type="button"><span class="flip-front">layer</span><span class="flip-back">One full round of attend-and-update. Modern models stack dozens to around a hundred; each round builds on the last one's richer notes.</span></button>
+        <button class="flip" type="button"><span class="flip-front">parameter</span><span class="flip-back">One learned knob. "A 70B model" = 70 billion of them. Set during training, frozen during your chat.</span></button>
+        <button class="flip" type="button"><span class="flip-front">pretraining</span><span class="flip-back">The planetary-scale guessing game: predict the next token of real text, nudge the knobs, repeat trillions of times.</span></button>
+        <button class="flip" type="button"><span class="flip-front">base model</span><span class="flip-back">What pretraining alone produces: a continuation engine, not an assistant. Brilliant, unhelpful, direction-less.</span></button>
+        <button class="flip" type="button"><span class="flip-front">instruction tuning</span><span class="flip-back">A small extra round of training on human-curated request-and-good-response pairs. Teaches the model that requests deserve fulfilments.</span></button>
+        <button class="flip" type="button"><span class="flip-front">RLHF</span><span class="flip-back">Humans rank candidate answers; a learned stand-in for their taste then coaches the model towards answers people prefer.</span></button>
+      </div>
+
+      <h2>"It just predicts the next word" — true, and misleading</h2>
+      <p>You will hear this line for the rest of your career, as both a dismissal ("glorified autocomplete") and an explanation. You are now equipped to see how it is both correct and deeply incomplete.</p>
+      <p><strong>How it is true.</strong> Mechanically, yes — everything you watched above is the whole machine. One token at a time, a probability list, a sample, a loop. There is no separate "reasoning module", no database lookup, no inner fact-checker before the words come out. When an LLM confidently invents a court case or an API method that does not exist, this is why: the machinery <em>must</em> emit a next token, and a fluent wrong token can score higher than an awkward true one. Hallucination is not a bug bolted onto the architecture; it is the architecture, operating without a truth check.</p>
+      <p><strong>How it is misleading.</strong> The word "just" is doing fraudulent work. "A grandmaster just moves one chess piece at a time" is also mechanically true — and says nothing about the depth of what selects each move. To predict the next token <em>well</em> across law, code, poetry, and your production incident report, the model was forced to build internal machinery that tracks grammar, referents, facts, and the author's intent — you watched a miniature of it resolve "it" to "server" in the stepper. The prediction is simple; what is computed in order to predict is not. The model you operate is also not the raw predictor: instruction tuning and RLHF have reshaped it. And because each predicted token is fed back in, the loop can lay down a plan in its own output and then follow it — which is what you exploit every time you ask an agent to "think step by step".</p>
+      <p>So when a colleague says "it just predicts the next word", the honest reply is: "True — and to predict it well, it had to learn a compressed model of most things humans write about. The 'just' is where the interesting part hides." It fails in ways no human would (inventing citations with total confidence) and succeeds in ways no earlier software could (reading your half-broken YAML and inferring what you meant). Hold both.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This vocabulary is everywhere once you can hear it. A Hugging Face model card that says "decoder-only transformer, 32 layers, 8B parameters" is telling you: this meeting room stacks 32 rounds and has 8 billion knobs. Model names carry the training story — <code>Llama-3.1-8B</code> is a base model, <code>Llama-3.1-8B-Instruct</code> has been through instruction tuning and preference training; agent harnesses always want the instruct variant. The <code>temperature</code> parameter in every LLM API call you have ever configured controls how adventurously the loop samples from the probability list. And when a data scientist says "we can't fine-tune the frontier model, we only have API access", they mean: the knobs are frozen and behind someone else's wall — which is why your team steers behaviour with prompts and tools instead.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. In an attention pass, what does each word actually do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Waits for the word before it to pass along a summary</button>
+            <button data-opt="b">Looks only at the words immediately next to it</button>
+            <button data-opt="c">Scores every other word for relevance and blends in the relevant ones — all words doing this simultaneously</button>
+          </div>
+          <p class="q-explain">Every word looks at every word, in parallel — the meeting room. That is what fixed the forgetting problem of left-to-right models and what made transformers a perfect fit for GPUs.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. A colleague mentions "the 70B model". What are they counting?</p>
+          <div class="q-opts">
+            <button data-opt="a">Tokens of training data</button>
+            <button data-opt="b">Learned parameters — the knobs whose values were set during training</button>
+            <button data-opt="c">Layers in the network</button>
+          </div>
+          <p class="q-explain">Parameter count = number of learned knobs. Layers are counted in the dozens, training tokens in the trillions — 70 billion is the knobs. And they stay frozen while you chat.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What single task does pretraining optimise, across its entire mountain of text?</p>
+          <div class="q-opts">
+            <button data-opt="a">Predict the next token of a text fragment</button>
+            <button data-opt="b">Answer questions helpfully and safely</button>
+            <button data-opt="c">Classify each document by topic</button>
+          </div>
+          <p class="q-explain">Only next-token prediction. Helpfulness and safety come later, from instruction tuning and RLHF — which is why a raw base model answers a question with more questions.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Why does a base model reply to "What is the capital of France?" with more quiz questions instead of "Paris"?</p>
+          <div class="q-opts">
+            <button data-opt="a">It does not contain the fact that Paris is the capital</button>
+            <button data-opt="b">Its safety training blocks geography answers</button>
+            <button data-opt="c">It is continuing the statistically likely pattern — such questions usually appear in lists, and nothing taught it to treat text as a request addressed to it</button>
+          </div>
+          <p class="q-explain">The fact is in there (it helps win the guessing game), but a base model is a continuation engine. Instruction tuning is what installs "a request should be continued with a fulfilment".</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. "It just predicts the next word" — what is the strongest honest correction to the "just"?</p>
+          <div class="q-opts">
+            <button data-opt="a">Actually, modern models retrieve answers from a built-in database first</button>
+            <button data-opt="b">Predicting well forced the model to learn internal machinery for grammar, referents, and facts — the prediction is simple, what is computed to make it is not</button>
+            <button data-opt="c">Actually, models predict whole paragraphs at once</button>
+          </div>
+          <p class="q-explain">The mechanism really is one token at a time with no database and no inner fact-checker — that part is true, and it is why hallucination exists. The misleading part is "just": playing the game well required learning a compressed model of what humans write about.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A transformer is a meeting room: attention lets every word score and blend information from every other word, all in parallel — which fixed context and suited GPUs perfectly.</li>
+          <li>Layers are repeated rounds of that meeting; early rounds capture grammar, deeper rounds capture relationships, facts, and tone. Modern models stack dozens to around a hundred.</li>
+          <li>Parameters are the billions of learned knobs controlling every score and blend — set during training, frozen while you chat, meaningless individually.</li>
+          <li>Pretraining is next-token prediction at planetary scale: a trivial game that can only be won by internally modelling the world that produced the text.</li>
+          <li>Pretraining yields a continuation engine, not an assistant; instruction tuning teaches it to fulfil requests, and RLHF steers it towards answers humans prefer.</li>
+          <li>"It just predicts the next word" is mechanically true — hallucination included — and strategically misleading: the depth lives in what must be computed to predict well.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

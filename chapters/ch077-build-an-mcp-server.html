@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build an MCP server — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch077">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IX · MCP and Agent Protocols</div>
+        <h1>Build an MCP server</h1>
+        <p class="ch-tagline">Two decorators, four type hints, one docstring — and any AI host on Earth can call your code. This is the shortest production-grade integration you will ever write, and you already learned every ingredient chapters ago.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 78 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Meena makes the best lemon pickle in her neighbourhood, and three delivery apps want it. Each app demands its own onboarding: one wants forms in triplicate, another a phone interview, the third insists on its own packaging labels. Three integrations for one pickle. She gives up. Then the market association introduces the <em>standard kitchen window</em>: one spec for every home kitchen in the city. Mount the standard hatch, clip in a menu card that lists each dish — its name, what a rider must specify when ordering (jar size, spice level), and a one-line description — and any app that speaks "window" can order from her. She never meets a single app engineer. Best of all, the hatch ships as a window-in-a-box: she screws it to the frame, clips her existing recipe cards into the menu slot, and she is live before lunch.</p>
+        <p>In the previous chapter you toured these windows from the street side — what tools, resources, and prompts look like to the apps knocking on them. Today you cross to Meena's side of the hatch and build one. Your Python functions are the recipes. <strong>FastMCP</strong> is the window-in-a-box. And the menu card, delightfully, writes itself — from labels you already learned to put on your functions back in the type-hints and decorators chapters.</p>
+      </section>
+
+      <h2>You already know both tricks</h2>
+      <p>Quick recap, because this chapter is really a reunion. In <a href="ch017-decorators.html">the decorators chapter</a> you learned that a decorator is a function that takes your function, does something useful with it — wraps it, registers it, times it — and hands it back, and that the <code>@name</code> line above a <code>def</code> is just tidy syntax for that handoff. You also met the decorator <em>factory</em>: <code>@app.route("/home")</code> style, where the trailing brackets mean "call this first, get the real decorator back". In <a href="ch016-type-hints-and-pydantic.html">the type-hints chapter</a> you learned that annotations like <code>amount: float</code> are machine-readable labels — Python does not enforce them, but libraries such as Pydantic read them at runtime to build validators and schemas. Two chapters, one punchline each: <em>decorators register, hints describe</em>.</p>
+      <p>FastMCP is what happens when someone combines those two punchlines with a wire protocol. You write an ordinary function with type hints and a docstring. You put <code>@mcp.tool()</code> above it. The decorator registers the function in a catalogue, reads the hints and the docstring, and generates the JSON schema that any <dfn>MCP host</dfn> — the application driving the model, such as Claude Code or a desktop chat app — will use as the tool's menu entry. There is no separate integration file. Your function's own labels <em>are</em> the integration.</p>
+      <p>One more recall before we build: from <a href="ch035-tool-calling.html">tool calling</a> and <a href="ch046-tools.html">the tools chapter</a>, remember that a model never executes anything — it emits a request, and code outside the model runs the real function. MCP does not change that physics. It just standardises the plumbing between the host that holds the model and the process that holds your functions, so the two can be written by strangers.</p>
+
+      <h2>The whole server — nineteen lines</h2>
+      <p>Here is a complete, real MCP server: a little finance desk with two tools, GST and loan EMI. Not a sketch, not pseudocode — save this as <code>gst_server.py</code> on a machine with <code>pip install "mcp[cli]"</code> done (that installs the official MCP Python SDK plus its command-line helpers), and every claim in the rest of this chapter works on it. Click the annotated lines; make each one boring to you.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">gst_server.py — the entire server</div>
+        <div class="wl-line"><code>from mcp.server.fastmcp import FastMCP</code>
+          <div class="wl-note">The official MCP Python SDK. <code>FastMCP</code> is its high-level, decorator-driven front door — there is a lower-level API underneath for exotic cases, and you will probably never need it.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>mcp = FastMCP("finance-desk")</code>
+          <div class="wl-note">One object is your whole server. The string is the server's name — it is what hosts display in their tool menus and logs, so pick something a teammate would recognise, not <code>test123</code>.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>@mcp.tool()</code>
+          <div class="wl-note">The decorator factory from <a href="ch017-decorators.html">ch17</a> — note the brackets: calling it returns the real decorator. It registers the function in the server's catalogue and generates its schema from the hints and docstring below. The function comes back unchanged, so your tests can still call <code>gst(1500)</code> directly.</div></div>
+        <div class="wl-line"><code>def gst(amount: float, rate: float = 0.18) -&gt; float:</code>
+          <div class="wl-note">The hints from <a href="ch016-type-hints-and-pydantic.html">ch16</a> do double duty here: they document the function for humans AND become the JSON schema for machines. <code>rate</code> has a default, so the schema marks it optional; <code>amount</code> has none, so it lands in the schema's <code>required</code> list.</div></div>
+        <div class="wl-line"><code>    """Calculate the GST due on an invoice amount.</code>
+          <div class="wl-note">The docstring becomes the tool's description — the sentence the <em>model</em> reads when deciding whether to call this tool. Write it for that reader: say what the tool does and when to use it. A lazy docstring here is a tool the model will misuse or ignore.</div></div>
+        <div class="wl-line"><code>    rate is a fraction: 0.18 means 18 percent."""</code>
+          <div class="wl-note">Spell out unit conventions. "Is rate 18 or 0.18?" is exactly the kind of ambiguity that makes a model pass garbage arguments.</div></div>
+        <div class="wl-line"><code>    return round(amount * rate, 2)</code>
+          <div class="wl-note">A plain return. FastMCP serialises whatever you return — strings, numbers, dicts, lists — into protocol content and ships it back to the host, where it re-enters the model's context as a tool result.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>@mcp.tool()</code>
+          <div class="wl-note">Growing the server costs exactly one decorated function per tool. No registry file to edit, no schema to hand-write, no config to touch.</div></div>
+        <div class="wl-line"><code>def emi(principal: float, annual_rate: float, months: int) -&gt; float:</code></div>
+        <div class="wl-line"><code>    """Monthly EMI for a loan (reducing-balance method)."""</code></div>
+        <div class="wl-line"><code>    r = annual_rate / 12</code>
+          <div class="wl-note">The body is ordinary Python — nothing MCP-flavoured about it. Whatever your team's real logic is (query a database, call an internal API, read a spreadsheet), it goes here unchanged.</div></div>
+        <div class="wl-line"><code>    return round(principal * r * (1 + r) ** months</code></div>
+        <div class="wl-line"><code>                 / ((1 + r) ** months - 1), 2)</code></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>if __name__ == "__main__":</code>
+          <div class="wl-note">The main guard from <a href="ch011-imports-and-modules.html">ch11</a>: this block runs only when the file is executed as a script — which is precisely how a host will launch it — and not when it is imported by your tests.</div></div>
+        <div class="wl-line"><code>    mcp.run()</code>
+          <div class="wl-note">Starts serving and blocks forever, waiting for a host to talk to it. With no arguments it uses the <strong>stdio</strong> transport — JSON-RPC messages over stdin and stdout. For a networked server you would write <code>mcp.run(transport="streamable-http")</code> instead; same tools, different wire.</div></div>
+      </div>
+
+      <p>That is the whole thing. Count the lines that are actually about MCP rather than about GST: the import, the <code>FastMCP(...)</code> line, two decorators, and <code>mcp.run()</code>. Five lines of protocol, fourteen lines of your business logic. That ratio is the entire sales pitch.</p>
+
+      <h2>Where the menu card comes from</h2>
+      <p>When a host asks this server "what have you got?", the server answers with a schema per tool. You never wrote it; the decorator derived it. Here is what <code>gst</code>'s entry looks like on the wire (trimmed for readability):</p>
+
+      <div class="code-title">what the host receives for gst — generated, not written</div>
+      <pre><code class="language-json">{
+  "name": "gst",
+  "description": "Calculate the GST due on an invoice amount.\nrate is a fraction: 0.18 means 18 percent.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "amount": { "type": "number" },
+      "rate":   { "type": "number", "default": 0.18 }
+    },
+    "required": ["amount"]
+  }
+}</code></pre>
+
+      <p>Trace every field back to the source: <code>name</code> is the function name, <code>description</code> is the docstring, each property's type comes from a hint (Python's <code>float</code> maps to JSON Schema's <code>number</code>), and <code>required</code> holds exactly the parameters without defaults. If this shape looks familiar, it should — it is the same schema-for-tools idea you met in <a href="ch035-tool-calling.html">tool calling</a> and the same describe-data-with-JSON-Schema machinery from <a href="ch036-structured-output.html">structured output</a>. MCP did not invent a new wheel; it standardised who sends the wheel to whom.</p>
+      <p>Feels like magic? It is about thirty lines of <code>inspect</code>. Prove it to yourself: below is a toy FastMCP built from nothing but the standard library — a class with a decorator factory that reads annotations and docstrings, exactly like the real one. Press <strong>Run</strong>, then play the host.</p>
+
+      <div class="pyrun" data-title="Build a toy FastMCP — see the schema write itself">
+<textarea class="py-src" spellcheck="false">
+# A toy FastMCP from stdlib parts -- to prove there is no magic.
+import inspect, json
+
+TYPE_MAP = {"float": "number", "int": "integer",
+            "str": "string", "bool": "boolean"}
+
+class ToyMCP:
+    def __init__(self, name):
+        self.name = name
+        self.tools = {}                 # tool name : (function, schema)
+
+    def tool(self):                     # decorator FACTORY (ch17)
+        def register(fn):
+            props, required = {}, []
+            sig = inspect.signature(fn)
+            for pname, param in sig.parameters.items():
+                hint = fn.__annotations__.get(pname, str)   # ch16 labels
+                props[pname] = {"type": TYPE_MAP.get(hint.__name__,
+                                                     "string")}
+                if param.default is inspect.Parameter.empty:
+                    required.append(pname)
+            schema = {"name": fn.__name__,
+                      "description": (fn.__doc__ or "").strip(),
+                      "inputSchema": {"type": "object",
+                                      "properties": props,
+                                      "required": required}}
+            self.tools[fn.__name__] = (fn, schema)
+            return fn                   # hand the function back unchanged
+        return register
+
+mcp = ToyMCP("finance-desk")
+
+@mcp.tool()
+def gst(amount: float, rate: float = 0.18) -&gt; float:
+    """GST due on an invoice amount. rate is a fraction, 0.18 = 18%."""
+    return round(amount * rate, 2)
+
+# ---- Now play the host. First request: show me the menu. ----
+print("HOST asks: tools/list")
+for _fn, schema in mcp.tools.values():
+    print(json.dumps(schema, indent=2))
+
+# ---- Second request: place an order. -------------------------
+print()
+print("HOST asks: tools/call gst with {'amount': 50000}")
+fn, _schema = mcp.tools["gst"]
+print("SERVER answers:", fn(amount=50000))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it the useful way. Add a third parameter with no type hint and rerun — watch it fall back to <code>"string"</code> and imagine a model sending you text where you expected a number. Delete the docstring and look at the empty description a host would show. Every sloppy label you leave on a real tool becomes a wrong argument in a production transcript later.</p></div>
+
+      <h2>What mcp.run() actually starts</h2>
+      <p>The default transport, <dfn>stdio</dfn>, means the host launches your script as a subprocess and speaks JSON-RPC 2.0 — a simple request/response format in JSON — over the pipes every process already owns: standard input and standard output. No port, no URL, no firewall ticket. Your server is not "running somewhere"; it is started fresh by the host, lives for the session, and dies with it. Step through what happens the moment a host boots your file:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Launch">
+          <h3>1. The host launches your script</h3>
+          <div class="diagram">
+            <div class="d-box hot">Host<small>reads its config, spawns: python gst_server.py</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Your server<small>subprocess, pipes connected</small></div>
+          </div>
+          <p class="step-cap">The host finds your server in its config and starts it as a child process, holding both ends of its stdin/stdout pipes. This happens at session start, before any model is involved.</p>
+        </div>
+        <div class="step" data-title="Handshake">
+          <h3>2. Initialize: the polite hello</h3>
+          <div class="diagram">
+            <div class="d-box">Host</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Your server<small>"initialize" — versions and capabilities exchanged</small></div>
+          </div>
+          <p class="step-cap">Client and server agree on protocol version and declare what they support — this one does tools; others also offer resources and prompts. FastMCP answers this for you; you wrote none of it.</p>
+        </div>
+        <div class="step" data-title="Menu">
+          <h3>3. tools/list: the menu goes over</h3>
+          <div class="diagram">
+            <div class="d-box">Host</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Your server<small>gst + emi, schemas generated from hints and docstrings</small></div>
+          </div>
+          <p class="step-cap">The host asks for the catalogue and your server replies with the schemas you saw above. The host folds them into the model's available tools — Meena's menu card is now pinned inside every restaurant.</p>
+        </div>
+        <div class="step" data-title="The model asks">
+          <h3>4. Mid-conversation, the model wants GST</h3>
+          <div class="diagram">
+            <div class="d-box">User<small>"Tax on the 50,000 invoice?"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Model<small>emits a call: gst(amount=50000)</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Host</div>
+          </div>
+          <p class="step-cap">This is the tool-calling handshake from <a href="ch035-tool-calling.html">ch35</a>, unchanged: the model produces a structured request, and something else must run it. That something is the host — which now knows exactly whose window to knock on.</p>
+        </div>
+        <div class="step" data-title="Your code runs">
+          <h3>5. tools/call: your function finally executes</h3>
+          <div class="diagram">
+            <div class="d-box">Host<small>tools/call gst {"amount": 50000}</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Your server<small>returns 9000.0</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Model<small>sees the result as an observation</small></div>
+          </div>
+          <p class="step-cap">The host forwards the call over stdio, FastMCP validates the arguments against the schema, your Python runs, and the return value travels back into the model's context. The <a href="ch045-react-loop-by-hand.html">ReAct loop</a> ticks on — your server just played the "tools" box in that diagram.</p>
+        </div>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The classic way to kill a stdio server is <code>print("got here")</code>. Stdout is not a debug console any more — it is the protocol wire, and one stray line of non-JSON corrupts the stream, usually surfacing as the host reporting the server "failed to connect" or "returned an invalid response". Debug to <em>stderr</em> instead, ideally with the <code>logging</code> module from <a href="ch019-logging-config-env.html">ch19</a> — hosts typically collect a stdio server's stderr into their own logs, which is exactly where you want your breadcrumbs.</p></div>
+
+      <h2>Plug it into a real host: Claude Code</h2>
+      <p>A server nobody has registered is a kitchen window on a street no rider walks down. Registration is host configuration, not code. In Claude Code it is one command from your project directory:</p>
+
+      <div class="code-title">terminal — register the server, then verify</div>
+      <pre><code class="language-bash">claude mcp add finance-desk -- python /absolute/path/to/gst_server.py
+claude mcp list</code></pre>
+
+      <p>Everything after the <code>--</code> is the launch command — the exact subprocess the host will spawn in step 1 of the stepper above. Claude Code stores this at one of three scopes: <em>local</em> (default — just you, just this project), <em>user</em> (you, everywhere), or <em>project</em>, which writes a <code>.mcp.json</code> file at the repo root so the whole team inherits the server when they pull. That file is worth recognising on sight, because you will meet it in real repositories constantly:</p>
+
+      <div class="code-title">.mcp.json — project-scope registration, committed to the repo</div>
+      <pre><code class="language-json">{
+  "mcpServers": {
+    "finance-desk": {
+      "command": "python",
+      "args": ["/absolute/path/to/gst_server.py"]
+    }
+  }
+}</code></pre>
+
+      <p>Inside a Claude Code session, the <code>/mcp</code> command shows each configured server's connection status and its tools. Other hosts differ only in where this block lives — the desktop Claude app has a settings JSON with the same <code>mcpServers</code> shape — and that is rather the point of a standard: your nineteen lines did not change between hosts, only one config entry did.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Use absolute paths and the <em>right</em> Python. The host spawns your server with the command you gave it, from its own working directory, with no idea that your project has a virtual environment (<a href="ch020-environments-and-packaging.html">ch20</a>). "Works when I run it, fails when the host does" is almost always a relative path or a system Python that has never heard of the <code>mcp</code> package — point <code>command</code> at your venv's interpreter and the mystery evaporates.</p></div>
+
+      <h2>Test it before any model touches it</h2>
+      <p>You would not hand a new tool to an intern without trying it yourself first; do not hand one to a model that way either. The <dfn>MCP Inspector</dfn> is the official test bench — a small local web app that connects to your server, lists its tools, and lets <em>you</em> call them by hand, with no LLM anywhere in the loop. The SDK's CLI launches it in one line:</p>
+
+      <div class="code-title">terminal — open the test bench</div>
+      <pre><code class="language-bash">mcp dev gst_server.py</code></pre>
+
+      <p>That command boots your server, starts the Inspector, and prints a localhost URL. Open it and the session looks like this:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Connect">
+          <h3>1. The connect screen</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Transport<small>STDIO</small></div>
+              <div class="d-box">Command<small>python gst_server.py</small></div>
+              <div class="d-box hot">Connect<small>button</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The left panel shows how the Inspector will reach your server — transport and launch command, prefilled by <code>mcp dev</code>. Click Connect and the initialize handshake from the previous stepper runs before your eyes.</p>
+        </div>
+        <div class="step" data-title="List tools">
+          <h3>2. The menu, as a host sees it</h3>
+          <div class="diagram">
+            <div class="d-box dim">Resources</div>
+            <div class="d-box dim">Prompts</div>
+            <div class="d-box hot">Tools<small>gst · emi</small></div>
+          </div>
+          <p class="step-cap">The Tools tab fires a real <code>tools/list</code> and renders the reply: both tools, each with the description your docstring produced. If a description reads badly here, it reads badly to every model forever — fix the docstring now.</p>
+        </div>
+        <div class="step" data-title="Fill the form">
+          <h3>3. A form grown from your type hints</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">amount<small>50000</small></div>
+              <div class="d-box">rate<small>0.18 (optional)</small></div>
+              <div class="d-box">Run Tool<small>button</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Select <code>gst</code> and the Inspector builds an input form directly from the generated schema — a number field per <code>float</code> hint, the optional one marked optional. Your annotations just became a user interface.</p>
+        </div>
+        <div class="step" data-title="Run it">
+          <h3>4. The result, no model involved</h3>
+          <div class="diagram">
+            <div class="d-box">tools/call<small>gst, amount=50000</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Result<small>9000.0</small></div>
+          </div>
+          <p class="step-cap">Run Tool sends a genuine <code>tools/call</code> and shows the response. Green result, correct number: your server is provably working before an LLM ever gets an opinion about it. Debugging "is my server broken or is the model confused?" is now two separate, answerable questions.</p>
+        </div>
+      </div>
+
+      <p>One habit worth stealing from experienced MCP authors: Inspector first, host second, model last. Most "the agent can't use my server" reports collapse at step one (server crashes on launch — check stderr), a few at step two (tool missing or badly described), and only the rare remainder are genuinely about the model.</p>
+
+      <h2>Beyond tools: the same trick, twice more</h2>
+      <p>Tools are the star, but the previous chapter's other two primitives are built the same way in FastMCP: <code>@mcp.resource(...)</code> exposes read-only data at a URI, and <code>@mcp.prompt()</code> exposes a reusable prompt template — each just a decorated, hinted, docstringed function. Newer spec additions such as tasks and elicitation extend the protocol further; hosts are still catching up to those, so treat them as ones to watch rather than ones to build on today. The mental model does not change: functions in, standard window out.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this pattern everywhere now that you can see it. A <code>.mcp.json</code> at a repo root means "this project ships team-wide MCP servers" — open it and read the launch commands. A file named <code>server.py</code> containing <code>FastMCP(</code> and a handful of <code>@mcp.tool()</code> functions is the standard shape of "we wrapped our internal API for the agents" at any large company — a bank wrapping its ticketing system, a retailer wrapping inventory lookups. On PyPI and npm, packages named <code>mcp-server-something</code> are exactly this chapter published for strangers. And when a colleague ends a debate with "just expose it as an MCP server", you now know they are proposing roughly nineteen lines, and you could have a draft up before the meeting ends.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. You put <code>@mcp.tool()</code> above a typed, docstringed function. Where does the JSON schema that hosts receive come from?</p>
+          <div class="q-opts">
+            <button data-opt="a">You must write it by hand in a separate schema file</button>
+            <button data-opt="b">The decorator reads the type hints and docstring and generates it</button>
+            <button data-opt="c">The model infers it from the function name at call time</button>
+          </div>
+          <p class="q-explain">FastMCP inspects the function at registration time: hints become property types, defaults decide what is required, the docstring becomes the description. Your labels are the integration — which is why sloppy hints and lazy docstrings turn directly into bad tool calls.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Your stdio server worked yesterday. Today, after you added <code>print("got here")</code> for debugging, the host says it failed to connect. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">print() is too slow and the handshake timed out</button>
+            <button data-opt="b">print() only works when a terminal is attached</button>
+            <button data-opt="c">Stdout is the protocol channel — stray text corrupts the JSON-RPC stream</button>
+          </div>
+          <p class="q-explain">In a stdio server, stdout carries the wire protocol. One line of non-JSON breaks the host's parser. Send debug output to stderr — for example with the logging module — where hosts collect it harmlessly.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What does <code>claude mcp add finance-desk -- python gst_server.py</code> actually arrange?</p>
+          <div class="q-opts">
+            <button data-opt="a">The host will spawn that exact command as a subprocess each session and speak MCP to it over stdin/stdout</button>
+            <button data-opt="b">Your code is uploaded to the model provider's servers and runs there</button>
+            <button data-opt="c">The tools are converted into built-in host commands and the script is no longer needed</button>
+          </div>
+          <p class="q-explain">Registration is just recorded launch instructions. Your code never leaves your machine; the host runs it locally as a child process and the model reaches it only through the protocol — via the host.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. What is the MCP Inspector for?</p>
+          <div class="q-opts">
+            <button data-opt="a">Monitoring token spend across your MCP servers</button>
+            <button data-opt="b">Listing and calling your server's tools yourself, with no model, to verify it works before wiring it to a host</button>
+            <button data-opt="c">A mandatory proxy that must run in front of every production server</button>
+          </div>
+          <p class="q-explain">The Inspector is a local test bench: it speaks real MCP to your server and lets you fire tools/list and tools/call by hand. It splits "is my server broken?" from "is the model confused?" — two very different bugs.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. What does <code>mcp.run()</code> with no arguments do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Executes each registered tool once as a warm-up check</button>
+            <button data-opt="b">Starts an HTTP server on a default port</button>
+            <button data-opt="c">Blocks and serves the MCP protocol over stdio until the host disconnects</button>
+          </div>
+          <p class="q-explain">No arguments means the stdio transport: the process sits waiting on stdin for a host's messages and answers on stdout, for as long as the session lives. The networked alternative is opt-in: <code>mcp.run(transport="streamable-http")</code>.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>An MCP server is your ordinary Python functions plus FastMCP — about twenty lines buys a real server that any MCP host can discover and call.</li>
+          <li><code>@mcp.tool()</code> is the decorator pattern from ch17 doing registration, and the type hints from ch16 doing description: hints become the schema's types, defaults decide what is required, and the docstring becomes the description the model reads.</li>
+          <li><code>mcp.run()</code> defaults to stdio: the host launches your script as a subprocess and speaks JSON-RPC over stdin/stdout — so never print to stdout in a stdio server; log to stderr instead.</li>
+          <li>Registration is host configuration, not code: <code>claude mcp add</code> or a <code>.mcp.json</code> with an <code>mcpServers</code> block records the launch command; use absolute paths and the right interpreter.</li>
+          <li>Test with the MCP Inspector (<code>mcp dev server.py</code>) before any model is involved — list the tools, call them with real arguments, read the descriptions a host will see.</li>
+          <li>The same decorated-function trick extends to resources and prompts, so you now hold the builder's side of the previous chapter's entire trio.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

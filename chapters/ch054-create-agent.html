@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>create_agent: the packaged loop — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch054">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VI · LangChain</div>
+        <h1>create_agent: the packaged loop</h1>
+        <p class="ch-tagline">Three arguments in, one working agent out. This chapter opens the back panel of LangChain's ReAct-in-a-box and shows you that every part inside is a part you already built with your own hands in chapter 45.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 55 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>For three weekends you built a washing machine in your garage. A plastic drum, a scavenged motor, a kitchen timer, and a tangle of wiring you soldered yourself. It worked — and you understood every wire, because you had bent every wire. Then last Sunday you walked into an appliance showroom. On the floor sat a gleaming machine: sealed white body, one dial, three buttons. The salesman listed features — auto-restart after a power cut, a child lock, a drum that adjusts its spin to the load. You asked him to open the back panel. And there it was: a drum, a motor, a timer. Bigger, better mounted, properly earthed — but the very same three parts you bolted together in your garage. You did not feel cheated. You felt fluent. You could read that machine, because you had built its ancestor.</p>
+        <p>In <a href="ch045-react-loop-by-hand.html">chapter 45</a> you built the drum, the motor, and the timer of an agent: a history list, a model call, a turn cap. LangChain's <code>create_agent</code> is the showroom machine. Today we open the back panel together.</p>
+      </section>
+
+      <h2>Three arguments, one agent</h2>
+      <p>Quick recap of what you hand-built in <a href="ch045-react-loop-by-hand.html">the ReAct-loop chapter</a>, because this whole chapter is a mirror held up to it. You wrote a <code>fake_llm()</code> stand-in for the model, a <code>TOOLS</code> dict mapping names to functions, string parsing that fished <code>ACTION:</code> lines out of the reply, a history list that grew turn by turn, and a <code>max_turns</code> cap so a confused model could not loop forever. Fifty lines, and it worked. Then in <a href="ch053-langchain-tools.html">the previous chapter</a> you upgraded the tools: the <code>@tool</code> decorator turned plain functions into objects carrying a name, a description, and an argument schema the model can read.</p>
+      <p>Now LangChain collapses your remaining forty lines into one call:</p>
+
+      <div class="code-title">billing_agent.py</div>
+      <pre><code class="language-python">from langchain.agents import create_agent
+
+agent = create_agent(
+    model="anthropic:claude-sonnet-4-5",
+    tools=[calculate, lookup_invoice],
+    system_prompt="You are a precise billing assistant.",
+)
+
+result = agent.invoke(
+    {"messages": [{"role": "user",
+                   "content": "What is 20% GST on invoice INV-42?"}]}
+)
+
+print(result["messages"][-1].content)</code></pre>
+
+      <p>Read the three arguments and notice you already know all of them. The <code>model</code> is the brain — here named by a provider string, though you can also pass a model object built with <code>init_chat_model</code> from <a href="ch052-messages-and-models.html">chapter 52</a>. The <code>tools</code> are the <code>@tool</code>-decorated functions from <a href="ch053-langchain-tools.html">chapter 53</a> — your <code>TOOLS</code> dict, reborn as a list. The <code>system_prompt</code> is the standing instruction sheet you used to teach the protocol by hand. Loop, parser, registry, stop condition, turn cap: all of it now lives inside <code>create_agent</code>.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Older tutorials — and there are thousands of them — teach <code>initialize_agent</code> or <code>AgentExecutor</code>. Those are the legacy pre-1.0 APIs and are not how agents are built any more. If a blog post imports either of those names, it is describing a previous era; close the tab and check the current docs. The modern entry point is <code>create_agent</code>, full stop.</p></div>
+
+      <h2>What comes back: a compiled graph</h2>
+      <p>Here is the one genuinely new idea in this chapter. <code>create_agent</code> does not return a function, and not quite an ordinary object either. It returns a <dfn>compiled graph</dfn> — a small flowchart of nodes and edges, pre-wired and ready to run, built on LangGraph, the engine you will meet properly in <a href="ch057-why-graphs.html">Act VII</a>. You do not need graph theory today. You need exactly two facts.</p>
+      <p>First: the graph has two working nodes. A <dfn>model node</dfn> — the step that calls the LLM with the system prompt, the conversation so far, and the tool schemas — and a <dfn>tools node</dfn> — the step that executes whatever tool calls the model requested. An edge from the tools node loops back to the model node, and a <dfn>conditional edge</dfn> — a fork that picks its route by inspecting the model's reply — decides after every model turn: tool calls present, go to the tools node; no tool calls, finish. Think, act, observe. It is your loop, drawn as a diagram instead of written as a <code>for</code> statement.</p>
+      <p>Second: because it is a compiled graph, you talk to it through the graph interface. You <code>invoke</code> it with a dictionary holding a <code>"messages"</code> list, and you get back the same shape — the full transcript, with the agent's final reply as the last message. Watch one question flow through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="invoke">
+          <h3>1. Your messages enter the graph</h3>
+          <div class="diagram">
+            <div class="d-box hot">invoke<small>{"messages": [user question]}</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">model node</div>
+            <div class="d-box dim">tools node</div>
+            <div class="d-box dim">END</div>
+          </div>
+          <p class="step-cap">The dictionary you pass becomes the graph's state — its working memory. The messages list inside it plays exactly the role your ch045 <code>history</code> list played.</p>
+        </div>
+        <div class="step" data-title="Model node">
+          <h3>2. The model node calls the real LLM</h3>
+          <div class="diagram">
+            <div class="d-box dim">invoke</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">model node<small>system prompt + full history + tool schemas &#8594; API call</small></div>
+            <div class="d-box dim">tools node</div>
+          </div>
+          <p class="step-cap">This is the part that replaces <code>fake_llm(history)</code>. One API call, with your tools advertised natively so the model can request them in structured form — no ACTION: strings anywhere.</p>
+        </div>
+        <div class="step" data-title="The fork">
+          <h3>3. The conditional edge reads the reply</h3>
+          <div class="diagram">
+            <div class="d-box">model node</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">tool calls in reply?<small>the fork in the road</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">tools node<small>yes</small></div>
+              <div class="d-box dim">END<small>no</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Your <code>if "FINAL ANSWER:" in reply</code> check, upgraded. The signal for "done" is structural now: a reply that contains no tool calls means the model has nothing left to ask for.</p>
+        </div>
+        <div class="step" data-title="Tools node">
+          <h3>4. The tools node executes and loops back</h3>
+          <div class="diagram">
+            <div class="d-box dim">model node</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">tools node<small>runs calculate(...), appends the result as a ToolMessage</small></div>
+          </div>
+          <p class="step-cap">Your <code>TOOLS[name](arg)</code> line lives here. Each result is wrapped as a <code>ToolMessage</code> — the observation — appended to state, and the edge carries everything back to the model node for another think.</p>
+        </div>
+        <div class="step" data-title="END">
+          <h3>5. No tool calls, so the graph finishes</h3>
+          <div class="diagram">
+            <div class="d-box good">model node<small>"GST on INV-42 is 300 rupees"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">END<small>result returned to your code</small></div>
+          </div>
+          <p class="step-cap">The final state — every message from your question to the closing answer — comes back from <code>invoke</code>. Your code reads <code>result["messages"][-1].content</code> and moves on with its day.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The word "compiled" here does not mean compiled like C code. It means the graph's nodes and edges have been checked and locked into a runnable object. You will build and compile graphs yourself in <a href="ch058-stategraph-anatomy.html">chapter 58</a> — at which point <code>create_agent</code> will feel like a factory that runs those chapters for you.</p></div>
+
+      <h2>Line for line: your fifty lines against the packaged loop</h2>
+      <p>Here is the promised mapping — the exact table to hold in your head whenever framework code feels opaque. Every row is one part of your garage machine and where it now lives inside the showroom one.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Your ch045 hand-rolled loop</th><th>Inside create_agent</th></tr>
+        <tr><td><code>fake_llm(history)</code></td><td>The model node: a real chat model with your tools bound to it, called with the system prompt plus the full message history</td></tr>
+        <tr><td><code>"ACTION:" in reply</code> + string surgery</td><td>Native structured tool calls: the reply carries a <code>tool_calls</code> list with the tool's name and parsed arguments — nothing to parse by hand</td></tr>
+        <tr><td><code>TOOLS = {"calculate": calculate}</code></td><td>The <code>tools=[...]</code> list; the tools node builds the name-to-function registry from it and dispatches each call</td></tr>
+        <tr><td><code>history.append(observation)</code></td><td>Tool results wrapped as <code>ToolMessage</code> objects and appended to the state's messages list automatically</td></tr>
+        <tr><td><code>if "FINAL ANSWER:" in reply</code></td><td>The conditional edge: a model reply with no tool calls routes to END</td></tr>
+        <tr><td><code>max_turns=5</code></td><td>The graph's recursion limit (default 25 steps), settable per run via <code>config={"recursion_limit": ...}</code></td></tr>
+        <tr><td><code>return reply.split(...)</code></td><td><code>result["messages"][-1].content</code> — the last message of the returned state</td></tr>
+      </table></div>
+
+      <p>One honest footnote on the recursion-limit row: the limit counts graph steps, and each visit to the model node or the tools node is one step. So the default of 25 buys you roughly a dozen think-act rounds, not twenty-five. When an agent exhausts it, the run raises a <code>GraphRecursionError</code> — the framework's politer version of your <code>"Gave up: hit the max-turns limit"</code> string, and the same guard against the runaway-cost incidents you met in <a href="ch048-failure-modes.html">chapter 48</a>.</p>
+
+      <h2>Open the back panel: build create_agent yourself</h2>
+      <p>The fastest way to make the packaged loop unmysterious is to build a miniature of it. Below is a browser-safe replica: a <code>create_agent</code> that takes the same three arguments, returns an object you <code>invoke</code> with messages, and runs the same model-node, tools-node, conditional-edge dance inside. As in chapter 45, the "model" is a scripted stand-in — but notice what changed since then: it now returns <em>structured</em> tool calls (a list of dicts), the way a real chat model does, so there is no string parsing anywhere. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A miniature create_agent — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- A tool, same job as ch045 ----------------------------
+def calculate(expression):
+    """Evaluate a simple arithmetic expression."""
+    allowed = set("0123456789+-*/(). ")
+    if not set(expression) &lt;= allowed:
+        return "ERROR: arithmetic only"
+    return str(eval(expression))
+
+# ---- The 'model': scripted, but now it answers with
+# STRUCTURED tool calls, the way a real chat model does -----
+def fake_llm(messages):
+    if messages[-1]["role"] != "tool":
+        return {"role": "assistant",
+                "content": "I will work that out.",
+                "tool_calls": [{"name": "calculate",
+                                "args": {"expression": "1500 * 0.20"}}]}
+    total = messages[-1]["content"]
+    return {"role": "assistant",
+            "content": f"GST at 20% on 1,500 rupees is {total} rupees.",
+            "tool_calls": []}
+
+# ---- A miniature create_agent -----------------------------
+def create_agent(model, tools, system_prompt, recursion_limit=25):
+    registry = {t.__name__: t for t in tools}   # the old TOOLS dict
+
+    class Agent:
+        def invoke(self, state):
+            messages = list(state["messages"])
+            for _ in range(recursion_limit):
+                sys = {"role": "system", "content": system_prompt}
+                reply = model([sys] + messages)      # model node
+                messages.append(reply)
+                if not reply["tool_calls"]:          # conditional edge
+                    return {"messages": messages}    # ... to END
+                for call in reply["tool_calls"]:     # tools node
+                    result = registry[call["name"]](**call["args"])
+                    messages.append({"role": "tool",
+                                     "name": call["name"],
+                                     "content": result})
+            raise RuntimeError("hit the recursion limit")
+    return Agent()
+
+# ---- Three arguments in, one agent out --------------------
+agent = create_agent(model=fake_llm, tools=[calculate],
+                     system_prompt="You are a billing assistant.")
+
+result = agent.invoke({"messages": [
+    {"role": "user", "content": "What is 20% GST on 1500 rupees?"}]})
+
+print("--- transcript ---")
+for m in result["messages"]:
+    calls = m.get("tool_calls") or []
+    tag = f"  [wants: {calls[0]['name']}]" if calls else ""
+    print(f"{m['role']:9} | {m['content']}{tag}")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it the way you broke chapter 45's loop. Add a second tool and make <code>fake_llm</code> ask for both. Misspell the tool name inside a <code>tool_calls</code> entry and read the <code>KeyError</code> — that is precisely the "model requested an unknown tool" failure you will one day meet in production logs. Set <code>recursion_limit=1</code> and watch the polite crash.</p></div>
+
+      <p>Now walk the real usage code the way a reviewer would, line by line. Click each annotated line; the goal, as always, is for every line to become boring to you.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">billing_agent.py — annotated</div>
+        <div class="wl-line"><code>from langchain.agents import create_agent</code>
+          <div class="wl-note">The modern 1.x import. If you ever see <code>initialize_agent</code> or <code>AgentExecutor</code> imported instead, you are reading legacy code from the pre-1.0 era.</div></div>
+        <div class="wl-line"><code>agent = create_agent(</code>
+          <div class="wl-note">The factory call. What comes back is a compiled LangGraph graph — the two-node loop you saw in the stepper, checked, wired, and ready to invoke.</div></div>
+        <div class="wl-line"><code>    model="anthropic:claude-sonnet-4-5",</code>
+          <div class="wl-note">The brain, named as a provider:model string. Passing a model object built with <code>init_chat_model</code> (<a href="ch052-messages-and-models.html">ch52</a>) works too, and lets you set temperature, timeouts, and retry counts explicitly.</div></div>
+        <div class="wl-line"><code>    tools=[calculate, lookup_invoice],</code>
+          <div class="wl-note">Your ch045 <code>TOOLS</code> dict, reborn. These are <code>@tool</code>-decorated functions from <a href="ch053-langchain-tools.html">ch53</a>; their names, descriptions, and argument schemas are extracted and advertised to the model automatically.</div></div>
+        <div class="wl-line"><code>    system_prompt="You are a precise billing assistant.",</code>
+          <div class="wl-note">The standing instructions. Injected at the top of every model call — not stored in the returned transcript — exactly like the <code>sys</code> variable in the mini version you just ran.</div></div>
+        <div class="wl-line"><code>result = agent.invoke(</code>
+          <div class="wl-note">Runs the whole loop to completion — however many think-act rounds that takes — and blocks until the graph reaches END or hits the recursion limit. One call, entire conversation.</div></div>
+        <div class="wl-line"><code>    {"messages": [{"role": "user",</code>
+          <div class="wl-note">The input is a dictionary with a <code>"messages"</code> list — the graph's state. This exact shape, in and out, is the signature of everything LangGraph-based, so learn to recognise it on sight.</div></div>
+        <div class="wl-line"><code>                   "content": "What is 20% GST on invoice INV-42?"}]}</code></div>
+        <div class="wl-line"><code>)</code></div>
+        <div class="wl-line"><code>print(result["messages"][-1].content)</code>
+          <div class="wl-note">The returned state holds the full transcript: your question, the model's tool calls, every ToolMessage observation, and the closing answer. The last message is the final reply; <code>.content</code> is its text.</div></div>
+      </div>
+
+      <h2>What you get free</h2>
+      <p>If the packaged loop were only your fifty lines with nicer names, it would not be worth a chapter. The value is in the parts the showroom fits as standard — the child lock and the auto-restart.</p>
+      <p><strong>Structured tool calls.</strong> No string surgery, ever. The model requests tools through the provider's native tool-calling channel (<a href="ch035-tool-calling.html">chapter 35</a>), arguments arrive parsed against the schema your <code>@tool</code> decorator generated, and results travel back as typed <code>ToolMessage</code> objects. A whole class of "the parser missed the bracket" bugs simply does not exist here.</p>
+      <p><strong>Retries and self-correction.</strong> Two layers. At the transport layer, the underlying model clients retry transient network and rate-limit failures, so a flaky connection does not kill a run. At the loop layer, when the model requests a tool with arguments that fail schema validation, the loop hands the error text back to the model as a tool message — so the model can read the failure, fix its arguments, and try again. Your hand-rolled loop would have crashed with a traceback; this one lets the conversation route around the pothole. (An exception raised inside the tool's own body still propagates by default — feeding those back to the model too is a small middleware, next chapter.)</p>
+      <p><strong>Streaming.</strong> Because the agent is a graph, you can swap <code>invoke</code> for <code>stream</code> and watch the run unfold live — the state after each node, or token-by-token output for a typing-indicator UI, the craft you learned in <a href="ch040-streaming-responses.html">chapter 40</a>. You wrote none of the plumbing.</p>
+      <p><strong>Bookkeeping and growth slots.</strong> Message history is managed as proper typed objects, appended correctly on every turn. And the factory has sockets waiting for parts you have not needed yet: a <code>checkpointer</code> argument that persists state so conversations survive restarts (<a href="ch061-checkpointing.html">chapter 61</a>), structured final answers in the spirit of <a href="ch036-structured-output.html">chapter 36</a>, and a middleware list for intercepting the loop — which is the entire subject of <a href="ch055-middleware.html">the next chapter</a>.</p>
+
+      <p>Six terms carry the new vocabulary. Flip each card until the definitions feel obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">compiled graph</span><span class="flip-back">The runnable object create_agent returns: nodes and edges checked and locked, driven through invoke or stream. Not C-style compilation — just "validated and ready".</span></button>
+        <button class="flip" type="button"><span class="flip-front">model node</span><span class="flip-back">The graph step that calls the LLM with system prompt, full history, and tool schemas. The production version of your fake_llm(history) line.</span></button>
+        <button class="flip" type="button"><span class="flip-front">tools node</span><span class="flip-back">The graph step that executes requested tool calls and appends each result as a ToolMessage. Your TOOLS[name](arg) line, with argument validation fitted.</span></button>
+        <button class="flip" type="button"><span class="flip-front">conditional edge</span><span class="flip-back">The fork after each model turn: tool calls present means loop to the tools node; none means route to END. Replaces the FINAL ANSWER marker.</span></button>
+        <button class="flip" type="button"><span class="flip-front">ToolMessage</span><span class="flip-back">A typed message carrying one tool's result back into the conversation — the structured descendant of your OBSERVATION: string.</span></button>
+        <button class="flip" type="button"><span class="flip-front">recursion limit</span><span class="flip-back">The cap on graph steps per run (default 25). The framework's max_turns; exceeding it raises GraphRecursionError instead of billing you forever.</span></button>
+      </div>
+
+      <h2>When to drop down to LangGraph</h2>
+      <p><code>create_agent</code> packages exactly one shape: a single model, a set of tools, looping until done. That shape covers a remarkable share of real work — but not all of it. The signals that you have outgrown the box are worth memorising, because you will feel them long before you can name them.</p>
+      <ul>
+        <li><strong>State beyond messages.</strong> You need the agent to carry a running total, a set of retrieved documents, or an approval flag alongside the conversation — not just a transcript.</li>
+        <li><strong>Deterministic stages.</strong> Part of the job should <em>always</em> happen, in a fixed order — fetch, then summarise, then file — with no model discretion about the route.</li>
+        <li><strong>More than one brain.</strong> A researcher agent handing off to a writer agent, or a supervisor routing between specialists.</li>
+        <li><strong>Forks that are not "tool calls or not".</strong> Branching on a quality score, a category, a budget check — any condition of your own design.</li>
+        <li><strong>Pauses for people.</strong> Stopping mid-run at a specific point for human sign-off before something irreversible happens.</li>
+      </ul>
+      <p>When those appear, you graduate from buying the machine to laying out the drum and motor yourself — defining your own nodes, edges, and state with LangGraph, which is all of <a href="ch057-why-graphs.html">Act VII</a>. And here is the comfort: it is not a migration. <code>create_agent</code> is already a LangGraph graph — same state shape, same invoke and stream, same checkpointing. Dropping down just means you draw the flowchart yourself instead of accepting the factory's default two-node one.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Before you reach for raw LangGraph, check the middle rung. Many "I need my own loop" urges — logging every model call, trimming old history, blocking a dangerous tool, swapping models mid-run — are hooks into the existing loop, not new graphs. That middle rung is middleware, and it is the very next chapter.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>In any modern LangChain repository, search for <code>create_agent(</code> — you will usually find it once, near the top of a file called <code>agent.py</code> or <code>graph.py</code>, with the three arguments you now know by heart. Nearby you will see the state shape <code>{"messages": [...]}</code> going into <code>invoke</code> or <code>stream</code>, and <code>result["messages"][-1].content</code> pulling the answer out. In merge requests, "bumped the recursion limit to 50" means someone's agent legitimately needed more think-act rounds — or is quietly misbehaving, and it is worth asking which. And when a teammate's stack trace ends in <code>GraphRecursionError</code>, you can now say the most useful sentence in agent debugging: "your model never produced a reply without tool calls — find out why it thinks it isn't done."</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What does <code>create_agent(model, tools, system_prompt)</code> actually return?</p>
+          <div class="q-opts">
+            <button data-opt="a">A plain Python function you call with a question string</button>
+            <button data-opt="b">A compiled graph you invoke with a {"messages": [...]} state</button>
+            <button data-opt="c">A subclass template you must fill in before running</button>
+          </div>
+          <p class="q-explain">It returns a compiled LangGraph graph — a pre-wired model-node/tools-node loop. You drive it through the graph interface: <code>invoke</code> (or <code>stream</code>) with a messages dictionary, and the full transcript comes back in the same shape.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. In your ch045 loop, the model signalled completion by writing FINAL ANSWER. How does the packaged loop know the agent is done?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model outputs the literal token END</button>
+            <button data-opt="b">The system prompt tells it to stop after a fixed number of turns</button>
+            <button data-opt="c">The model returns a reply containing no tool calls, and the conditional edge routes to END</button>
+          </div>
+          <p class="q-explain">The stop signal is structural, not textual: a reply with an empty tool-calls list means the model has nothing left to request, so the fork after the model node routes the run to END. Same idea as your marker, minus the string matching.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What became of the <code>TOOLS = {"calculate": calculate}</code> dict from your hand-rolled loop?</p>
+          <div class="q-opts">
+            <button data-opt="a">It became the tools list you pass in — the tools node builds the name-to-function registry from it and dispatches calls</button>
+            <button data-opt="b">It is no longer needed — modern models execute tools themselves</button>
+            <button data-opt="c">It moved into a YAML configuration file</button>
+          </div>
+          <p class="q-explain">The registry still exists; you just stopped writing it. The tools node maps each requested tool name to the matching decorated function and runs it — and the model still cannot reach anything outside that list, which is where agent security continues to live.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. A run dies with <code>GraphRecursionError</code>. What is the closest ancestor of this moment in your ch045 code?</p>
+          <div class="q-opts">
+            <button data-opt="a">The KeyError when a tool name was misspelled</button>
+            <button data-opt="b">Hitting the max_turns cap and returning "Gave up"</button>
+            <button data-opt="c">Forgetting to append the observation to history</button>
+          </div>
+          <p class="q-explain">The recursion limit is <code>max_turns</code> in framework clothing: a hard budget of graph steps (default 25) so a model that never stops requesting tools cannot loop and bill forever. The error is the framework saying "gave up" out loud.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. Which situation is a genuine reason to drop from create_agent to hand-built LangGraph?</p>
+          <div class="q-opts">
+            <button data-opt="a">You want the agent to use more than one tool</button>
+            <button data-opt="b">You want to stream tokens to the user as they generate</button>
+            <button data-opt="c">You need state beyond messages, fixed deterministic stages, or several agents coordinating</button>
+          </div>
+          <p class="q-explain">Many tools and streaming are both standard equipment on the packaged loop. You outgrow the box when the job stops being "one model plus tools, looping": custom state fields, always-run pipeline stages, multiple cooperating agents, or forks of your own design. Even then, check middleware (next chapter) first.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li><code>create_agent(model, tools, system_prompt)</code> is your fifty-line ReAct loop, packaged: three arguments in, a compiled graph out, driven with <code>invoke({"messages": [...]})</code>.</li>
+          <li>Inside the box are two nodes and a fork: a model node (your <code>fake_llm</code> call, made real), a tools node (your <code>TOOLS</code> dict, dispatched for you), and a conditional edge that ends the run when a reply carries no tool calls (your FINAL ANSWER marker, made structural).</li>
+          <li>The recursion limit (default 25 graph steps) is <code>max_turns</code> reborn; exhausting it raises <code>GraphRecursionError</code> instead of billing you forever.</li>
+          <li>Standard equipment you no longer write: structured tool calls with validated arguments, transport retries, invalid-argument errors fed back so the model self-corrects, streaming, and typed message bookkeeping.</li>
+          <li>Drop to hand-built LangGraph only when the job stops being "one model plus tools in a loop" — custom state, deterministic stages, multiple agents, custom forks. It is a step down the same ladder, not a migration: create_agent already is LangGraph.</li>
+          <li>Most customisation urges are satisfied one rung earlier, by hooking the existing loop — that is middleware, next chapter.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

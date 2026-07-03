@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Structured output — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch036">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IV · Talking to the Model</div>
+        <h1>Structured output</h1>
+        <p class="ch-tagline">How to make the world's most creative text generator fill in a form — every field present, every type correct, every single time. Pydantic returns to the stage, this time as the gatekeeper of everything an agent does.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 37 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Dr. Rao is the finest diagnostician in the hospital — and the chattiest. Ask her for a prescription and you get a small lecture: <em>"Lovely case! Given the history, I'd say amoxicillin, perhaps five hundred milligrams, twice a day — oh, and tell them to finish the course."</em> Brilliant. Also completely useless to the pharmacy robot downstairs, which dispenses pills by reading exactly four boxes on a printed form: <strong>patient</strong>, <strong>drug</strong>, <strong>dose in mg (a number)</strong>, <strong>frequency</strong>.</p>
+        <p>So the hospital employs a clerk. The clerk hands Dr. Rao the form, takes it back, and checks every box against the rules. Dose says <em>"five hundred"</em> in words? The form goes straight back with a sticky note: <em>"Box 3 must be a number. Fix only that."</em> Dr. Rao sighs, writes <em>500</em>, and now — and only now — the form goes to the robot.</p>
+        <p>The doctor is the LLM. The printed form is a <strong>schema</strong>. The clerk is <strong>Pydantic</strong>. The sticky-note round trip is the <strong>retry loop</strong>. This chapter is about that whole desk.</p>
+      </section>
+
+      <h2>First, remember Pydantic</h2>
+      <p>Back in <a href="ch016-type-hints-and-pydantic.html">the type hints and Pydantic chapter</a>, you met Pydantic as Python's strict doorman: you declare a class with typed fields — <code>class Invoice(BaseModel): total: float</code> — and Pydantic checks incoming data against it at runtime, coercing what it reasonably can and raising a loud <code>ValidationError</code> for what it can't. Back then it guarded config files and API payloads written by humans and other programs. The promise at the end of that chapter was that Pydantic would return with a bigger job. This is that job: guarding your code against the most fluent, most confident, most <em>occasionally wrong</em> data source you will ever connect to — a large language model.</p>
+
+      <h2>The problem: the model writes essays, your code needs data</h2>
+      <p>Every LLM you have ever used produces exactly one thing: text. Ask it to extract a prescription from a doctor's note and, left to its own devices, it replies like Dr. Rao:</p>
+
+      <div class="code-title">what the model wants to say</div>
+      <pre><code class="language-markup">Sure! Based on the note, here is the prescription information:
+
+The patient A. Sharma should take amoxicillin at a dose of
+five hundred milligrams, twice daily. Hope that helps!</code></pre>
+
+      <p>Now imagine the next line of your program is <code>db.save(prescription)</code> or <code>dose_total = dose_mg * days</code>. You cannot multiply <em>"five hundred milligrams"</em>. You cannot save <em>"Hope that helps!"</em> into a database column. Code does not consume prose; code consumes <em>data</em> — the dictionaries-and-lists world you met in <a href="ch005-yaml-and-json.html">the YAML and JSON chapter</a>, where every value has a name and a type.</p>
+      <p>The naive fix is to beg in the prompt: <em>"Please respond in JSON only."</em> And the model usually obliges... in the way a golden retriever obliges. You get JSON wrapped in friendly chatter ("Sure! Here's your JSON:"), or JSON with a trailing comma, or JSON where the field you called <code>dose_mg</code> comes back as <code>dosage</code>, or — the classic — a perfectly formed object where the number you needed is a string. Any of these crashes the very next line of your code. When it works ninety-five per cent of the time, that is not reliability; that is a production incident on a five per cent timer.</p>
+      <p>The real fix has two halves, and this chapter walks both: first, <strong>tell the model the exact shape you want</strong>, in a language machines agree on. Second, <strong>never trust the reply until a validator has stamped it</strong> — and when the stamp fails, send the form back with the sticky note.</p>
+
+      <h2>JSON Schema: the printed form itself</h2>
+      <p>The machine-readable language for "here is the shape I want" is <dfn>JSON Schema</dfn> — a standard way of describing, in JSON, what fields an object must have and what type each one is. It is the printed form from the story: box names, box types, which boxes are mandatory. You could write one by hand, but you never have to — this is where Pydantic earns its second salary. Define the shape once as a Python class, and Pydantic <em>generates</em> the schema for you:</p>
+
+      <div class="code-title">prescription.py — one class, two jobs</div>
+      <pre><code class="language-python">from pydantic import BaseModel
+
+class Prescription(BaseModel):
+    patient: str
+    drug: str
+    dose_mg: int
+    frequency: str
+
+print(Prescription.model_json_schema())</code></pre>
+
+      <div class="code-title">what model_json_schema() produces</div>
+      <pre><code class="language-json">{
+  "title": "Prescription",
+  "type": "object",
+  "properties": {
+    "patient":   {"title": "Patient",   "type": "string"},
+    "drug":      {"title": "Drug",      "type": "string"},
+    "dose_mg":   {"title": "Dose Mg",   "type": "integer"},
+    "frequency": {"title": "Frequency", "type": "string"}
+  },
+  "required": ["patient", "drug", "dose_mg", "frequency"]
+}</code></pre>
+
+      <p>Read that JSON slowly once — it is the last time it will look foreign. It says: the result is an object; it has these four properties; <code>dose_mg</code> must be an integer; all four are required. This is a <dfn>contract</dfn> — an agreement, checkable by a machine, between the side producing the data (the model) and the side consuming it (your code). The Pydantic class is the single source of truth: it generates the schema you send <em>to</em> the model, and it validates the JSON that comes <em>back</em>. One class, both directions.</p>
+      <p>A few words to have ready before we go further — flip until they feel like old friends:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">schema</span><span class="flip-back">A machine-readable description of a shape: which fields, which types, which are required. The printed form.</span></button>
+        <button class="flip" type="button"><span class="flip-front">contract</span><span class="flip-back">A schema used as an agreement between two parties — the model promises to produce it, your code is entitled to rely on it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">JSON mode</span><span class="flip-back">An API switch guaranteeing the reply is syntactically valid JSON. Says nothing about which fields it contains.</span></button>
+        <button class="flip" type="button"><span class="flip-front">constrained decoding</span><span class="flip-back">The provider restricts which tokens the model may emit next, so anything off-schema is literally impossible to generate. The strongest guarantee.</span></button>
+        <button class="flip" type="button"><span class="flip-front">validation</span><span class="flip-back">Checking real data against the schema after the fact. Pydantic's whole job — pass gets you a typed object, fail gets you a precise error.</span></button>
+        <button class="flip" type="button"><span class="flip-front">coercion</span><span class="flip-back">Pydantic quietly converting near-misses — the string "500" into the int 500 — instead of failing. Forgiving on format, strict on meaning.</span></button>
+        <button class="flip" type="button"><span class="flip-front">retry loop</span><span class="flip-back">On validation failure, send the error message back to the model and ask again. The sticky note on the returned form.</span></button>
+      </div>
+
+      <h2>Three ways to ask, from polite request to locked form</h2>
+      <p>Providers give you three escalating levels of enforcement. Knowing which level you are on tells you exactly how paranoid your code needs to be afterwards.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Mode</th><th>How you ask</th><th>What is actually guaranteed</th></tr>
+        <tr><td>Prompt begging</td><td>"Respond in JSON only" in the prompt</td><td>Nothing. Works often, fails memorably.</td></tr>
+        <tr><td>JSON mode</td><td>e.g. OpenAI <code>response_format={"type": "json_object"}</code></td><td>The reply parses as JSON. Fields and types are still whatever the model felt like.</td></tr>
+        <tr><td>Structured outputs</td><td>Your JSON Schema attached to the request, strict flag on</td><td>The reply parses as JSON <em>and</em> matches your schema — right fields, right types.</td></tr>
+      </table></div>
+
+      <p>The third level — <dfn>structured outputs</dfn>, meaning schema-enforced generation — is the one worth building on, and every major provider now offers it. On OpenAI's API the schema rides in the <code>response_format</code> parameter; on Anthropic's it rides in <code>output_config.format</code>. Better still, both Python SDKs accept your Pydantic class directly and hand you back a validated instance, no JSON handling in sight:</p>
+
+      <div class="code-title">OpenAI — schema-enforced, straight from the Pydantic class</div>
+      <pre><code class="language-python">completion = client.chat.completions.parse(
+    model="gpt-5",
+    messages=[{"role": "user", "content": note}],
+    response_format=Prescription,      # the Pydantic class IS the contract
+)
+rx = completion.choices[0].message.parsed   # a Prescription instance</code></pre>
+
+      <div class="code-title">Anthropic — same idea, different spelling</div>
+      <pre><code class="language-python">response = client.messages.parse(
+    model="claude-opus-4-8",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": note}],
+    output_format=Prescription,
+)
+rx = response.parsed_output                 # a Prescription instance</code></pre>
+
+      <p>Under the hood both requests carry the generated JSON Schema, and the provider applies <em>constrained decoding</em>: at every step of generation, tokens that would break the schema are simply not on the menu. The model is physically unable to write "five hundred" into an integer field — like a form whose dose box only accepts digits.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Helper names drift between SDK versions — <code>parse</code> methods move in and out of namespaces, parameter names get renamed (Anthropic's older top-level <code>output_format</code> parameter on <code>create</code> calls, for instance, gave way to <code>output_config.format</code>). The <em>wire-level idea</em> is the stable part: a JSON Schema attached to the request, a strictness flag, valid JSON back. Check the current docs for the exact spelling; recognise the shape on sight.</p></div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>The same trick exists for tools. Remember from <a href="ch035-tool-calling.html">the tool-calling chapter</a> that every tool carries an <code>input_schema</code>? Providers let you mark a tool definition <code>strict: true</code>, which schema-enforces the <em>arguments</em> the model generates for it. A tool call is structured output wearing a work uniform.</p></div>
+
+      <h2>The safety net: validate, then retry</h2>
+      <p>So why does Pydantic still matter if the provider guarantees the schema? Three reasons, and they are the difference between a demo and a system. First, not every model and mode supports strict enforcement — local models, older endpoints, and plain JSON mode all hand you unverified text. Second, schemas can only express so much: "the discount must not exceed the total" is a rule Pydantic can check and no decoder can. Third — the deepest one — <em>a guarantee you don't verify is a rumour</em>. Production code treats every model reply as a form arriving at the clerk's desk, whoever claims to have checked it upstream.</p>
+      <p>The clerk's procedure is beautifully simple, and it is the same in every serious codebase. Watch one form make the round trip:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Send with contract">
+          <h3>1. The request goes out with the form attached</h3>
+          <div class="diagram">
+            <div class="d-box hot">Your code<small>prompt + JSON Schema</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">LLM</div>
+            <div class="d-box dim">Pydantic gate</div>
+          </div>
+          <p class="step-cap">The prompt asks for the extraction, and the schema — generated from your Pydantic class — spells out the exact shape. The model now knows what the form looks like.</p>
+        </div>
+        <div class="step" data-title="Model replies">
+          <h3>2. The model fills it in... as text</h3>
+          <div class="diagram">
+            <div class="d-box dim">Your code</div>
+            <div class="d-box hot">LLM<small>'{"dose_mg": "five hundred", ...}'</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Pydantic gate</div>
+          </div>
+          <p class="step-cap">Whatever comes back is still just a string that claims to be your object. In strict modes it nearly always is; in looser modes, anything can hide in there. This one has words where a number belongs.</p>
+        </div>
+        <div class="step" data-title="Gate fails">
+          <h3>3. The gate catches it</h3>
+          <div class="diagram">
+            <div class="d-box dim">LLM</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Pydantic gate<small>ValidationError: dose_mg is not an integer</small></div>
+            <div class="d-box dim">Rest of your app</div>
+          </div>
+          <p class="step-cap">model_validate_json parses and checks in one move. The error is not a vague crash — it names the exact field and the exact problem, in words a model can act on. That precision is the whole trick.</p>
+        </div>
+        <div class="step" data-title="Sticky note back">
+          <h3>4. The error goes back as the next message</h3>
+          <div class="diagram">
+            <div class="d-box hot">Your code<small>"dose_mg must be an integer — resend JSON only"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">LLM<small>tries again</small></div>
+            <div class="d-box dim">Pydantic gate</div>
+          </div>
+          <p class="step-cap">You append the failed reply and the validation message to the conversation and call the model again. Models are remarkably good at fixing a named mistake — far better than at getting everything right cold.</p>
+        </div>
+        <div class="step" data-title="Pass">
+          <h3>5. Pass: a typed object enters your program</h3>
+          <div class="diagram">
+            <div class="d-box good">Pydantic gate<small>PASS</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Prescription(dose_mg=500, ...)<small>safe to compute with</small></div>
+          </div>
+          <p class="step-cap">On success you hold a real Prescription instance — dose_mg is an int, arithmetic works, the database insert cannot be surprised. Everything past the gate can trust its inputs completely.</p>
+        </div>
+      </div>
+
+      <p>Now run the whole desk yourself. As in earlier chapters, the "model" below is a scripted stand-in — a <code>fake_llm()</code> that misbehaves on the first attempt exactly the way real models do, then corrects itself when shown the error. The validator is a twenty-line pocket Pydantic, because the browser sandbox is stdlib-only; every other moving part is what production code does. Press <strong>Run</strong>, then break it.</p>
+
+      <div class="pyrun" data-title="The validate-and-retry loop — run me">
+<textarea class="py-src" spellcheck="false">
+import json
+
+# ---- The contract: field name -> required type ------------
+SCHEMA = {"patient": str, "drug": str, "dose_mg": int, "frequency": str}
+
+def validate(data, schema):
+    """A pocket-sized Pydantic: checks fields and types."""
+    problems = []
+    for field, expected in schema.items():
+        if field not in data:
+            problems.append(f"missing field '{field}'")
+        elif not isinstance(data[field], expected):
+            problems.append(
+                f"'{field}' must be {expected.__name__}, "
+                f"got {type(data[field]).__name__} {data[field]!r}")
+    if problems:
+        raise ValueError("; ".join(problems))
+    return data
+
+def extract_json(text):
+    """Models love wrapping JSON in chatter. Cut the object out."""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1:
+        raise ValueError("no JSON object found in the reply")
+    return text[start : end + 1]
+
+# ---- The 'model': a scripted stand-in for a real LLM ------
+ATTEMPTS = [
+    # attempt 1: chatty, and the dose is words, not a number
+    'Sure! Here it is: {"patient": "A. Sharma", '
+    '"drug": "amoxicillin", "dose_mg": "five hundred", '
+    '"frequency": "twice daily"}',
+    # attempt 2: after seeing the error, corrected
+    '{"patient": "A. Sharma", "drug": "amoxicillin", '
+    '"dose_mg": 500, "frequency": "twice daily"}',
+]
+
+def fake_llm(history):
+    reply = ATTEMPTS[min(fake_llm.calls, len(ATTEMPTS) - 1)]
+    fake_llm.calls += 1
+    return reply
+fake_llm.calls = 0
+
+# ---- The desk: ask, validate, retry with the error --------
+def get_structured(prompt, max_retries=3):
+    history = [{"role": "user", "content": prompt}]
+    for attempt in range(1, max_retries + 1):
+        reply = fake_llm(history)
+        print(f"--- attempt {attempt} ---")
+        print("model said :", reply)
+        try:
+            data = validate(json.loads(extract_json(reply)), SCHEMA)
+            print("validator  : PASS")
+            return data
+        except ValueError as err:
+            print("validator  : FAIL --", err)
+            history.append({"role": "assistant", "content": reply})
+            history.append({"role": "user", "content":
+                f"Your reply failed validation: {err}. "
+                "Resend ONLY the corrected JSON."})
+    raise RuntimeError("gave up: model never produced valid data")
+
+rx = get_structured("Extract the prescription from the note as JSON.")
+print()
+print("typed data :", rx)
+print("dose x 14  :", rx["dose_mg"] * 14, "mg for the full course")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it three ways and watch the desk cope. Delete <code>"drug"</code> from the first attempt and see the missing-field error travel back. Make <em>both</em> attempts bad and watch <code>max_retries</code> save you from an infinite argument with a stubborn model. Then change <code>"five hundred"</code> to <code>"500"</code> — a string of digits — and notice our pocket validator rejects it, whereas real Pydantic would quietly coerce it to <code>500</code>. That forgiving-but-safe coercion is one of many reasons to use the real thing.</p></div>
+
+      <h2>The production version, line by line</h2>
+      <p>Here is the same desk written with real Pydantic, the way you will actually meet it in a codebase. Click through the annotations — by the end, every line should feel inevitable.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">extract.py — the pattern under every extraction pipeline</div>
+        <div class="wl-line"><code>from pydantic import BaseModel, ValidationError</code>
+          <div class="wl-note">The pair that runs the desk: <code>BaseModel</code> to declare the contract, <code>ValidationError</code> to catch the sticky-note moment. Both from <a href="ch016-type-hints-and-pydantic.html">ch16</a>.</div></div>
+        <div class="wl-line"><code>class Prescription(BaseModel):</code>
+          <div class="wl-note">The single source of truth. This one class generates the JSON Schema you attach to the request AND validates the reply. Change a field here and both directions update together — that is what makes it a contract rather than two documents drifting apart.</div></div>
+        <div class="wl-line"><code>    patient: str</code></div>
+        <div class="wl-line"><code>    drug: str</code></div>
+        <div class="wl-line"><code>    dose_mg: int</code>
+          <div class="wl-note">Type hints doing runtime work. If the model sends <code>"500"</code> (a string of digits), Pydantic coerces it to the int 500. If it sends <code>"five hundred"</code>, that is a ValidationError with this field's name on it.</div></div>
+        <div class="wl-line"><code>    frequency: str</code></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>def extract(note: str, max_retries: int = 3) -&gt; Prescription:</code>
+          <div class="wl-note">Note the return type: not a dict, not a string — a <code>Prescription</code>. Everything downstream of this function gets typed, verified data or an exception. There is no third possibility, and that is the point.</div></div>
+        <div class="wl-line"><code>    messages = [{"role": "user", "content": PROMPT + note}]</code>
+          <div class="wl-note">The running conversation. On retries we will append the failed reply and the error to it, so the model sees its own mistake in context — the same growing-history idea that powers every agent loop.</div></div>
+        <div class="wl-line"><code>    for attempt in range(max_retries):</code>
+          <div class="wl-note">Bounded, always. A model that keeps failing validation must eventually become an exception your monitoring can see, not an infinite billing loop.</div></div>
+        <div class="wl-line"><code>        reply = call_llm(messages)</code>
+          <div class="wl-note">Any provider behind this line — OpenAI, Anthropic, a local model. The desk does not care who the doctor is; the clerk checks everyone's forms the same way.</div></div>
+        <div class="wl-line"><code>        try:</code></div>
+        <div class="wl-line"><code>            return Prescription.model_validate_json(reply)</code>
+          <div class="wl-note">The gate, in one call: parse the JSON string and validate it against the contract in a single move. On success this returns the typed instance and the function is done. This line replaces the json.loads + validate pair from the runnable version.</div></div>
+        <div class="wl-line"><code>        except ValidationError as err:</code>
+          <div class="wl-note">The sticky-note moment. <code>err</code> is not a vague failure — it lists each bad field, what was expected, and what arrived. Precise, model-legible feedback (a skill from <a href="ch009-errors-and-tracebacks.html">ch9</a>: errors are information, not embarrassment).</div></div>
+        <div class="wl-line"><code>            messages.append({"role": "assistant", "content": reply})</code>
+          <div class="wl-note">First, the model's own failed answer goes into the history — it needs to see what it wrote to understand the correction.</div></div>
+        <div class="wl-line"><code>            messages.append({"role": "user", "content":</code>
+          <div class="wl-note">Then the error message, framed as the next user turn: "here is exactly what failed; resend only corrected JSON." Libraries like <code>instructor</code> package this exact loop; LangChain's <code>model.with_structured_output(Prescription)</code> wraps the same idea behind one method call.</div></div>
+        <div class="wl-line"><code>                f"Validation failed:\n{err}\nResend only corrected JSON."})</code></div>
+        <div class="wl-line"><code>    raise RuntimeError("model never produced valid data")</code>
+          <div class="wl-note">The honest ending. After max_retries, fail loudly. A pipeline that silently swallows bad extractions is worse than one that crashes — at least a crash gets fixed.</div></div>
+      </div>
+
+      <h2>Why everything in an agent flows through this</h2>
+      <p>Here is the quiet punchline of this chapter: structured output is not one feature among many. It is the load-bearing wall of the entire agent world you operate.</p>
+      <p><strong>Tool arguments are structured output.</strong> When a model "calls a tool" (<a href="ch035-tool-calling.html">ch35</a>), what actually happens is that it generates a JSON object of arguments constrained by that tool's <code>input_schema</code> — the same schemas, the same validation, the same strict flags. A tool call is a filled-in form whose recipient happens to be a function instead of a database.</p>
+      <p><strong>Agent state is structured output.</strong> Frameworks like LangGraph define an agent's working memory as a typed state schema; deep-agent planning tools accept the plan as a structured list of task objects, not freeform musings; MCP servers advertise every tool with a JSON Schema for its inputs. Each time an agent records a decision, updates a plan, or hands work to another agent, that information crosses the boundary as schema-shaped data — because the receiving code, like the pharmacy robot, only reads boxes.</p>
+      <p><strong>Reliability is structured output.</strong> The difference between an agent demo and an agent product is almost never the model. It is whether every model-to-code handoff has a contract, a gate, and a retry — the desk you just built. When your production agents run for hours without a human watching, this pattern is what they are standing on. And it composes with everything still to come: the ReAct loop later in the course is this same conversation-with-a-gate, running on repeat.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this chapter everywhere. In Python codebases: a <code>schemas.py</code> or <code>models.py</code> full of <code>BaseModel</code> classes, <code>model_validate_json</code> inside a <code>try/except ValidationError</code>, or the <code>instructor</code> library wrapping a client. In LangChain code: <code>model.with_structured_output(MySchema)</code>. In raw API calls: <code>response_format</code> (OpenAI) or <code>output_config</code> with <code>"type": "json_schema"</code> (Anthropic), and <code>"strict": true</code> on tool definitions. In merge requests: a teammate adding <code>additionalProperties: false</code> to a schema, or a commit message like "add retry on validation failure for the extraction step". Every one of these is the clerk's desk — form, gate, sticky note — and you now read them fluently.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. You switch on JSON mode (<code>response_format={"type": "json_object"}</code>). What is actually guaranteed about the reply?</p>
+          <div class="q-opts">
+            <button data-opt="a">It matches your schema — fields and types included</button>
+            <button data-opt="b">It parses as valid JSON, but the fields and types are whatever the model chose</button>
+            <button data-opt="c">Nothing at all — it is the same as asking politely in the prompt</button>
+          </div>
+          <p class="q-explain">JSON mode guarantees syntax only: the text will parse. Whether it contains your <code>dose_mg</code> field, or a number where you need one, is still up to the model. For shape guarantees you need schema-enforced structured outputs — and a validator regardless.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Pydantic raises a <code>ValidationError</code> on the model's reply. What does the retry loop send back to the model?</p>
+          <div class="q-opts">
+            <button data-opt="a">The original prompt again, unchanged — a fresh roll of the dice</button>
+            <button data-opt="b">A generic message: "that was wrong, try harder"</button>
+            <button data-opt="c">The failed reply plus the specific validation error, asking for corrected JSON only</button>
+          </div>
+          <p class="q-explain">The magic is in the specificity. ValidationError names the exact field and the exact problem, and models are much better at fixing a named mistake than at succeeding cold. Re-rolling without feedback wastes the information the validator just produced.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. With strict schema enforcement (constrained decoding), what can still be wrong with the reply?</p>
+          <div class="q-opts">
+            <button data-opt="a">The content — a real integer in <code>dose_mg</code>, but the wrong number</button>
+            <button data-opt="b">The syntax — it might not parse as JSON</button>
+            <button data-opt="c">The field names — the model can still rename keys it dislikes</button>
+          </div>
+          <p class="q-explain">Constrained decoding makes off-schema output impossible to generate, so syntax and shape are safe. But a schema cannot know the truth: the model can confidently write <code>5000</code> where the note said <code>500</code>. Schemas guarantee shape, never correctness — which is why cross-field checks and human review still exist.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. When an agent framework runs a tool call, how do the tool's arguments relate to this chapter?</p>
+          <div class="q-opts">
+            <button data-opt="a">They don't — tool calls use a separate mechanism unrelated to schemas</button>
+            <button data-opt="b">Tool arguments are structured output: JSON generated against the tool's input schema and validated before your function runs</button>
+            <button data-opt="c">Tool arguments are plain text that each tool parses however it likes</button>
+          </div>
+          <p class="q-explain">A tool call is a filled-in form addressed to a function. The tool's <code>input_schema</code> is the contract, the generated arguments are the structured output, and marking the tool <code>strict: true</code> applies the same constrained decoding. One mechanism, wearing two uniforms.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>LLMs produce prose; code consumes data. Structured output is the discipline of bridging that gap with a contract instead of hope.</li>
+          <li>A JSON Schema is the machine-readable form; your Pydantic class is the single source of truth that both generates the schema and validates the reply.</li>
+          <li>Enforcement comes in levels — prompt begging guarantees nothing, JSON mode guarantees syntax, schema-enforced structured outputs guarantee shape. Build on the third; verify anyway.</li>
+          <li>The production pattern is a loop: validate with Pydantic, and on <code>ValidationError</code> send the specific error back and retry — bounded, so failure ends in an exception, not a bill.</li>
+          <li>Schemas guarantee shape, never truth: a perfectly valid object can still contain a wrong number. Keep business-rule checks and review where stakes are high.</li>
+          <li>Tool arguments, agent state, plans, and MCP tool inputs are all schema-shaped handoffs — every reliable agent you operate is this chapter, running in a loop.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What is an agent, actually? — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch044">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act V · Agents From Scratch</div>
+        <h1>What is an agent, actually?</h1>
+        <p class="ch-tagline">An agent is an LLM, a set of tools, and a loop — nothing more. This chapter pins the definition down, walks the spectrum from a single call to full autonomy, and shows you why everything else on the box is packaging.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 45 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Three ways to get dinner on the table. One: the vending machine in the lobby. You press B4, a packet drops. One request, one fixed answer, no judgement involved. Two: the tiffin service. Every morning a pipeline swings into motion — vegetables chopped, dabbas packed, the courier follows the same route past your building at the same time. The steps never vary; somebody designed them once and the system repeats them faithfully, whatever is in season.</p>
+        <p>Three: your guests call to say they land at eight, and you tell your house manager one sentence — <em>"Dinner for six, one of them eats Jain."</em> She opens the fridge and takes stock, phones the vegetable vendor, tastes the dal, adjusts the salt, sends the driver out for fresh curd, and stops when the table is ready. You never told her the steps. You told her the goal.</p>
+        <p>All three put food in front of you. They differ in exactly one thing: <strong>who decides the next step</strong>. A locked answer, a scripted pipeline, or a mind with hands deciding as it goes. That single question is this whole chapter — and the third one is an agent.</p>
+      </section>
+
+      <h2>One line, three ingredients</h2>
+      <p>Here is the definition this entire Act rests on. An <dfn>agent</dfn> is an LLM, given tools, run in a loop until the task is done — a model that can decide its own next step, act on the world through functions your code is willing to run, and keep going without you between steps. Say it shorter: <strong>LLM + tools + loop</strong>. There is no fourth ingredient. Every product with "agent" on the label — every framework, every harness, every autonomous coding assistant you have ever supervised — is those three things wearing different clothes.</p>
+      <p>The good news: you have already met two of the three. In <a href="ch033-first-api-call.html">your first API call</a> you sent messages to a model and got text back — that is the LLM ingredient, and it never gets more mysterious than that. In <a href="ch035-tool-calling.html">the tool-calling chapter</a> you saw that a model cannot run anything itself; it can only <em>describe</em> a function call, which your code then executes and reports back on. That is the tools ingredient. The only genuinely new thing in this Act is the loop — and a loop is a <code>for</code> statement you have been reading since <a href="ch006-control-flow.html">control flow</a>.</p>
+      <p>The <a href="ch043-reading-real-code-4.html">tiny chat CLI you dissected in the previous chapter</a> is the perfect bridge. That program already had an LLM call inside a loop — but look at who powered that loop. Every single iteration waited for a <em>human</em> to type something. The model answered, then sat idle until you pushed it again. You were the engine. An agent makes exactly two upgrades to that CLI: it gives the model hands (tools), and it lets the model's own output — not your keyboard — decide whether the loop spins again. Take the human out of the crank position, and chat becomes agency.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The word <em>agentic</em> gets stretched by marketing until it covers almost anything with an LLM inside. When you hear it, quietly run the test from the story: who decides the next step? If the answer is "a developer, in advance, in code", you are looking at a pipeline with good PR — not an agent. This is not a put-down; as you will see below, the pipeline is often the better engineering choice.</p></div>
+
+      <p>Six words carry the rest of this Act. Flip each card until the back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">agent</span><span class="flip-back">An LLM with tools, run in a loop, deciding its own next step until the task is done.</span></button>
+        <button class="flip" type="button"><span class="flip-front">workflow</span><span class="flip-back">LLM calls arranged along a path your code fixed in advance. The model fills in blanks; it never chooses the route.</span></button>
+        <button class="flip" type="button"><span class="flip-front">tool</span><span class="flip-back">A plain function your code agrees to run on the model's behalf — search, calculator, file reader. The model only knows its name and description.</span></button>
+        <button class="flip" type="button"><span class="flip-front">loop</span><span class="flip-back">The repetition that feeds each result back to the model so it can decide again. Without it, you have a one-shot call, however clever.</span></button>
+        <button class="flip" type="button"><span class="flip-front">autonomy</span><span class="flip-back">How many consecutive decisions the system makes before a human weighs in. A dial, not a switch.</span></button>
+        <button class="flip" type="button"><span class="flip-front">harness</span><span class="flip-back">The software wrapped around the loop — permission prompts, budgets, logging, UI. The seatbelts and dashboard, not the engine.</span></button>
+      </div>
+
+      <h2>The agency spectrum: from vending machine to house manager</h2>
+      <p>"Agent or not" is the wrong question; the useful picture is a spectrum, and the dial being turned is always the same one — how much of the control flow the model owns. Step through the four positions. Watch where the highlight sits in each diagram: that is who is deciding what happens next.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Single call">
+          <h3>1. A single call — the vending machine</h3>
+          <div class="diagram">
+            <div class="d-box hot">Your code<small>builds one prompt</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">LLM<small>one transformation</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Answer</div>
+          </div>
+          <p class="step-cap">One request in, one answer out. Summarise this email, classify this ticket, translate this line. The model owns nothing but the words; your code decided everything before the call and does everything after it. A huge share of real LLM value ships in exactly this shape.</p>
+        </div>
+        <div class="step" data-title="Chained workflow">
+          <h3>2. A chained workflow — the tiffin pipeline</h3>
+          <div class="diagram">
+            <div class="d-box hot">Your code<small>owns the route</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">LLM call 1<small>extract</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">LLM call 2<small>draft</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">LLM call 3<small>polish</small></div>
+          </div>
+          <p class="step-cap">Several calls, glued by ordinary code: the output of one becomes the input of the next. The steps and their order were written down before the first request ever ran. The model is brilliant labour on a fixed assembly line.</p>
+        </div>
+        <div class="step" data-title="Routed workflow">
+          <h3>3. A routed workflow — a fork in the pipeline</h3>
+          <div class="diagram">
+            <div class="d-box">LLM<small>"this is a refund case"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Your code<small>if refund: branch A</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box good">Branch A<small>refund steps</small></div>
+              <div class="d-box dim">Branch B<small>complaint steps</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Now the model's opinion picks which branch runs — but every branch was authored in advance, and code does the actual switching. The model is a signal into your control flow, not the owner of it. Still a workflow.</p>
+        </div>
+        <div class="step" data-title="Agent">
+          <h3>4. An agent — the house manager</h3>
+          <div class="diagram">
+            <div class="d-box">Goal<small>"handle dinner"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">LLM<small>decides the next step, every step</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Tools<small>fridge, phone, driver</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box">Results<small>fed back in</small></div>
+          </div>
+          <p class="step-cap">The route is gone. The model reads each result and chooses the following action itself, around a loop, until it declares the goal met. Control flow now lives in the model's judgement — that crossing, and nothing else, is what makes it an agent.</p>
+        </div>
+        <div class="step" data-title="Where your tools sit">
+          <h3>5. Where the systems you operate sit</h3>
+          <div class="diagram">
+            <div class="d-box dim">Single call</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Workflow</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Agent + harness<small>coding assistants, research agents</small></div>
+          </div>
+          <p class="step-cap">An autonomous coding assistant such as Claude Code sits at the far right: a model choosing its own next step, a large toolbox, a loop — wrapped in a harness of permission prompts and budgets precisely <em>because</em> that position on the dial is the least predictable.</p>
+        </div>
+      </div>
+
+      <p>Anthropic's engineering guide on building effective agents draws this same boundary and it is worth memorising: a <dfn>workflow</dfn> is a system where LLM calls are orchestrated along code paths defined in advance, while an agent is a system where the model directs its own process and tool use as it goes. Same model, same API — the difference is entirely about which side owns the steering wheel.</p>
+
+      <h2>Prove it to yourself: three levels, one fake model</h2>
+      <p>Reading a spectrum is one thing; running it is better. The program below uses one scripted stand-in model (a <code>fake_llm()</code> function, since this page cannot call a paid API) and drives it three ways: a single call, a fixed two-step workflow, and a miniature agent where the model's own reply decides whether the loop continues. Press <strong>Run</strong>, then read the level 3 output slowly — the model asks for a fact, receives it, and only then chooses to stop.</p>
+
+      <div class="pyrun" data-title="Single call vs workflow vs agent — run me">
+<textarea class="py-src" spellcheck="false">
+# One fake model, three levels of agency.
+# A real system would call an LLM API here; the interface
+# is identical either way: text in, text out.
+
+def fake_llm(prompt):
+    """A scripted stand-in for a real model."""
+    if "Translate" in prompt:
+        return "Namaste, duniya!"
+    if "Summarise" in prompt:
+        return "A cheerful greeting to the whole world."
+    if "DECIDE" in prompt:
+        # Agent mode: the model chooses its own next step.
+        if "clock says" not in prompt:
+            return "ACTION: check_clock"
+        return "DONE: it is past 8 pm, send the short greeting."
+    return "OK."
+
+def check_clock():          # a tool: a plain function we
+    return "clock says 20:15"   # are willing to run for it
+
+# ---- Level 1: single call. Your code decides everything.
+print("LEVEL 1 - single call")
+print(fake_llm("Translate 'Hello, world' to Hindi"))
+print()
+
+# ---- Level 2: workflow. Two calls on a route YOU fixed.
+print("LEVEL 2 - workflow (two chained calls)")
+draft = fake_llm("Translate 'Hello, world' to Hindi")
+print("step 1:", draft)
+print("step 2:", fake_llm("Summarise: " + draft))
+print()
+
+# ---- Level 3: agent. The model's reply steers the loop.
+print("LEVEL 3 - agent (model steers the loop)")
+history = "TASK: greet the guests well. DECIDE next step."
+for turn in range(1, 4):
+    reply = fake_llm(history)
+    print(f"turn {turn}:", reply)
+    if reply.startswith("DONE:"):
+        break                       # the MODEL chose to stop
+    if reply.startswith("ACTION: check_clock"):
+        history += " OBSERVATION: " + check_clock()
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Modify it. In level 3, delete the line that appends the OBSERVATION and run again — the model never learns the time, so it asks for the clock forever and the loop only ends because <code>range(1, 4)</code> runs out. You have just reproduced, in miniature, one of the most common real-world agent bugs, and you will build the full-strength version of this loop in <a href="ch045-react-loop-by-hand.html">the next chapter</a>.</p></div>
+
+      <h2>Everything else is packaging</h2>
+      <p>Now the claim in this chapter's title earns its keep. Take any feature from any agent product's launch page, and it will land on one of the three primitives — an upgrade to the LLM call, an upgrade to the tools, or an upgrade to the loop and the history it carries. There is nowhere else for it to land, because there is nothing else in the machine.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Feature on the box</th><th>Which primitive it upgrades</th></tr>
+        <tr><td>Streaming output, model routing, retries</td><td>Packaging around the <strong>LLM call</strong></td></tr>
+        <tr><td>MCP servers and connectors</td><td>Packaging around the <strong>tools</strong> — one standard plug shape so any tool fits any agent</td></tr>
+        <tr><td>Memory, sessions, checkpointing</td><td>Packaging around the <strong>history</strong> the loop carries — saving it, trimming it, restoring it</td></tr>
+        <tr><td>Planning and to-do lists</td><td>A <strong>tool</strong> the model uses to leave notes for its future turns</td></tr>
+        <tr><td>Subagents</td><td>A <strong>tool</strong> whose implementation happens to be another whole loop</td></tr>
+        <tr><td>Permission prompts, sandboxes, guardrails</td><td>Gates at the <strong>tool boundary</strong> — the one place where anything real happens</td></tr>
+        <tr><td>Turn limits, cost budgets, timeouts</td><td>Brakes bolted onto the <strong>loop</strong></td></tr>
+      </table></div>
+
+      <p>This is why the Act ahead will not intimidate you. When you meet LangChain's <a href="ch054-create-agent.html"><code>create_agent</code></a>, you will recognise the loop with structured tool calling and middleware attached. When you meet <a href="ch067-create-deep-agent-anatomy.html">deep agents</a>, you will recognise the loop plus a planning tool, a file system, and subagents. The next time a vendor deck says "agentic AI platform", you can play the placing game live in the meeting: LLM, tool, or loop? Every bullet point lands somewhere on that list, and knowing where is the difference between evaluating a product and admiring its fonts.</p>
+
+      <h2>When <em>not</em> to build an agent</h2>
+      <p>Here is the part the launch pages skip, and the part Anthropic's own guidance leads with: find the simplest solution that meets the need, and only add complexity when it demonstrably pays for itself. An agent is the most flexible thing on the spectrum — and also the slowest, the most expensive, and the least predictable, because every run may take a different route. Those are real engineering costs, paid on every single execution. Autonomy is a price you pay for flexibility, not a badge of sophistication.</p>
+      <p>Three questions, asked in order, settle most designs:</p>
+      <ul>
+        <li><strong>Can one well-crafted prompt do it?</strong> Perhaps with some relevant documents pasted in? Then stop there. A shocking fraction of "we need an agent" requests dissolve under this question alone.</li>
+        <li><strong>Can you write the steps as a numbered list before you start?</strong> Extract the total from every invoice, convert it, append a row — if the route is knowable in advance, build a workflow. It will be faster, cheaper, testable, and it will fail in ways you can reproduce.</li>
+        <li><strong>Does the route genuinely depend on what each step reveals?</strong> Debugging a failing build, researching an unfamiliar market, editing code across a dozen files — only here, where no human can script the path beforehand, does an agent earn its costs.</li>
+      </ul>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The most common failure in this field is not a broken agent — it is a perfectly healthy agent doing a job a fifty-line workflow would have done better. If a reviewer asks "does this need to be agentic?" they are not being cynical; they are asking the simplicity question. <a href="ch049-building-effective-agents.html">Chapter 49</a> is devoted entirely to this decision — when workflows beat agents, with worked examples — so treat this section as the trailer.</p></div>
+
+      <h2>You have been operating this definition for months</h2>
+      <p>One more pass, and this one is personal. You run production agents every day, so every abstract term in this chapter is something you have already watched happen at your keyboard — you just may not have had the name for it. Map your own experience onto the machine:</p>
+
+      <div class="tbl"><table>
+        <tr><th>What you see as an operator</th><th>What it is underneath</th></tr>
+        <tr><td>The model narrates "I'll check the config file next"</td><td>The reasoning half of one loop turn — the model choosing its next step out loud</td></tr>
+        <tr><td>A permission prompt: allow this command?</td><td>The loop pausing at the tool boundary. Nothing has run yet; the model only wrote a request, and your side decides whether to execute it</td></tr>
+        <tr><td>The context meter draining on a long run</td><td>The history growing — the whole transcript is re-sent to the model on every turn (<a href="ch030-tokens-embeddings-context.html">tokens and context</a>)</td></tr>
+        <tr><td>A run stopping with "maximum turns reached"</td><td>The loop's safety cap firing, exactly like <code>range(1, 4)</code> running out in your pyrun above</td></tr>
+        <tr><td>The instructions file the assistant reads at start-up</td><td>The system prompt — a standing briefing that shapes every turn without appearing in any of them</td></tr>
+      </table></div>
+
+      <p>Read that table twice, because it is the quiet thesis of this Act: you are not learning a foreign machine, you are learning the names of parts you already supervise. When the model asked your permission to run a command, you were standing at the tool boundary — the single most important line in agent security, as you will see when you <a href="ch046-tools.html">build tools yourself</a>. When you watched an agent stall and repeat itself, you were watching a loop whose observation never made it back into history. The operator's instincts you already have are the mechanic's instincts; the rest of Act V just hands you the spanner.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this chapter's one question — who decides the next step? — everywhere. In design docs and merge requests it appears as "let's keep this a workflow" or "does this need to be agentic?". In LangGraph code, a graph whose edges are all fixed is a workflow, and a graph with a model-driven conditional edge looping back on itself is an agent wearing graph clothing. In incident reviews, "the agent burned its budget re-running the same search" is a loop-and-observation bug you can now diagnose from the definition alone. And in vendor evaluations, the placing game — LLM, tool, or loop? — will tell you in ten minutes whether a platform contains anything you could not assemble from the three primitives yourself.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. What is the single distinction that makes a system an agent rather than a workflow?</p>
+          <div class="q-opts">
+            <button data-opt="a">It uses a larger, more capable model</button>
+            <button data-opt="b">It makes more than one LLM call</button>
+            <button data-opt="c">The model decides the next step at run time, instead of code fixing the route in advance</button>
+          </div>
+          <p class="q-explain">Chains and routers make many calls with strong models and are still workflows, because the route was authored beforehand. The moment control flow moves into the model's run-time judgement, you have an agent.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Your task: "for every new invoice, extract the total, convert it to rupees, and append a row to a spreadsheet." What should you build?</p>
+          <div class="q-opts">
+            <button data-opt="a">An agent — invoices vary, so the model should decide each step</button>
+            <button data-opt="b">A workflow — the steps are knowable in advance, so script them and use the model only where it adds value</button>
+            <button data-opt="c">Neither — LLMs cannot handle invoices</button>
+          </div>
+          <p class="q-explain">You just wrote the steps as a numbered list, which is the simplicity rule's second question answering itself. A fixed pipeline here is cheaper, faster, and testable; an agent would add cost and unpredictability for zero extra flexibility.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. In the LLM + tools + loop picture, where does MCP belong?</p>
+          <div class="q-opts">
+            <button data-opt="a">Packaging around the tools — a standard plug shape so any tool can connect to any agent</button>
+            <button data-opt="b">A new kind of model that replaces the LLM</button>
+            <button data-opt="c">A replacement for the loop</button>
+          </div>
+          <p class="q-explain">MCP standardises how tools are described and connected — plumbing for the tools ingredient. It does not change what a model is or how the loop runs, which is exactly why it fits the "everything else is packaging" claim.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. The tiny chat CLI from the previous chapter had a loop with an LLM call inside. Why wasn't it an agent?</p>
+          <div class="q-opts">
+            <button data-opt="a">It was an agent — loop plus LLM is the full definition</button>
+            <button data-opt="b">A human drove every iteration and there were no tools — the model never decided a next step or acted on anything</button>
+            <button data-opt="c">Because it ran in a terminal instead of the cloud</button>
+          </div>
+          <p class="q-explain">The CLI's loop waited for your keyboard on every turn, and the model could only ever produce words. Give the model hands (tools) and let its own output decide whether the loop continues, and the same skeleton becomes an agent.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. What does Anthropic's simplicity rule advise?</p>
+          <div class="q-opts">
+            <button data-opt="a">Always build agents — they are the state of the art</button>
+            <button data-opt="b">Avoid agents entirely; workflows can do everything</button>
+            <button data-opt="c">Start with the simplest solution that works, and add agency only when the task's route genuinely cannot be scripted in advance</button>
+          </div>
+          <p class="q-explain">Agents trade cost, latency, and predictability for flexibility. That trade is worth it for open-ended work like debugging or research — and a waste for tasks whose steps you can write down beforehand.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>An agent is an LLM plus tools plus a loop — the model decides its own next step, acts through functions your code runs, and keeps going until the task is done. There is no fourth ingredient.</li>
+          <li>Agency is a spectrum, not a switch: single call, chained workflow, routed workflow, agent. The dial being turned is always who owns the control flow — your code in advance, or the model at run time.</li>
+          <li>Every feature on every agent product maps onto one of the three primitives: memory upgrades the history, MCP upgrades tool plumbing, subagents are tools containing loops, guardrails are gates at the tool boundary.</li>
+          <li>Follow the simplicity rule: one prompt if possible, a workflow if the steps are knowable in advance, an agent only when the route depends on what each step reveals. Autonomy is a cost, not a badge.</li>
+          <li>Your operator experience already contains this whole chapter: permission prompts are the tool boundary, the context meter is the history, "max turns reached" is the loop's brake.</li>
+          <li>Next chapter you build the loop itself, by hand, in about fifty lines — after which no framework will ever look like magic again.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading a new codebase in 30 minutes — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch105">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>Reading a new codebase in 30 minutes</h1>
+        <p class="ch-tagline">Five questions, one timer, zero fear. You are about to learn the recon method professionals use on every unfamiliar repo — and after today, no wall of folders will ever make your stomach drop again.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 106 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your company buys a small office building. The previous facilities manager left overnight with no handover — just a ring of two hundred keys. Tenants arrive Monday at nine; it is now eight-thirty. Do you open all two hundred doors, one by one? Of course not. You read the name board in the lobby to learn what the building is <em>for</em>. You find the main entrance and the loading dock — the only places anything ever comes in. You open the utilities panel to see what the building needs from the outside world: power, water, fibre. Then you follow one tenant from the front door to her desk, noting every turn. Finally you flip through the fire-drill log, because whatever the old manager kept testing is exactly what he was afraid of.</p>
+        <p>Thirty minutes. Five questions. You can now run a building you had never set foot in. A codebase is an office building, and this chapter hands you the clipboard.</p>
+      </section>
+
+      <h2>Nobody reads code like a novel</h2>
+      <p>Here is the secret nobody tells newcomers: senior engineers do not read codebases either — not cover to cover. A fifteen-year veteran opening an unfamiliar repo understands maybe two percent of it by lunchtime, but it is the <em>right</em> two percent, found in a deliberate order. You practised the small-scale version in <a href="ch010-reading-real-code-1.html">the first reading-real-code chapter</a> and <a href="ch022-reading-real-code-2.html">the second</a>: read the imports, the names, the shape — not every line. This chapter scales that habit from one file to a whole repository, as a repeatable drill.</p>
+      <p>The drill is five questions, asked in a fixed order, against a hard timer:</p>
+      <ol>
+        <li><strong>What is this?</strong> — README and <code>pyproject.toml</code></li>
+        <li><strong>Where does it start?</strong> — the entry points</li>
+        <li><strong>What does it need?</strong> — the config</li>
+        <li><strong>What is the money path?</strong> — one request, followed end-to-end</li>
+        <li><strong>What matters?</strong> — the tests</li>
+      </ol>
+      <p>The order is not decoration. Each question narrows the search space for the next one, the way the lobby name board tells you which floor is worth walking. Skip ahead and you drown; follow the order and a 400-file repo collapses into a one-page map.</p>
+
+      <h2>Question 1 — what is this? (README and pyproject)</h2>
+      <p>Open exactly two files. The README's first two screens tell you what the authors <em>claim</em> the project does. Then <code>pyproject.toml</code> — which you met in <a href="ch020-environments-and-packaging.html">the packaging chapter</a> — tells you what it <em>actually is</em>, because dependencies do not lie. A repo that imports <code>fastapi</code> is a web service. One that imports <code>langgraph</code> is building an agent as a graph, the shape you dissected in <a href="ch058-stategraph-anatomy.html">the StateGraph chapter</a>. <code>pandas</code> means data crunching; <code>typer</code> or <code>click</code> means a command-line tool. Ten seconds of dependency reading beats ten minutes of prose.</p>
+      <p>Click through this one the way you would read it on day one:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">pyproject.toml — the ten-second fingerprint</div>
+        <div class="wl-line"><code>[project]</code>
+          <div class="wl-note">The standard metadata section. Whatever the folder is called on disk, this section holds the project's real name and identity.</div></div>
+        <div class="wl-line"><code>name = "support-bot"</code>
+          <div class="wl-note">The installable name. Watch out: the <em>import</em> name often differs (here it will be <code>support_bot</code> with an underscore) — the layout logic from <a href="ch012-why-so-many-files.html">why-so-many-files</a> applies.</div></div>
+        <div class="wl-line"><code>requires-python = "&gt;=3.11"</code>
+          <div class="wl-note">A maturity clue. A modern floor like 3.11+ suggests active maintenance; a 3.8 floor suggests legacy constraints somewhere.</div></div>
+        <div class="wl-line"><code>dependencies = [</code>
+          <div class="wl-note">The single most information-dense list in the repo. Read it like a detective reads a shopping receipt.</div></div>
+        <div class="wl-line"><code>    "fastapi&gt;=0.115",</code>
+          <div class="wl-note">A web framework. So this repo serves HTTP requests — there will be routes, and routes are entry points (question 2 just got easier).</div></div>
+        <div class="wl-line"><code>    "langgraph&gt;=1.0",</code>
+          <div class="wl-note">An agent built as a graph. Somewhere in here is a <code>StateGraph</code> with nodes and edges — you already know its anatomy, so you know what to look for.</div></div>
+        <div class="wl-line"><code>    "httpx",</code>
+          <div class="wl-note">An HTTP client. The service <em>calls out</em> to some other system — which means there is a URL in the config (question 3 just got easier too).</div></div>
+        <div class="wl-line"><code>]</code></div>
+        <div class="wl-line"><code>[project.scripts]</code>
+          <div class="wl-note">Gold. This section is the front door, written down in ink.</div></div>
+        <div class="wl-line"><code>support-bot = "support_bot.cli:main"</code>
+          <div class="wl-note">Read it right-to-left: the function <code>main</code>, in the module <code>support_bot/cli.py</code>, becomes the terminal command <code>support-bot</code>. You now know exactly which file to open first.</div></div>
+      </div>
+
+      <p>One minute in, and you already know the stack, the shape, and the first file worth opening. Write one sentence in your notes — <em>"HTTP service wrapping a LangGraph agent that calls an external refund API"</em> — and move on.</p>
+
+      <h2>Question 2 — where does it start? (entry points)</h2>
+      <p>An <dfn>entry point</dfn> is any place the outside world can start this code running — a terminal command, an HTTP route, a scheduled job, a container boot command. Programs are trees and entry points are the roots: everything else exists because some entry point eventually reaches it, through the import chains you traced in <a href="ch011-imports-and-modules.html">the imports chapter</a>. Find the roots and 400 files stop being a pile and become a hierarchy. Entry points hide in a short, fixed list of places, all sweepable in five minutes:</p>
+
+      <div class="code-title">the front-door sweep — run from the repo root</div>
+      <pre><code class="language-bash"># 1. installed commands, declared in ink
+cat pyproject.toml            # look for [project.scripts]
+
+# 2. "python -m package" support
+ls src/*/__main__.py
+
+# 3. runnable scripts
+grep -rn "__main__" --include="*.py" . | head
+
+# 4. what the container actually boots
+grep -n "CMD\|ENTRYPOINT" Dockerfile
+
+# 5. how CI runs, tests, and ships it -- the team's true habits
+cat .gitlab-ci.yml</code></pre>
+
+      <p>That last one deserves a highlight: <code>.gitlab-ci.yml</code> is the repo's autobiography — the exact commands the team trusts to install, test, and deploy. If the README and the CI file disagree about how to run the project, believe the CI file: it executes on every push, so it cannot go stale.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>READMEs lie. Not maliciously — they rot, because nothing breaks when they are wrong. Executable artifacts cannot rot: a wrong <code>pyproject.toml</code> fails installs, a wrong <code>.gitlab-ci.yml</code> fails pipelines, a wrong <code>Dockerfile</code> never boots. When prose and executable artifacts disagree, believe the executable one.</p></div>
+
+      <h2>Question 3 — what does it need? (config)</h2>
+      <p>The <dfn>config surface</dfn> is the complete list of things a program needs from the outside world before it will run — API keys, database URLs, model names, feature flags. It is also, read another way, a map of every external system the repo touches. A config surface with <code>OPENAI_API_KEY</code>, <code>REFUND_API_URL</code>, and <code>PG_DSN</code> tells you this service talks to an LLM provider, a refund system, and a Postgres database — before you have read a single function.</p>
+      <p>You know the hiding places from <a href="ch019-logging-config-env.html">the config chapter</a>: a <code>.env.example</code> file (the polite repo's gift — the whole surface in one place), a <code>config.py</code> or <code>settings.py</code> module, or a <a href="ch016-type-hints-and-pydantic.html">pydantic</a> settings class where each field is one required input, typed and documented. If the repo deploys to Kubernetes, the <code>deploy/</code> manifests repeat the same list from the operations side.</p>
+      <p>Four minutes here, and your notes gain a second line: <em>"needs: LLM key, refund API URL, log level"</em>. You now know what this building is plugged into.</p>
+
+      <h2>Question 4 — the money path</h2>
+      <p>Now the heart of the method. Every repo, however sprawling, exists to serve the request it was funded to serve. The <dfn>money path</dfn> is that single most important request, followed end-to-end: from the entry point where it arrives, through every hop, to the response going out. Do not study modules in isolation — <em>trace one real journey</em>, and let it introduce the modules in the order they matter.</p>
+      <p>This is where your two power tools earn their keep: <strong>search</strong> to find where the journey starts, and <strong>jump-to-definition</strong> to follow every hop without guessing. Watch a full trace:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Search for the start">
+          <h3>1. Search for a string the user would recognise</h3>
+          <div class="diagram">
+            <div class="d-box hot">Search<small>grep -rn "/tickets"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">app.py<small>one hit</small></div>
+            <div class="d-box dim">400 other files</div>
+          </div>
+          <p class="step-cap">The money request here is "a customer submits a refund ticket". Search for the route text, an error message, or a button label — anything user-visible. Such strings are anchors: they appear in exactly one place, and that place is where the journey enters the code.</p>
+        </div>
+        <div class="step" data-title="The route">
+          <h3>2. Read the handler — but only its skeleton</h3>
+          <div class="diagram">
+            <div class="d-box hot">app.py<small>@app.post("/tickets") def handle_ticket(...)</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">service.py</div>
+          </div>
+          <p class="step-cap">The handler is usually short: validate the input, call one function, shape the response. Ignore the details. Your only question is: <em>which one call does the real work?</em> Here it is <code>run_agent(ticket)</code>. Write the breadcrumb, keep moving.</p>
+        </div>
+        <div class="step" data-title="Jump to definition">
+          <h3>3. Jump to definition — never scroll, never guess</h3>
+          <div class="diagram">
+            <div class="d-box dim">app.py</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">agent.py<small>def run_agent(ticket):</small></div>
+          </div>
+          <p class="step-cap">In any IDE, place the cursor on <code>run_agent</code> and press the jump-to-definition key (F12 in VS Code). The editor teleports you to the function's source, wherever it lives. This one keystroke is the difference between tracing a path in minutes and drowning in folders for an hour.</p>
+        </div>
+        <div class="step" data-title="Recognise the shape">
+          <h3>4. Recognise a shape you already know</h3>
+          <div class="diagram">
+            <div class="d-box dim">agent.py</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Agent<small>create_agent(model, tools=[refund_lookup])</small></div>
+          </div>
+          <p class="step-cap">And here the whole course pays off: inside <code>run_agent</code> sits <code>create_agent</code> — the loop you built by hand in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> and met in framework dress in <a href="ch054-create-agent.html">create_agent</a>. You do not need to read this file carefully. You already know what a model-plus-tools loop does. Recognising shapes is what turns reading into skimming.</p>
+        </div>
+        <div class="step" data-title="The tool touches the world">
+          <h3>5. Follow the path out of the building</h3>
+          <div class="diagram">
+            <div class="d-box dim">Agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">refund_lookup<small>httpx.get(REFUND_API_URL + ...)</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">External refund API</div>
+          </div>
+          <p class="step-cap">The tool uses <code>httpx</code> and the <code>REFUND_API_URL</code> config variable — the exact two clues you logged in questions 1 and 3. Feel that click? The dependency list predicted an outbound call; the config surface named its address; the money path just walked through it. The three questions confirm each other.</p>
+        </div>
+        <div class="step" data-title="The map is done">
+          <h3>6. Your breadcrumbs ARE the map</h3>
+          <div class="diagram">
+            <div class="d-box good">POST /tickets</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">handle_ticket</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">run_agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">refund_lookup</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">response</div>
+          </div>
+          <p class="step-cap">Six breadcrumb lines in your notes. That is the spine of the repo — every other file is a rib hanging off one of these vertebrae, and you can now place any file you open later by asking "which part of the spine does this serve?"</p>
+        </div>
+      </div>
+
+      <h2>Question 5 — what matters? (the tests)</h2>
+      <p>Last stop: the <code>tests/</code> folder — not to run everything, but to read <em>names</em>. Test names are the most honest documentation in any repo, because a team only writes a test when it fears something breaking. <code>test_refund_over_limit_is_escalated</code> tells you there is a refund limit, that exceeding it must escalate rather than auto-approve, and that someone once got burned here. That is a business rule, an invariant, and a war story in one line — no wiki required.</p>
+      <p>Three quick reads: skim the test <em>filenames</em> for the repo's areas of concern, skim the test <em>function names</em> in the biggest file for the crown-jewel rules, and check which test files changed most recently (<code>git log</code>, from <a href="ch021-just-enough-git.html">the git chapter</a>) to see where the action is. If the repo ships an agent, find the eval suite from the previous chapter — where the evals live is where the team's real quality bar lives.</p>
+
+      <h2>The vocabulary of a repo detective</h2>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">entry point</span><span class="flip-back">Any place the outside world can start the code running: an installed command, an HTTP route, a scheduled job, a container CMD. The roots of the tree.</span></button>
+        <button class="flip" type="button"><span class="flip-front">money path</span><span class="flip-back">The single most important request, traced end-to-end from entry point to response. The spine every other file hangs off.</span></button>
+        <button class="flip" type="button"><span class="flip-front">config surface</span><span class="flip-back">Everything the program needs from outside before it runs — and, read backwards, a map of every external system it touches.</span></button>
+        <button class="flip" type="button"><span class="flip-front">hot files</span><span class="flip-back">The files that change most often in git history. Change frequency marks where the complexity, the bugs, and the team's attention live.</span></button>
+        <button class="flip" type="button"><span class="flip-front">jump-to-definition</span><span class="flip-back">The IDE keystroke (F12 in VS Code) that teleports you from a function call to its source. Powered by a language server; the antidote to folder-diving.</span></button>
+        <button class="flip" type="button"><span class="flip-front">dead code</span><span class="flip-back">Code no entry point can reach any more. Every old repo has some. If a file scares you, first check whether anything still imports it.</span></button>
+      </div>
+
+      <h2>Run the recon yourself</h2>
+      <p>Here is the whole method as executable Python. The "repo" below is a miniature — eight files instead of eight hundred — but the recon logic is precisely what you will do by hand on a real one. Press <strong>Run</strong> and watch thirty minutes of method compress into one screen.</p>
+
+      <div class="pyrun" data-title="Repo recon in miniature — run me">
+<textarea class="py-src" spellcheck="false">
+import re
+
+# A miniature repo: path -&gt; contents. Real repos are this, times 100.
+REPO = {
+    "README.md": "# support-bot -- an agent that answers refund tickets",
+    "pyproject.toml": """[project]
+name = "support-bot"
+dependencies = ["fastapi", "langgraph", "httpx"]
+
+[project.scripts]
+support-bot = "support_bot.cli:main"
+""",
+    ".env.example": "OPENAI_API_KEY=\nREFUND_API_URL=\nLOG_LEVEL=info",
+    "src/support_bot/cli.py": """def main():
+    start_server()
+
+if __name__ == "__main__":
+    main()
+""",
+    "src/support_bot/app.py": """app = FastAPI()
+
+@app.post("/tickets")
+def handle_ticket(ticket):
+    return run_agent(ticket)
+""",
+    "src/support_bot/config.py": """API_KEY = os.environ["OPENAI_API_KEY"]
+REFUND_URL = os.environ.get("REFUND_API_URL")
+""",
+    "tests/test_refunds.py": """def test_refund_over_limit_is_escalated(): ...
+def test_refund_under_limit_is_approved(): ...
+""",
+    "tests/test_prompts.py": "def test_system_prompt_mentions_refund_policy(): ...",
+}
+
+print("REPO RECON REPORT")
+print("=" * 48)
+
+# -- Q1: what is this? --------------------------------
+readme = REPO["README.md"].lstrip("# ")
+deps_blob = REPO["pyproject.toml"].split("dependencies = [")[1].split("]")[0]
+deps = re.findall(r'"([^"]+)"', deps_blob)
+print("\n1. WHAT IS THIS?")
+print("   readme :", readme)
+print("   stack  :", ", ".join(deps))
+
+# -- Q2: where does it start? -------------------------
+print("\n2. WHERE DOES IT START?")
+for path, text in REPO.items():
+    for line in text.splitlines():
+        if "__main__" in line:
+            print("   " + path + "  (runnable script)")
+        if ":main" in line and "=" in line:
+            print("   installed command: " + line.strip())
+    for verb, route in re.findall(r'@app\.(get|post)\("([^"]+)"\)', text):
+        print("   HTTP route: " + verb.upper() + " " + route)
+
+# -- Q3: what does it need? ---------------------------
+print("\n3. WHAT DOES IT NEED? (config surface)")
+needs = set()
+for path, text in REPO.items():
+    needs.update(re.findall(r'environ[^"\n]*"([A-Z_]+)"', text))
+    if path.endswith(".env.example"):
+        for line in text.splitlines():
+            if "=" in line:
+                needs.add(line.split("=")[0])
+for var in sorted(needs):
+    print("   needs:", var)
+
+# -- Q4: the money path (yours to walk with F12) ------
+print("\n4. MONEY PATH (walk it by hand with jump-to-def):")
+print("   POST /tickets -&gt; handle_ticket -&gt; run_agent -&gt; ...")
+
+# -- Q5: what matters? (test names read as a spec) ----
+print("\n5. WHAT MATTERS? (test names as documentation)")
+for path, text in REPO.items():
+    for name in re.findall(r"def (test_\w+)", text):
+        print("   " + name.replace("test_", "").replace("_", " "))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now make it yours. Add a new variable to <code>config.py</code> in the fake repo (say <code>SLACK_WEBHOOK_URL</code>) and re-run — watch question 3 catch it. Add a second route to <code>app.py</code> and watch question 2 grow. Then notice what the script <em>cannot</em> do: question 4 still says "walk it by hand", because tracing the money path needs judgement about which request matters. Machines sweep; you decide.</p></div>
+
+      <h2>Tools that do the walking for you</h2>
+      <p>The method is yours; the legwork is delegable. Four tool families make each question faster:</p>
+      <p><strong>Search.</strong> <code>grep -rn</code> works everywhere; <code>ripgrep</code> (<code>rg</code>) is the same idea but dramatically faster and skips <code>.git</code> and virtualenvs by default. GitLab's own code search does the same trick across every repo in your group — handy when the money path leaves one repo and enters another.</p>
+      <p><strong>Jump-to-definition and find-references.</strong> Powered by a language server reading the code's structure, not its text. Jump-to-definition follows a call <em>forward</em> to its source; find-references walks <em>backward</em> — "who calls this?" — which is exactly the question you ask before touching anything in a merge request.</p>
+      <p><strong>Structure and graph tools.</strong> <code>tree -L 2</code> prints the folder skeleton in two seconds. Your IDE's outline panel lists every function in a file so you can read a module's table of contents before its body. And a newer family of code knowledge-graph tools parses a whole repo into functions, classes, and call chains you can query directly — "what calls <code>run_agent</code>?" answered in one lookup instead of twenty file-opens. Whatever the brand, they pre-walk the paths so you can query them.</p>
+      <p><strong>Git itself.</strong> History tells you where a repo is alive:</p>
+
+      <div class="code-title">find the hot files — where the action (and the pain) lives</div>
+      <pre><code class="language-bash">git log --format="" --name-only | sort | uniq -c | sort -rn | head</code></pre>
+
+      <p>The files that change most often are where the features, the bugs, and the team's attention concentrate. If a file has 300 commits and everything around it has 10, you have found the building's busiest corridor.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Yes — an AI assistant with the repo open will give you a guided tour, and you should ask for one. But run the five questions yourself first, then let the assistant fill gaps: the recon is how you <em>verify</em> the tour, and the assistant is occasionally a confident, charming, wrong tour guide. Trust structure over stories — including its stories.</p></div>
+
+      <h2>The 30-minute checklist</h2>
+      <p>Here is the whole chapter as one timeboxed card. Copy it into your notes app; it works unchanged on any repo in any language.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Clock</th><th>Question</th><th>Where you look</th><th>You write down</th></tr>
+        <tr><td>0:00–3:00</td><td>What is this?</td><td>README top two screens; <code>pyproject.toml</code> name + dependencies</td><td>One sentence + the stack fingerprint</td></tr>
+        <tr><td>3:00–8:00</td><td>Where does it start?</td><td><code>[project.scripts]</code>, <code>__main__</code>, Dockerfile CMD, <code>.gitlab-ci.yml</code></td><td>The front doors (usually 1–3 of them)</td></tr>
+        <tr><td>8:00–12:00</td><td>What does it need?</td><td><code>.env.example</code>, settings module, deploy manifests</td><td>The config surface = external systems touched</td></tr>
+        <tr><td>12:00–25:00</td><td>The money path</td><td>Search for a user-visible string, then jump-to-definition, hop by hop</td><td>5–8 breadcrumb lines: the spine</td></tr>
+        <tr><td>25:00–30:00</td><td>What matters?</td><td>Test file names, test function names, hot files, the CI test job</td><td>Three things the team fears breaking</td></tr>
+      </table></div>
+
+      <p>When the timer rings, stop. You will understand perhaps a fifth of the repo — and that is the point. The five answers are a load-bearing map; everything else you learn on demand, the day a task touches it. Chasing completeness past minute thirty burns a day and returns less than the map gave you in half an hour.</p>
+
+      <h2>Your practice plan</h2>
+      <p>Like the <a href="ch045-react-loop-by-hand.html">ReAct loop</a>, this only becomes reflex through reps. Four repos, one per sitting, each a strict 30 minutes with the checklist open:</p>
+      <ol>
+        <li><strong>A repo you already operate.</strong> Clone an MCP server or bot you use daily and run the recon. You know its behaviour from the outside, so you can grade your own map — did the money path match what you knew?</li>
+        <li><strong>The deepagents repository.</strong> Small and canonical for this course. Find <code>create_deep_agent</code>, then trace how a task flows into the loop. You will recognise every shape from Act VII.</li>
+        <li><strong>The MCP Python SDK.</strong> Mid-sized. Find where <code>FastMCP</code> lives and how <code>@mcp.tool()</code> registers a function — the machinery behind <a href="ch077-build-an-mcp-server.html">the server you built</a>.</li>
+        <li><strong>LangChain.</strong> Deliberately huge. The win is <em>not</em> understanding it all — it is proving that the five questions map a monster repo while touching under one percent of its files.</li>
+      </ol>
+      <p>Rules of the drill: hard timer, written answers (one sentence each), and verify at least one answer by <em>doing</em> — run the entry-point command, or run one test file. An unverified map is a guess; the fire-drill log matters because someone actually held the drill.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This skill fires constantly. A data scientist opens a forty-file merge request and wants review by Friday — thirty minutes of recon turns you from a rubber stamp into the reviewer who asks "why does the money path skip the validation module?". Your team inherits a service from a departing contractor — the recon is the handover they never wrote. A vendor claims their platform is production-grade — question 5 takes ten minutes, and their empty <code>tests/</code> folder answers for them. And on day one of any new project, while others wait for the walkthrough meeting, you already have the map.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. You have just cloned an unfamiliar repo. What do you open first, and why?</p>
+          <div class="q-opts">
+            <button data-opt="a">The biggest .py file — most code means most important</button>
+            <button data-opt="b">README plus pyproject.toml — the claim plus the dependency fingerprint that cannot lie</button>
+            <button data-opt="c">Every file in alphabetical order, skimming quickly</button>
+          </div>
+          <p class="q-explain">The README gives the authors' claim; the dependency list gives the ground truth (fastapi = web service, langgraph = agent, and so on). Together they answer "what is this?" in about a minute — and they tell you where to aim questions 2 and 3.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. What exactly is the "money path"?</p>
+          <div class="q-opts">
+            <button data-opt="a">The billing and payments module</button>
+            <button data-opt="b">The file with the most git commits</button>
+            <button data-opt="c">The single most important request, traced end-to-end from entry point to response</button>
+          </div>
+          <p class="q-explain">Every repo exists to serve one request well. Tracing that journey — search for where it enters, then jump-to-definition hop by hop — produces the spine of the codebase, and every other file becomes "a rib off some vertebra" instead of a mystery.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. The README says "run python server.py", but there is no server.py in the repo. Where do you find how it really runs?</p>
+          <div class="q-opts">
+            <button data-opt="a">The executable artifacts — [project.scripts], the Dockerfile CMD, or .gitlab-ci.yml — because they break when wrong, so they cannot go stale</button>
+            <button data-opt="b">An older commit of the README</button>
+            <button data-opt="c">The project wiki</button>
+          </div>
+          <p class="q-explain">Prose rots silently; executable artifacts cannot. The CI file in particular runs on every push — whatever commands it contains are the team's real, working habits.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Why read test names before test bodies?</p>
+          <div class="q-opts">
+            <button data-opt="a">Test bodies are usually broken and misleading</button>
+            <button data-opt="b">Teams only write tests for things they fear breaking, so the names are an honest spec of the business rules that matter</button>
+            <button data-opt="c">Names load faster in the editor</button>
+          </div>
+          <p class="q-explain">A name like test_refund_over_limit_is_escalated encodes a business rule, an invariant, and a past incident in one line — documentation that stays true because CI keeps it true.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. The timer rings at 30 minutes and you understand roughly 20% of the repo. What now?</p>
+          <div class="q-opts">
+            <button data-opt="a">Reset the timer and push on until you understand everything</button>
+            <button data-opt="b">Stop — you have the load-bearing map; learn the rest on demand as tasks actually touch it</button>
+            <button data-opt="c">Conclude the repo is too complex and needs a rewrite</button>
+          </div>
+          <p class="q-explain">The method's whole premise is that the right 20% — purpose, entry points, config, money path, tests — carries nearly all the working value. Completeness past that point costs hours and returns trivia; the rest you learn the day a task touches it.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Nobody reads codebases cover to cover. Professionals run a recon: five questions, fixed order, hard timer — and so do you now.</li>
+          <li>README + pyproject answer "what is this?"; dependencies are a fingerprint that cannot lie the way prose can.</li>
+          <li>Entry points — [project.scripts], __main__, Dockerfile CMD, the CI file — are the roots of the tree; find them and the file pile becomes a hierarchy.</li>
+          <li>The config surface is both a shopping list (what it needs) and a map (what external systems it touches).</li>
+          <li>The money path — one real request traced end-to-end with search and jump-to-definition — is the spine of the repo; write it down as 5–8 breadcrumbs.</li>
+          <li>Test names are the most honest documentation in the building: teams only test what they fear breaking.</li>
+          <li>When prose and executable artifacts disagree, believe the executable one — and verify at least one recon answer by actually running something.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

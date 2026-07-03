@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent skills: SKILL.md — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch084">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act X · Harness Anatomy</div>
+        <h1>Agent skills: SKILL.md</h1>
+        <p class="ch-tagline">Tools give an agent hands. Skills give it training. A skill is a folder with a markdown file inside — and that humble format has quietly become the way you teach any agent a procedure, in any harness, without writing a line of code.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 85 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Six a.m. in the kitchen of a serious restaurant. A new chef starts today. Nobody sits her down to recite three hundred recipes — that would take a week and she would forget most of it by lunch. Instead, the sous-chef points at a box on the shelf: laminated cards, one per dish. Each card has a name on its spine — <em>biryani</em>, <em>consommé</em>, <em>sourdough</em> — and one line beneath it saying when the card matters. She scans the spines in two minutes and gets to work.</p>
+        <p>When the first biryani order lands, she pulls that one card. Numbered steps. A warning about resting the rice. A note pointing to the spice-blend sheet clipped behind it, which she flips to only when she reaches step four. A small measuring scoop taped to the back — she uses it without needing to know how it was made. She never opens the other 299 cards. The head chef who wrote them left years ago, yet every cook since has cooked exactly like him.</p>
+        <p>That card box is a skills directory. Each card is a <code>SKILL.md</code>. And "scan the spines, pull one card, flip to the clipped sheet only at step four" has a name: progressive disclosure.</p>
+      </section>
+
+      <h2>What a skill actually is</h2>
+      <p>A <dfn>skill</dfn> is a folder containing a markdown file called <code>SKILL.md</code> — a written procedure that teaches an agent <em>how</em> to do a specific job, loaded into context only when that job comes up. No code is required. If you can write a clear checklist for a new colleague, you can write a skill.</p>
+      <p>Remember the frame from <a href="ch081-what-is-a-harness.html">the harness chapter</a>: the harness is everything wrapped around the model — the loop, the tools, the context plumbing. Skills are the harness's <em>training library</em>. And recall <a href="ch046-tools.html">tools</a>: a tool is a function your code is willing to execute on the model's behalf. A skill adds no new capability at all. It is choreography — it tells the model which of its existing tools to use, in what order, with what cautions, to a standard you wrote down once. The recipe card does not invent knives; it tells you where to make the cut.</p>
+      <p>On disk, a typical skill looks like this:</p>
+
+      <div class="code-title">the folder layout</div>
+      <pre><code class="language-bash">release-notes/
+  SKILL.md               # the card: frontmatter + procedure
+  references/
+    tone-guide.md        # extra reading, pulled in only if needed
+  scripts/
+    collect_commits.sh   # runnable helper — executed, not read</code></pre>
+
+      <p>Only <code>SKILL.md</code> is mandatory. The <code>references/</code> and <code>scripts/</code> folders (the names are convention, not law) hold whatever the procedure leans on: long reference documents the model reads on demand, and helper scripts it can <em>run without ever loading their source into context</em> — the measuring scoop taped to the back of the card.</p>
+
+      <h2>Anatomy of a SKILL.md</h2>
+      <p>The file itself has two parts. At the top sits <dfn>frontmatter</dfn> — a small block of YAML (the human-friendly config format from <a href="ch005-yaml-and-json.html">chapter 5</a>) fenced by <code>---</code> lines, holding structured metadata. Below it comes the body: ordinary markdown, the procedure itself. The open standard requires exactly two frontmatter fields: <code>name</code> (lowercase, hyphenated — the spine of the card) and <code>description</code> (what the skill does <em>and when to use it</em> — the line beneath the spine). Here is a complete, real skill. Click the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">release-notes/SKILL.md — a complete skill</div>
+        <div class="wl-line"><code>---</code>
+          <div class="wl-note">The opening fence of the YAML frontmatter. Everything between the two <code>---</code> lines is metadata for the harness; everything after is instructions for the model.</div></div>
+        <div class="wl-line"><code>name: release-notes</code>
+          <div class="wl-note">The unique identifier — lowercase letters and hyphens by convention. This is what shows up in skill lists and what other documents use to refer to it.</div></div>
+        <div class="wl-line"><code>description: Drafts customer-facing release notes from merged</code>
+          <div class="wl-note">The single most important line in the file. This is the ONLY part of the skill the model sees before deciding whether to use it — so it must advertise both <em>what</em> the skill does and <em>when</em> it applies. A weak description means the skill never fires, no matter how good the body is.</div></div>
+        <div class="wl-line"><code>  changes. Use when the user asks for release notes, a</code>
+          <div class="wl-note">Notice the "Use when…" clause listing trigger phrases. Skill authors write descriptions the way shopkeepers write signs: for the person walking past, not for themselves.</div></div>
+        <div class="wl-line"><code>  changelog, or "what shipped this week".</code></div>
+        <div class="wl-line"><code>---</code></div>
+        <div class="wl-line"><code># Writing release notes</code>
+          <div class="wl-note">The body begins — plain markdown, loaded into context only when the skill is triggered. Headings, lists, and short imperative sentences work best: you are writing for a very fast reader with a very expensive attention span.</div></div>
+        <div class="wl-line"><code>Follow these steps in order.</code></div>
+        <div class="wl-line"><code>1. Run scripts/collect_commits.sh to list merges since the last tag.</code>
+          <div class="wl-note">Step one delegates to a bundled script. The model executes it with its shell tool — it never reads the script's source, so a 200-line helper costs zero context. Deterministic work belongs in scripts; judgement belongs in prose.</div></div>
+        <div class="wl-line"><code>2. Group the changes into Added, Fixed, and Changed.</code></div>
+        <div class="wl-line"><code>3. Rewrite each item for a customer: benefit first, no ticket numbers.</code>
+          <div class="wl-note">This is the institutional-knowledge part — the judgement call a veteran would make automatically and a newcomer (or a bare model) would fumble. Encoding taste like this is most of what makes a skill valuable.</div></div>
+        <div class="wl-line"><code>4. Match the voice described in references/tone-guide.md.</code>
+          <div class="wl-note">A pointer, not a paste. The tone guide might be two thousand words; the model opens it only if it gets this far. This is the third level of progressive disclosure — more on that in a moment.</div></div>
+        <div class="wl-line"><code>5. Show the user the draft. Never publish without approval.</code>
+          <div class="wl-note">Skills routinely carry guardrails as plain sentences. It is remarkable how much production safety in real harnesses is exactly this: a firm English sentence in a markdown file.</div></div>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Keep the body under roughly 500 lines; push anything longer into <code>references/</code>. Some harnesses also read optional frontmatter fields — Claude Code, for instance, understands an <code>allowed-tools</code> list that fences which tools the skill may use, and a <code>license</code> field — but <code>name</code> and <code>description</code> are the only two the open standard requires.</p></div>
+
+      <h2>Progressive disclosure: the whole trick</h2>
+      <p>Here is the problem skills solve. You saw in <a href="ch082-context-engineering.html">the context-engineering chapter</a> that the context window is the scarcest resource in the building — every token you preload is attention spent before the user even says hello. Now imagine an agent with two hundred procedures: release notes, database runbooks, invoice formats, deployment rituals. Paste them all into the system prompt and you have burned an enormous token budget on material that is 99% irrelevant to any single task.</p>
+      <p><dfn>Progressive disclosure</dfn> is the answer: reveal information in layers, each layer only when the previous one says it is worth it. Skills have three layers. The <strong>name and description</strong> of every skill are always in context — a few dozen tokens each, the spines in the card box. The <strong>full body</strong> of a skill is loaded only when the model judges, from the description, that this skill matches the task at hand. And the <strong>bundled files</strong> — references, scripts — are touched only if the procedure actually reaches the step that needs them. Watch it happen:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Session starts">
+          <h3>1. The harness scans the card box</h3>
+          <div class="diagram">
+            <div class="d-box hot">Harness<small>scans skills folders</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">System prompt<small>50 names + descriptions</small></div>
+            <div class="d-box dim">Skill bodies<small>stay on disk</small></div>
+          </div>
+          <p class="step-cap">At startup the harness walks its skills directories and injects one line per skill — name plus description — into the system prompt. Fifty skills cost a couple of thousand tokens, not a hundred thousand.</p>
+        </div>
+        <div class="step" data-title="A task arrives">
+          <h3>2. The model scans the spines</h3>
+          <div class="diagram">
+            <div class="d-box hot">User<small>"draft the release notes for 2.4"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Model<small>reads the index</small></div>
+            <div class="d-box dim">Skill bodies</div>
+          </div>
+          <p class="step-cap">The model compares the task against the descriptions it can see. This is why the description must carry the trigger phrases — it is the only evidence available at decision time.</p>
+        </div>
+        <div class="step" data-title="Trigger">
+          <h3>3. One card is pulled</h3>
+          <div class="diagram">
+            <div class="d-box">Model<small>"load release-notes"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Harness<small>reads SKILL.md into context</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Context<small>+ one body</small></div>
+          </div>
+          <p class="step-cap">The description matched, so the harness reads that one SKILL.md body into the conversation. The other forty-nine skills still cost nothing beyond their two lines.</p>
+        </div>
+        <div class="step" data-title="Level three">
+          <h3>4. Clipped sheets, only at step four</h3>
+          <div class="diagram">
+            <div class="d-box">Model<small>follows the steps</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">scripts/<small>executed, never read</small></div>
+            <div class="d-box hot">references/<small>read only when a step needs it</small></div>
+          </div>
+          <p class="step-cap">Mid-procedure, the skill points outward: a script is run through the shell tool (its source never enters context), and the tone guide is opened only when the drafting step arrives. Detail on demand, all the way down.</p>
+        </div>
+        <div class="step" data-title="Done">
+          <h3>5. The bill stays small</h3>
+          <div class="diagram">
+            <div class="d-box good">Task done<small>to the house standard</small></div>
+            <div class="d-box">Context used<small>index + 1 body + 1 reference</small></div>
+            <div class="d-box dim">49 other skills<small>two lines each, unread</small></div>
+          </div>
+          <p class="step-cap">The agent performed like a veteran without ever holding the whole training manual in its head. Tomorrow, a different order pulls a different card.</p>
+        </div>
+      </div>
+
+      <p>The economics are dramatic. Illustrative round numbers, for a harness carrying fifty skills of about 1,500 tokens each:</p>
+
+      <div data-bars data-title="Context cost at session start, 50 skills (illustrative)" data-unit="tokens"
+           data-note="Metadata-only loading is roughly a thirty-fold saving before the conversation even begins — and the gap widens with every skill you add.">
+        <div class="bar" data-label="Every skill body preloaded" data-value="75000"></div>
+        <div class="bar" data-label="Names + descriptions only" data-value="2500"></div>
+      </div>
+
+      <h2>Run the loader yourself</h2>
+      <p>Below is a miniature skill-aware harness — the same three-layer dance, small enough to read in one sitting. As always in this course, the "model" is a scripted stand-in (<code>fake_llm</code>) so the page needs no API key; in production, the same interface would be a real chat-model call inside the <a href="ch045-react-loop-by-hand.html">loop you built by hand</a>. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A skill loader with progressive disclosure — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- the card box: three skills -----------------------------
+SKILLS = {
+    "release-notes": {
+        "description": ("Drafts customer-facing release notes. "
+                        "Use for changelogs or 'what shipped'."),
+        "body": ("# Writing release notes\n"
+                 "1. List merges since the last tag.\n"
+                 "2. Group into Added / Fixed / Changed.\n"
+                 "3. Benefit first, no ticket numbers.\n"
+                 "4. Draft only; never publish without approval."),
+    },
+    "db-runbook": {
+        "description": ("Diagnoses database slowdowns. "
+                        "Use for latency or timeout complaints."),
+        "body": ("# Database runbook\n"
+                 "1. Check the connection pool.\n"
+                 "2. Read the slow-query log.\n"
+                 "3. Escalate with evidence, not vibes."),
+    },
+    "brand-voice": {
+        "description": ("Applies the house writing style. "
+                        "Use for any customer-facing text."),
+        "body": ("# Brand voice\n"
+                 "Warm, plain words. Short sentences. "
+                 "Never say 'leverage'."),
+    },
+}
+
+def tokens(text):                 # rough: 1 word ~ 1.3 tokens
+    return int(len(text.split()) * 1.3)
+
+def skills_index():
+    """Level 1: names + descriptions only — the spines."""
+    lines = ["You have skills. Reply 'LOAD: name' to read one."]
+    for name, s in SKILLS.items():
+        lines.append(f"- {name}: {s['description']}")
+    return "\n".join(lines)
+
+# ---- the 'model': a scripted stand-in for a real LLM --------
+def fake_llm(context, task):
+    for name, s in SKILLS.items():
+        if s["body"] in context:  # a card is already in hand
+            return (f"FINAL: I followed the '{name}' steps; "
+                    "here is the result for your approval.")
+    for name in SKILLS:           # scan the spines
+        if name.split("-")[0] in task.lower():
+            return f"LOAD: {name}"
+    return "FINAL: no skill matched; answering from scratch."
+
+# ---- the harness loop ---------------------------------------
+def run(task):
+    context = skills_index()
+    print(f"[harness] index in context: {tokens(context)} tokens")
+    for turn in range(1, 4):
+        reply = fake_llm(context, task)
+        print(f"[model, turn {turn}] {reply}")
+        if reply.startswith("LOAD: "):
+            name = reply.split("LOAD: ")[1].strip()
+            context += "\n\n" + SKILLS[name]["body"]   # level 2
+            print(f"[harness] loaded '{name}' "
+                  f"(context now {tokens(context)} tokens)")
+        else:
+            return reply
+
+run("Draft the release notes for version 2.4")
+
+eager = tokens(skills_index()
+               + "".join(s["body"] for s in SKILLS.values()))
+print()
+print(f"Preloading every body would cost {eager} tokens")
+print("for just 3 skills. Now imagine 200 of them.")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it, gently. Change the task to <code>"Users report timeouts, the db feels slow"</code> and watch a different card get pulled. Then rename <code>db-runbook</code> to <code>database-runbook</code> and run the same task again — the skill silently never fires. That is the exact bug you will one day debug in production, where the fix is almost always "rewrite the description (or the trigger) to match what people actually say".</p></div>
+
+      <h2>Skills vs tools vs prompts — and vs memory</h2>
+      <p>Four things live near each other in a harness and get muddled constantly. Keep them apart with one question: <em>what does it give the agent?</em></p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>Tool</th><th>Skill</th><th>Prompt</th></tr>
+        <tr><td>What it is</td><td>Code the harness will execute</td><td>A markdown procedure the model reads</td><td>Standing instruction text</td></tr>
+        <tr><td>Gives the agent</td><td>Capability — what it <em>can do</em></td><td>Competence — how to <em>do it well</em></td><td>Disposition — how to <em>behave</em></td></tr>
+        <tr><td>Written in</td><td>Code plus a schema</td><td>Plain language, optional files</td><td>Plain language</td></tr>
+        <tr><td>Loaded</td><td>Schema advertised every turn</td><td>On demand — progressive disclosure</td><td>Always, in the system prompt</td></tr>
+        <tr><td>Example</td><td><code>send_email()</code></td><td>The weekly release ritual</td><td>"Be concise. Never push to main."</td></tr>
+      </table></div>
+
+      <p>A skill usually <em>orchestrates</em> tools — the recipe uses knives it did not invent. That also separates skills from <a href="ch074-why-mcp-exists.html">MCP</a>: an MCP server plugs new capabilities in from outside (more knives); a skill teaches the model to use the knives it already has, in the right order, to your standard. They compose beautifully: many real skills are step-by-step guides to driving a particular MCP server well. And where <a href="ch037-prompting-that-matters.html">prompting</a> shapes how the model behaves everywhere, all the time, a skill is a prompt with a name, a trigger, and luggage — it shows up only when called for, and it brings its own files.</p>
+      <p>What about the previous chapter's subject, <a href="ch083-long-term-memory.html">long-term memory</a>? Memory is what the agent <em>learned</em> — facts that accumulated from conversations, curated after the fact. A skill is what somebody <em>taught</em> — deliberately authored, versioned in git, reviewed in merge requests like any other artefact. Memory drifts; skills are edited. When a lesson from one session should upgrade every future session, the professional move is to fold it into the owning skill — which is why good teams treat skills as living documents, not write-once cards.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">skill</span><span class="flip-back">A folder with a SKILL.md inside: a named, on-demand procedure that teaches the model how to do one job well.</span></button>
+        <button class="flip" type="button"><span class="flip-front">frontmatter</span><span class="flip-back">The YAML block between --- fences at the top of SKILL.md. The standard requires two fields: name and description.</span></button>
+        <button class="flip" type="button"><span class="flip-front">description trigger</span><span class="flip-back">The "what it does + when to use it" line. The only part the model sees when deciding whether to load the skill — its advertisement.</span></button>
+        <button class="flip" type="button"><span class="flip-front">progressive disclosure</span><span class="flip-back">Reveal in layers: names and descriptions always; the body when triggered; references and scripts only at the step that needs them.</span></button>
+        <button class="flip" type="button"><span class="flip-front">references/ and scripts/</span><span class="flip-back">Files bundled beside SKILL.md: long documents read on demand, and helper code executed without ever entering context.</span></button>
+        <button class="flip" type="button"><span class="flip-front">AGENTS.md</span><span class="flip-back">A markdown "README for agents" at a repo's root: ambient, project-scoped instructions loaded for every session in that project.</span></button>
+      </div>
+
+      <h2>AGENTS.md, the elder sibling — and how markdown won</h2>
+      <p>Skills did not appear from nowhere. Their elder sibling is <dfn>AGENTS.md</dfn> — a plain markdown file placed at the root of a repository, holding instructions any agent should follow when working there: how to build, which conventions to keep, what never to touch. Think of it as a README written for agents instead of humans. It began as a convention around one coding agent in 2025 and spread across the ecosystem within months, precisely because it asked nothing of anyone: no SDK, no schema, no vendor — just a file every tool could choose to read. (Claude Code's <code>CLAUDE.md</code> is the same idea wearing a tool-specific name.)</p>
+      <p>The kinship with skills is obvious once you see it: both bet that <em>markdown is the interface</em> — that the best way to program a language model is well-organised prose in files, checked into version control. The difference is scope and timing. AGENTS.md is <em>ambient</em>: one file, tied to a place (this repo), loaded at session start whether or not it is needed. A skill is <em>named and lazy</em>: tied to a job rather than a place, portable across projects, and loaded only when its description matches the task. The house rules pinned to the kitchen wall versus the recipe cards in the box.</p>
+      <p>The adoption story rhymed, too. Anthropic introduced Agent Skills in late 2025 for Claude Code, the Claude apps, and the Claude Agent SDK — and then published the format as an open standard: a specification anyone can implement, deliberately owned by no single SDK. Because implementing it is a weekend's work — scan folders, parse two YAML fields, inject an index, load bodies on demand — support spread the way AGENTS.md support had. Within months, dozens of tools across the ecosystem, from the major coding agents to open-source harnesses, could read the same folder of cards. Write a skill once and it travels with you between harnesses; that portability, more than any single feature, is why the format stuck.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>A skill is prose that steers an agent, so treat it with the respect you give code: review changes, test the trigger, and be deliberate about what you install. A malicious or sloppy third-party skill is an instruction-injection risk with a friendly filename — the same caution you learned for <a href="ch079-mcp-security.html">MCP servers</a> applies to card boxes you did not write yourself.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet skills as <code>.claude/skills/</code> folders inside repositories, as personal libraries in a home directory (<code>~/.claude/skills/</code>, or a shared <code>~/.agents/skills/</code> read by several tools), and as installable packs in plugin marketplaces — public galleries carry hundreds of ready-made skills for document formats, spreadsheets, and deployment rituals. In merge requests, watch for diffs that touch only a <code>SKILL.md</code>: someone is changing an agent's behaviour with zero code, and the review question is not "does it compile" but "is this procedure correct, and will the description actually trigger". When a teammate says "the skill never fires", check the description first; when they say "the skill blew the context budget", look for a body that should have been split into <code>references/</code>.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Which two frontmatter fields does the SKILL.md open standard require?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>name</code> and <code>version</code></button>
+            <button data-opt="b"><code>name</code> and <code>description</code></button>
+            <button data-opt="c"><code>description</code> and <code>allowed-tools</code></button>
+          </div>
+          <p class="q-explain">Just <code>name</code> and <code>description</code>. Everything else — <code>allowed-tools</code>, <code>license</code>, and friends — is an optional extra that particular harnesses may read. Two required fields is a big part of why the format spread so easily.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. When does the full body of a SKILL.md enter the model's context?</p>
+          <div class="q-opts">
+            <button data-opt="a">At session start, along with every other skill body</button>
+            <button data-opt="b">Never — the harness executes it directly</button>
+            <button data-opt="c">Only when the model decides, from the description, that the skill matches the task</button>
+          </div>
+          <p class="q-explain">That is progressive disclosure: names and descriptions are always visible, the body loads on trigger, and bundled files load later still — or never. The other forty-nine skills keep costing two lines each.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What does a skill add to an agent that a tool does not?</p>
+          <div class="q-opts">
+            <button data-opt="a">Competence — a procedure for using existing capabilities well</button>
+            <button data-opt="b">New capabilities the harness could not perform before</button>
+            <button data-opt="c">Persistent memory of past conversations</button>
+          </div>
+          <p class="q-explain">A skill adds no capability at all — it is choreography for the tools the agent already has. New capabilities come from tools (or MCP servers); learned facts live in memory; skills carry the how-to.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Your team wrote a superb 400-line skill, but agents never seem to use it. What is the most likely culprit?</p>
+          <div class="q-opts">
+            <button data-opt="a">The body is too long, so the harness refuses to load it</button>
+            <button data-opt="b">The description does not advertise the tasks it should trigger on</button>
+            <button data-opt="c">Skills must be registered in code before they can fire</button>
+          </div>
+          <p class="q-explain">The description is the only part of the skill visible at decision time. If it does not say what the skill does <em>and when to use it</em> — ideally with the phrases users actually say — the model has no reason ever to pull the card.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. Why bundle a helper as <code>scripts/collect_commits.sh</code> instead of writing those steps as prose in the body?</p>
+          <div class="q-opts">
+            <button data-opt="a">Scripts are the only way a skill is allowed to touch git</button>
+            <button data-opt="b">Markdown bodies cannot contain shell commands</button>
+            <button data-opt="c">Deterministic work runs as code without its source ever entering context — cheaper and less error-prone than the model re-deriving it</button>
+          </div>
+          <p class="q-explain">The model executes the script through its shell tool and sees only the output. Fixed, mechanical steps belong in scripts; prose in the body is for the judgement calls a script cannot make.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A skill is a folder with a <code>SKILL.md</code>: YAML frontmatter (<code>name</code> + <code>description</code> — the trigger) above a markdown body (the procedure), with optional <code>references/</code> and <code>scripts/</code> alongside.</li>
+          <li>Progressive disclosure is the engine: descriptions always in context, the body only on trigger, bundled files only at the step that needs them — so two hundred skills cost almost nothing until one is used.</li>
+          <li>The description is the skill's advertisement and its only evidence at decision time; most "the skill never fires" bugs are description bugs.</li>
+          <li>Tools give capability, prompts give disposition, memory gives learned facts — skills give competence: taught procedures, versioned in git and reviewed like code.</li>
+          <li>Scripts beside the skill run without entering context; deterministic steps go in code, judgement goes in prose.</li>
+          <li>SKILL.md follows AGENTS.md's path: a plain-markdown open standard, trivial to implement, now read by dozens of tools — write a procedure once and it travels with you.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strings and f-strings — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch003">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act I · The Language</div>
+        <h1>Strings and f-strings</h1>
+        <p class="ch-tagline">Every prompt you have ever sent to a model was a string. By the end of this chapter you can slice one, scrub one, and assemble one from a template — which is to say, you can read the raw material of the entire AI industry.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 3 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A print shop, Tuesday morning. Three hundred wedding invitations due by evening, and the master card sits on the counter: one ornate template with three blanks — the guest's name, the table number, the dinner choice. Nobody is going to hand-write three hundred cards. The operator loads the guest list into the machine, and it slides each name into its blank, prints, trims the ragged edges of the card stock, and drops a crisp invitation onto the pile. Some names arrive from the list wearing stray spaces — <em>"&nbsp;&nbsp;Priya Sharma&nbsp;"</em> — and the trimming blade tidies them before they ever touch a card. The guest list itself came in as one long comma-separated line, so the first job of the morning was cutting it into individual names.</p>
+        <p>That print shop is this chapter. The master card with blanks is a <strong>template string</strong>. The machine that fills the blanks is an <strong>f-string</strong>. The trimming blade is <strong>strip</strong>, and the guillotine that cuts the guest list into names is <strong>split</strong>. And every time an agent sends a system prompt with the user's question slotted into it, this exact print shop runs — thousands of times a minute, in production, on your behalf.</p>
+      </section>
+
+      <h2>Text is an object, like everything else</h2>
+      <p>Quick recap from <a href="ch002-names-and-objects.html">the variables chapter</a>: in Python, all data lives as objects floating in memory, and a variable is just a name tag stuck onto one of those objects. Assignment moves the tag; it never copies the object. That picture is about to pay off, because a <dfn>string</dfn> — an object that holds a sequence of text characters — is simply one more kind of object to stick a name on.</p>
+      <p>You make one by wrapping text in quotes. Single and double quotes mean exactly the same thing; Python does not care which you pick, so people choose whichever avoids awkward escaping: <code>'she said "hi"'</code> reads better than a backslash festival. There is a third form — triple quotes, <code>"""like this"""</code> — that can span multiple lines. We are saving it for the finale, because it is the one your prompts live in.</p>
+      <p>Strings have one personality trait you must absorb on day one: they are <dfn>immutable</dfn> — once a string object exists, its characters can never be changed. There is no editing a string in place, ever. Every operation that looks like it modifies text actually manufactures a brand-new string object and hands it back, leaving the original untouched. Try to overwrite one character and Python refuses with a <code>TypeError</code>. This is not a limitation you will fight; it is a guarantee you will lean on — a string you pass to five different functions comes back exactly as you sent it. But it sets up the single most common beginner bug in text handling, which we will walk straight into (and out of) in a moment.</p>
+
+      <h2>Every character has a numbered seat</h2>
+      <p>Picture a string as a train: one character per seat, seats numbered from the front. Python starts counting at <strong>0</strong>, not 1 — you met that convention in <a href="ch001-why-python-looks-like-that.html">chapter 1</a>, and here is where it becomes muscle memory. Asking for a seat by number is called <dfn>indexing</dfn> — <code>s[0]</code> is the first character, <code>s[1]</code> the second. Negative numbers count from the back of the train: <code>s[-1]</code> is the last character, <code>s[-2]</code> the one before it, no need to know how long the string is.</p>
+      <p>Cutting out a whole run of seats is called <dfn>slicing</dfn> — <code>s[10:20]</code> takes seats 10 up to <em>but not including</em> 20. The stop number is always excluded, which feels odd for about a day and then becomes deeply convenient. Think of a hotel stay: check in on the 10th, check out on the 20th, and you sleep ten nights — nights 10 through 19. Same arithmetic: <code>20 - 10</code> tells you exactly how many characters you got. Leave out a number and Python fills in the obvious default: <code>s[:9]</code> means "from the start", <code>s[21:]</code> means "to the end". A second colon adds a step — <code>s[::2]</code> takes every other character, and the famous party trick <code>s[::-1]</code> walks backwards, reversing the whole string.</p>
+      <p>Run this. Then change the numbers and predict the output before pressing Run again — that prediction game is how slicing becomes reflex.</p>
+
+      <div class="pyrun" data-title="Slicing playground — pull the date out of a log filename">
+<textarea class="py-src" spellcheck="false">
+run_id = "agent-run-2026-07-02-a41f.log"
+
+print(run_id[0])       # seat 0: the first character
+print(run_id[-1])      # negative index: count from the end
+print(run_id[10:20])   # seats 10 up to (not including) 20: the date
+print(run_id[:9])      # from the start up to seat 9
+print(run_id[21:25])   # the short run id
+print(run_id[::2])     # every second character
+print(run_id[::-1])    # step -1: the whole string, reversed
+print(len(run_id))     # how many seats on this train
+
+# Proof of immutability -- remove the # below and run again:
+# run_id[0] = "x"      # TypeError: strings cannot be edited in place
+</textarea>
+      </div>
+
+      <p>Notice <code>len(run_id)</code> at the end: <code>len()</code> is a built-in function that reports how many characters (seats) a string has. And notice what the slice <code>run_id[10:20]</code> just did — it extracted a date from a filename with zero ceremony. Half of all log-wrangling is exactly this move.</p>
+
+      <h2>The everyday toolkit: five verbs</h2>
+      <p>Strings come with behaviour attached. A <dfn>method</dfn> is a function that lives on an object and is called with a dot — <code>text.strip()</code> means "text, perform your strip behaviour". Python strings ship with dozens of methods, but five of them do about ninety per cent of the real-world work, and all five appeared in the print shop:</p>
+      <ul>
+        <li><code>strip()</code> — the trimming blade. Removes whitespace (spaces, tabs, newlines) from both ends. The middle is untouched.</li>
+        <li><code>split(",")</code> — the guillotine. Cuts one string into many pieces at each separator and returns them as a <em>list</em>, the container you will properly meet in <a href="ch004-collections.html">the next chapter</a>. Called with no argument, it splits on any stretch of whitespace — perfect for "give me the words".</li>
+        <li><code>join(...)</code> — the guillotine in reverse, and the one everyone finds backwards at first: it is a method on the <em>glue</em>, not the pieces. <code>", ".join(names)</code> reads as "comma-space, weld these together with yourself between each pair".</li>
+        <li><code>replace(old, new)</code> — find-and-replace, every occurrence, no regrets.</li>
+        <li><code>lower()</code> / <code>upper()</code> — case-flattening, the standard first move before comparing text, because <code>"Billing"</code> and <code>"billing"</code> are different strings to a computer.</li>
+      </ul>
+      <p>Here is where immutability bites. Because a string can never change, every one of these methods returns a <em>new</em> string — and if you do not catch it in a variable, it evaporates. Writing <code>reply.strip()</code> on its own line does exactly nothing useful: the cleaned string is created, ignored, and thrown away, while <code>reply</code> still points at the messy original. The fix is always the same: <code>reply = reply.strip()</code> — make the new object, then move the name tag onto it, exactly the move you learned in <a href="ch002-names-and-objects.html">chapter 2</a>.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>"I called <code>.strip()</code> but the spaces are still there" is the most-asked string question on the internet. The method worked perfectly — the result just was not assigned to anything. If a cleanup ever seems to have no effect, check whether the line reads <code>text.strip()</code> instead of <code>text = text.strip()</code>.</p></div>
+
+      <p>Now watch the five verbs work as a team on a scenario you already live with: a model's reply that is <em>almost</em> what you asked for. You said "reply with the label only"; it sent back padding, a prefix, and a rogue newline. Click each annotated line:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">tidy_reply.py — cleaning a messy model reply, one verb at a time</div>
+        <div class="wl-line"><code>raw = "  Label: Billing \n"</code>
+          <div class="wl-note">What actually came back from the model: leading spaces, a "Label:" prefix nobody asked for, a trailing space and a newline. Real model output looks like this constantly — instructions are followed approximately.</div></div>
+        <div class="wl-line"><code>text = raw.strip()</code>
+          <div class="wl-note">The trimming blade removes the whitespace from both ends, including that invisible <code>\n</code>. Note the assignment: a NEW string <code>"Label: Billing"</code> is created and the name <code>text</code> tagged onto it. <code>raw</code> still holds the messy original — useful when you need to log what the model really said.</div></div>
+        <div class="wl-line"><code>text = text.lower()</code>
+          <div class="wl-note">Case-flatten to <code>"label: billing"</code> so the next step works whether the model wrote "Label:", "LABEL:" or "label:". Reassigning <code>text</code> again — the name hops to each new object in the pipeline.</div></div>
+        <div class="wl-line"><code>text = text.replace("label:", "")</code>
+          <div class="wl-note">Find-and-replace the prefix with an empty string — which is how you delete text: replace it with nothing. We are left with <code>" billing"</code> (note the leftover space where the prefix used to end).</div></div>
+        <div class="wl-line"><code>label = text.strip().upper()</code>
+          <div class="wl-note">Two methods chained: <code>strip()</code> returns a new string, and <code>.upper()</code> is called directly on that result — a pipeline reading left to right. Final answer: <code>"BILLING"</code>, ready to compare against your label set.</div></div>
+        <div class="wl-line"><code>menu = "billing,account,general".split(",")</code>
+          <div class="wl-note">The guillotine: one string becomes a list of three — <code>['billing', 'account', 'general']</code>. Yes, you can call methods on a literal string directly; it is an object the moment it exists.</div></div>
+        <div class="wl-line"><code>pretty = " | ".join(menu)</code>
+          <div class="wl-note">And back again — the glue string <code>" | "</code> welds the pieces into <code>"billing | account | general"</code>. Split and join are perfect inverses; agents use this pair to build tool menus into prompts and to parse structured replies back out.</div></div>
+        <div class="wl-line"><code>print(f"model chose {label} from: {pretty}")</code>
+          <div class="wl-note">A sneak preview of the star of this chapter: an f-string stitching both results into one sentence. Full explanation in the next section.</div></div>
+      </div>
+
+      <p>Before moving on, lock in the vocabulary. Flip each card until the back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">string</span><span class="flip-back">An object holding a sequence of text characters. Made with quotes. Every prompt, reply, filename, and log line is one.</span></button>
+        <button class="flip" type="button"><span class="flip-front">immutable</span><span class="flip-back">Unchangeable after creation. String methods never edit — they return a brand-new string you must catch in a variable.</span></button>
+        <button class="flip" type="button"><span class="flip-front">index</span><span class="flip-back">A character's seat number, counted from 0. Negative numbers count from the end: s[-1] is the last character.</span></button>
+        <button class="flip" type="button"><span class="flip-front">slice</span><span class="flip-back">A cut-out run of characters: s[10:20] takes seats 10 up to but NOT including 20. Missing numbers default to the ends.</span></button>
+        <button class="flip" type="button"><span class="flip-front">method</span><span class="flip-back">A function attached to an object, called with a dot: text.strip(). Strings ship with dozens; five do most of the work.</span></button>
+        <button class="flip" type="button"><span class="flip-front">f-string</span><span class="flip-back">A string with an f before the quote. Anything in {braces} is live Python, evaluated and stitched into the text.</span></button>
+      </div>
+
+      <h2>f-strings: the fill-in-the-blanks machine</h2>
+      <p>The old way to build a sentence out of pieces was gluing with <code>+</code>: <code>"Hello, " + name + "!"</code>. It works, and it is miserable — the quotes multiply, every number needs converting to text first, and by five pieces you cannot see the sentence for the plus signs. Python's answer is the <dfn>f-string</dfn> — put the letter <code>f</code> immediately before the opening quote, and anything inside curly braces is treated as live Python, evaluated on the spot, converted to text, and stitched into place: <code>f"Hello, {name}!"</code>. The template reads like the finished sentence, which is the whole point.</p>
+      <p>The part most people underestimate: the braces hold <em>any expression</em>, not just variable names. Method calls, arithmetic, <code>len()</code>, whole function calls — all fair game. <code>f"Customer: {name.strip()}"</code> trims and inserts in one motion. <code>f"total: {price * qty}"</code> does the maths mid-sentence. This is why f-strings took over: the print shop machine does not just copy names onto cards, it can tidy and compute while the card is in the press.</p>
+      <p>After the expression, a colon opens the <dfn>format spec</dfn> — a mini-language that controls <em>how</em> the value is rendered, without changing the value itself. You will meet these constantly in cost logs and dashboards:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Spec</th><th>What it does</th><th>Example</th><th>Prints</th></tr>
+        <tr><td><code>:.2f</code></td><td>fixed decimal, 2 places</td><td><code>f"${0.73519:.2f}"</code></td><td><code>$0.74</code></td></tr>
+        <tr><td><code>:,</code></td><td>thousands separators</td><td><code>f"{1284917:,}"</code></td><td><code>1,284,917</code></td></tr>
+        <tr><td><code>:.1%</code></td><td>as a percentage, 1 place</td><td><code>f"{0.731:.1%}"</code></td><td><code>73.1%</code></td></tr>
+        <tr><td><code>:&gt;10</code></td><td>right-align in 10 spaces</td><td><code>f"{'cost':&gt;10}"</code></td><td><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cost</code></td></tr>
+        <tr><td><code>:&lt;10</code></td><td>left-align in 10 spaces</td><td><code>f"{'cost':&lt;10}"</code></td><td><code>cost&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code></td></tr>
+        <tr><td><code>=</code></td><td>debug: name AND value</td><td><code>f"{tokens=}"</code></td><td><code>tokens=1284917</code></td></tr>
+      </table></div>
+
+      <p>Run the report below, then make it yours: change <code>cost</code> to a long ugly number and watch <code>:.2f</code> tame it; widen the column from 12 to 20; try <code>{model=}</code>.</p>
+
+      <div class="pyrun" data-title="Format specs — a one-run token cost report">
+<textarea class="py-src" spellcheck="false">
+model = "sonnet"
+tokens = 1284917
+cost = 3.14159
+cache_share = 0.7312
+
+print(f"model:  {model.upper()}")          # expression in the braces
+print(f"tokens: {tokens:,}")               # thousands separators
+print(f"cost:   ${cost:.2f}")              # two decimal places
+print(f"cache:  {cache_share:.1%}")        # render as a percentage
+print()
+
+# Padding specs line up a table without any library:
+print(f"| {'model':&lt;10} | {'tokens':&gt;12} |")
+print(f"| {model:&lt;10} | {tokens:&gt;12,} |")
+print()
+
+# The = spec is the fastest debugging trick in Python:
+print(f"{tokens=}")
+print(f"{cost * 83.2=:.2f}")               # expression, = spec, AND a format
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>When you are staring at a mysterious variable in any Python codebase, <code>print(f"{thing=}")</code> is the sixty-second diagnostic: it prints the variable's name and its value in one shot, so your log reads <code>retries=3</code> instead of a bare <code>3</code> you cannot place. You will see this in debugging commits everywhere.</p></div>
+
+      <h2>Triple quotes: where prompts are born</h2>
+      <p>One piece left from the print shop: the master card itself. Real prompts are paragraphs, not one-liners, and cramming paragraphs into a single-quoted string means littering it with <code>\n</code> escape codes until it is unreadable. The fix is the <dfn>triple-quoted string</dfn> — open with <code>"""</code>, write as many lines as you like, close with <code>"""</code>. Every line break you type is preserved in the string, exactly as written. What you see is literally what the model gets.</p>
+      <p>Now combine the two endings of this chapter: put an <code>f</code> in front of a triple-quoted string and you have a multi-line template with live blanks — <em>a prompt template</em>, the load-bearing wall of every AI application you operate. The system prompts inside coding agents, the triage prompts in a support bot, the instructions handed to every agent in a pipeline: under the hood, each one is a triple-quoted template with values slotted into braces. Here is the whole pattern end to end, with a scripted stand-in playing the model — this page cannot call a paid API, but every line of string work is exactly what production code does:</p>
+
+      <div class="pyrun" data-title="A real prompt template — build it, send it, clean the reply">
+<textarea class="py-src" spellcheck="false">
+# ---- a scripted stand-in for a real LLM ------------------
+# (The 'if' lines are just the stand-in's script -- you will
+# properly meet if/else in the control-flow chapter.)
+def fake_llm(prompt):
+    if "refund" in prompt.lower() or "charged" in prompt.lower():
+        return "  Label: billing \n"
+    if "password" in prompt.lower():
+        return "  Label: account \n"
+    return "  Label: general \n"
+
+# ---- raw material, straight from a web form --------------
+name = "   Priya Sharma  "
+ticket = "I was charged twice this month. Please refund one payment."
+
+# ---- the print shop: f + triple quotes = prompt template --
+prompt = f"""You are a support-ticket triage assistant.
+Read the ticket and reply with exactly one label:
+BILLING, ACCOUNT, or GENERAL.
+
+Customer: {name.strip()}
+Ticket ({len(ticket.split())} words):
+{ticket}
+
+Reply with the label only."""
+
+print(prompt)
+print("=" * 46)
+
+# ---- call the 'model', then clean its messy reply ---------
+reply = fake_llm(prompt)
+label = reply.strip().replace("Label:", "").strip().upper()
+
+print("raw reply:  ", repr(reply))   # repr shows hidden spaces + \n
+print("clean label:", label)
+</textarea>
+      </div>
+
+      <p>Read the output top to bottom and you have just watched the daily life of a production agent: a template filled by an f-string (note <code>{name.strip()}</code> cleaning the blank <em>while filling it</em>, and <code>{len(ticket.split())}</code> computing a word count mid-template), a model reply that arrives slightly scruffy, and the five-verb cleanup that makes it usable. Change the ticket text to mention a password and run it again — the stand-in will route it differently, just as a real classifier prompt would.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>One famous trap: braces are f-string syntax, so a <em>literal</em> brace must be doubled. The moment your prompt asks a model to reply in JSON — <code>f"Reply as {{"label": "..."}}"</code> — you need <code>{{</code> and <code>}}</code> for every brace the model should actually see, or Python will try to evaluate your example JSON as code and crash with a confusing error. If an f-string with JSON in it will not run, count your braces first.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any agent repository and head for <code>prompts.py</code> or a <code>prompts/</code> folder — you will find triple-quoted templates, often screens long, with braces waiting for the day's values. Nearly every model reply in production passes through <code>.strip()</code> before anything else touches it, and parsing code leans on <code>split</code> the way you saw in <a href="ch045-react-loop-by-hand.html">the ReAct loop chapter's</a> <code>reply.split("FINAL ANSWER:")</code>. Tool menus are assembled with <code>", ".join(tool_names)</code>; billing logs are full of <code>f"{cost:.4f}"</code>. One nuance to recognise: LangChain's prompt templates use single braces like <code>{question}</code> in a <em>plain</em> string — no <code>f</code> prefix — because the framework fills the blanks later rather than immediately. Same print shop, delayed printing. When you can tell those two apart in a merge request, this chapter has done its job.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. You run <code>s = " hi "</code> and then, on its own line, <code>s.strip()</code>. What does <code>s</code> contain afterwards?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>"hi"</code> — strip removed the spaces</button>
+            <button data-opt="b"><code>" hi "</code> — unchanged; the cleaned string was returned and thrown away</button>
+            <button data-opt="c">Nothing — strip empties the variable</button>
+          </div>
+          <p class="q-explain">Strings are immutable, so <code>strip()</code> cannot edit <code>s</code> — it returns a new string, and since nothing caught it, it vanished. The fix is <code>s = s.strip()</code>. This is the most common string bug in existence.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">2. What does <code>"agent"[1:3]</code> give you?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>"ge"</code></button>
+            <button data-opt="b"><code>"gen"</code></button>
+            <button data-opt="c"><code>"age"</code></button>
+          </div>
+          <p class="q-explain">Seats are numbered from 0 — a(0), g(1), e(2), n(3), t(4) — and the stop index is excluded. So <code>[1:3]</code> takes seats 1 and 2: <code>"ge"</code>. The length is always stop minus start.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">3. Which line correctly welds <code>names</code> (a list of strings) into one comma-separated string?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>names.join(", ")</code></button>
+            <button data-opt="b"><code>join(names, ", ")</code></button>
+            <button data-opt="c"><code>", ".join(names)</code></button>
+          </div>
+          <p class="q-explain"><code>join</code> is a method on the <em>glue</em> string, not on the list — read it as "comma-space, weld these together with yourself between each pair". Backwards-feeling at first, universal once it clicks.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. In <code>f"cost: {price:.2f}"</code>, what does the <code>:.2f</code> part do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Multiplies the price by 2</button>
+            <button data-opt="b">Renders the value with exactly two decimal places</button>
+            <button data-opt="c">Rounds the stored value of <code>price</code> permanently</button>
+          </div>
+          <p class="q-explain">Everything after the colon is a format spec — it controls how the value is <em>displayed</em>, not the value itself. <code>price</code> keeps its full precision; only the printed text is shaped to two decimals.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">5. Your f-string prompt asks the model to reply in JSON and includes an example object — and Python crashes before anything is sent. Most likely cause?</p>
+          <div class="q-opts">
+            <button data-opt="a">The example JSON's braces need doubling to <code>{{</code> and <code>}}</code> inside an f-string</button>
+            <button data-opt="b">JSON is not allowed inside triple-quoted strings</button>
+            <button data-opt="c">The prompt is too long for one string</button>
+          </div>
+          <p class="q-explain">Inside an f-string, every <code>{</code> starts a live Python expression — so literal braces, like the ones in example JSON, must be written <code>{{</code> and <code>}}</code>. Python was trying to evaluate your sample JSON as code.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A string is an immutable object: no method ever edits it in place — each returns a <em>new</em> string you must assign, or it is silently lost (<code>s = s.strip()</code>, not <code>s.strip()</code>).</li>
+          <li>Indexing counts seats from 0, negatives count from the end, and slices take start up to but <em>not including</em> stop — <code>s[10:20]</code> is exactly ten characters.</li>
+          <li>Five verbs do most real text work: <code>strip</code> trims the ends, <code>split</code> cuts into a list, <code>join</code> (a method on the glue) welds one back, <code>replace</code> swaps text, <code>lower</code>/<code>upper</code> flatten case before comparing.</li>
+          <li>An f-string evaluates any expression inside its braces — method calls and arithmetic included — and a colon opens format specs like <code>:.2f</code>, <code>:,</code> and <code>:.1%</code> that shape the display without touching the value.</li>
+          <li>Triple-quoted strings keep their line breaks, and <code>f"""..."""</code> is the prompt template pattern under every agent you operate; literal braces inside one must be doubled (<code>{{</code> <code>}}</code>) — the classic JSON-prompt crash.</li>
+          <li>Cleaning a model's scruffy reply is just the five verbs in a pipeline — you now read <code>reply.strip().replace(...).upper()</code> the way a reviewer does.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

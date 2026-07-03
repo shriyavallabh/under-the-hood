@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feature branches, release branches — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch097">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>Feature branches, release branches</h1>
+        <p class="ch-tagline">Ten people, one codebase, nobody stepping on anybody. By the end of this chapter you will know exactly which branch to create, from where, what to name it, and every station a change passes through on its way from your keyboard to main.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 98 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A busy restaurant keeps one master recipe book at the pass. Every dish that leaves the kitchen is cooked from it, so the book has an iron rule: nothing goes in until it is proven. When a chef wants to improve the dal, she does not scribble in the master. She photocopies the book <em>as it stands today</em>, takes the copy to her own station, and experiments there — tasting, adjusting, failing in private. The other five chefs are doing the same with their own copies, on their own dishes, at the same time. Nobody blocks anybody.</p>
+        <p>When her new dal is ready, the head chef tastes it, and only then is the one changed page copied into the master book. Her photocopy goes in the bin — it did its job. And twice a year something different happens: the kitchen freezes a copy of the book to send to the printers as the seasonal menu. Only spelling fixes may touch that frozen copy; new dishes keep flowing into the master for <em>next</em> season. The master book is <strong>main</strong>. The photocopies are <strong>feature branches</strong>. The printer's copy is a <strong>release branch</strong>. This chapter is how professional kitchens — sorry, teams — run that system every day.</p>
+      </section>
+
+      <h2>Why teams branch at all</h2>
+      <p>Quick recap from <a href="ch096-git-fundamentals.html">the previous chapter</a>: a commit is a snapshot of the whole project, every commit points at its parent, and a branch is nothing more than a movable label pointing at one commit. Creating a branch costs nothing — Git just writes a 41-byte file with a commit id in it. Merging joins two lines of history back together. That is the machinery. This chapter is about the <em>social contract</em> teams build on top of it.</p>
+      <p>The problem branches solve is old and painful: many people, one codebase. If everyone edited the same copy directly — the way two people fight over one shared document — you would get half-finished features tangled into each other, one person's broken experiment blocking everyone's release, and no way to say "the version we ship customers is <em>this</em> one". So teams adopt three rules, and essentially every engineering organisation you will work with runs on some flavour of them:</p>
+      <ul>
+        <li><strong>main is sacred.</strong> The default branch always builds, always passes tests, and is always in a shippable state. Nobody works directly on it.</li>
+        <li><strong>All work happens on short-lived branches.</strong> One branch per change, cut from main, merged back within days.</li>
+        <li><strong>The way back into main is gated.</strong> A <a href="ch099-merge-requests.html">merge request</a> with a human review and a green <a href="ch101-gitlab-pipelines.html">pipeline</a> — never a direct push.</li>
+      </ul>
+      <p>This is not politeness. On GitLab, main is usually a <dfn>protected branch</dfn> — a branch the server refuses direct pushes to, so the branch-and-merge-request path is physically the only door in. If you have ever seen a push rejected with <code>remote: You are not allowed to push code to this branch</code>, you have met the bouncer.</p>
+
+      <h2>The question everyone is afraid to ask: what exactly am I branching?</h2>
+      <p>People new to Git quietly worry about this, so let us kill the mystery. You do not branch a file, or a folder, or a chosen subset of the code. <strong>A branch always carries the entire repository</strong> — every file, exactly as it stood at the commit you branched from. Your feature branch for a one-line fix contains the whole codebase; you simply change one line of it, and at merge time Git folds in only what differs.</p>
+      <p>The real question is not "which files" but "which <em>starting point</em>". A new branch begins life pointing at whatever commit you were standing on when you created it. That gives us the rule that answers ninety per cent of "where do I branch from":</p>
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>New work branches from <strong>up-to-date main</strong>. Stand on main, pull the latest, then cut the branch. Branching from a stale main — or worse, from some other half-finished feature branch — means you start life already behind, and every commit that landed since becomes a merge conflict waiting for you at the end.</p></div>
+      <p>The exceptions are few and follow one principle: <em>branch from the thing you intend to change</em>. Here is the whole decision table:</p>
+      <div class="tbl"><table>
+        <tr><th>You want to…</th><th>Branch from</th><th>Typical name</th></tr>
+        <tr><td>Build a new feature</td><td>up-to-date main</td><td><code>feature/invoice-rounding</code></td></tr>
+        <tr><td>Fix a bug that will ship with the next release</td><td>up-to-date main</td><td><code>fix/duplicate-webhook-calls</code></td></tr>
+        <tr><td>Fix an emergency in a version already shipped</td><td>the release branch (or tag) of that version</td><td><code>hotfix/2.4-login-crash</code></td></tr>
+        <tr><td>Run a throwaway experiment</td><td>up-to-date main</td><td><code>spike/try-new-tokenizer</code></td></tr>
+        <tr><td>Stabilise a version for shipping</td><td>main, at the moment of the freeze</td><td><code>release/2.4</code></td></tr>
+      </table></div>
+      <p>One more anxiety worth removing: which <em>repository</em>? The one the change belongs to — if the fix is in the ingestion service, you branch in the ingestion service's repo. Branches never span repositories; a change touching two repos is two branches and two merge requests, linked in their descriptions.</p>
+
+      <h2>The life of a feature branch, station by station</h2>
+      <p>Here is the full journey — the same seven stations every change on your team passes through, whether it is a one-line prompt tweak or a month of work someone should have split up. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Fresh main">
+          <h3>1. Stand on fresh main</h3>
+          <div class="diagram">
+            <div class="d-box">origin<small>the shared server copy</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">main (local)<small>git switch main, git pull</small></div>
+          </div>
+          <p class="step-cap">Before anything else: switch to main and pull. You want your starting point to be what the team has <em>right now</em>, not what it was when you last looked on Tuesday.</p>
+        </div>
+        <div class="step" data-title="Cut the branch">
+          <h3>2. Cut the branch</h3>
+          <div class="diagram">
+            <div class="d-box">main<small>untouched from here on</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">feature/invoice-rounding<small>git switch -c …</small></div>
+          </div>
+          <p class="step-cap">One command creates the branch and moves you onto it. It points at the same commit as main — identical twins, until your first commit. Main stays clean behind you.</p>
+        </div>
+        <div class="step" data-title="Commit small">
+          <h3>3. Commit small, focused changes</h3>
+          <div class="diagram">
+            <div class="d-box dim">main</div>
+            <div class="d-box hot">feature branch<small>commit &#8594; commit &#8594; commit</small></div>
+          </div>
+          <p class="step-cap">Edit, test, commit; repeat. Each commit is a save point you can retreat to. Everything here is invisible to the rest of the team — this is your own station in the kitchen.</p>
+        </div>
+        <div class="step" data-title="Push + MR">
+          <h3>4. Push and open a merge request</h3>
+          <div class="diagram">
+            <div class="d-box">feature branch<small>git push -u origin …</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">GitLab<small>merge request: feature &#8594; main</small></div>
+          </div>
+          <p class="step-cap">Pushing publishes your branch to the server; the merge request says "I would like this folded into main, please look". Review and the CI pipeline both happen here — chapters 99 and 101.</p>
+        </div>
+        <div class="step" data-title="Sync with main">
+          <h3>5. Stay in sync while you wait</h3>
+          <div class="diagram">
+            <div class="d-box">main<small>moved ahead — teammates merged</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">feature branch<small>git fetch, then merge origin/main in</small></div>
+          </div>
+          <p class="step-cap">While your MR waits, main keeps moving. Pull main's new commits into your branch every day or so — small, frequent syncs mean small, boring conflicts instead of one horror at the end.</p>
+        </div>
+        <div class="step" data-title="Merge">
+          <h3>6. Merge — the change enters main</h3>
+          <div class="diagram">
+            <div class="d-box good">main<small>now contains your change</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box good">merge request<small>approved + pipeline green</small></div>
+          </div>
+          <p class="step-cap">A reviewer approves, the pipeline is green, someone clicks Merge. Your commits become part of main's history. This is the only door into main, and it just closed behind your change.</p>
+        </div>
+        <div class="step" data-title="Delete + repeat">
+          <h3>7. Delete the branch, start clean</h3>
+          <div class="diagram">
+            <div class="d-box dim">feature/invoice-rounding<small>deleted — job done</small></div>
+            <div class="d-box hot">main<small>git switch main, git pull — ready for the next branch</small></div>
+          </div>
+          <p class="step-cap">The branch was scaffolding, not architecture. Its commits live safely in main now, so the label is deleted — on the server (GitLab's "delete source branch" tickbox) and locally. Photocopy, bin. Next change, next branch.</p>
+        </div>
+      </div>
+
+      <p>Two habits separate pleasant teams from miserable ones. First: <strong>one change per branch</strong>. A branch called <code>feature/rounding-and-new-logging-and-retry-fix</code> is three branches wearing a trenchcoat — impossible to review well, impossible to revert cleanly if one of the three turns out bad. Notice an unrelated bug while working? Note it, finish your branch, cut a fresh one for the bug. Second: <strong>keep branches short-lived</strong>. A branch is a photocopy of a book that keeps being edited; every day it lives, it drifts further from reality and the eventual merge gets uglier. Days, not weeks. Genuinely big work lands as a series of small branches that each keep main working.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The classic beginner accident: you finish one feature, and — still standing on that feature branch — you run <code>git switch -c</code> for the next one. Now branch two silently contains all of branch one, and its merge request shows both changes mixed together. Always return to main and pull before cutting a new branch. If your MR's diff ever shows changes you did not make, this is usually what happened.</p></div>
+
+      <h2>The same lifecycle in commands</h2>
+      <p>Here is the whole journey as the actual terminal session — the dozen commands you will type, in this order, hundreds of times in your career. Click each line to unfold what it is doing and why it is there.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">one feature, branch to merge — the full command trail</div>
+        <div class="wl-line"><code>git switch main</code>
+          <div class="wl-note">Move to the main branch. <code>switch</code> is the modern command for changing branches; you will also see the older <code>git checkout main</code> in teammates' terminals — same effect.</div></div>
+        <div class="wl-line"><code>git pull</code>
+          <div class="wl-note">Fetch the latest commits from the server (origin) and fold them into your local main. Now your starting point matches the team's reality. Skipping this is how people branch from last week by accident.</div></div>
+        <div class="wl-line"><code>git switch -c feature/invoice-rounding</code>
+          <div class="wl-note">The <code>-c</code> means <em>create</em>: make a new branch at the commit you are standing on and switch to it, one move. This is the moment the photocopy is made. (Older form: <code>git checkout -b feature/invoice-rounding</code>.)</div></div>
+        <div class="wl-line"><code>git add billing/rounding.py tests/test_rounding.py</code>
+          <div class="wl-note">After editing, stage exactly the files that belong to this change — remember staging from <a href="ch096-git-fundamentals.html">chapter 96</a>. Naming files beats <code>git add .</code>, which happily scoops up stray debug scripts.</div></div>
+        <div class="wl-line"><code>git commit -m "Round invoice totals to two decimals"</code>
+          <div class="wl-note">Snapshot the staged change with a message that says what it does. Several small commits are fine — they will be reviewed together in the MR anyway.</div></div>
+        <div class="wl-line"><code>git push -u origin feature/invoice-rounding</code>
+          <div class="wl-note">Publish the branch to the server. <code>-u</code> links your local branch to the remote one, so from now on plain <code>git push</code> and <code>git pull</code> know where to go. GitLab replies with a ready-made URL for opening the merge request.</div></div>
+        <div class="wl-line"><code>git fetch origin</code>
+          <div class="wl-note">Days pass; the MR is in review; main has moved. <code>fetch</code> downloads the server's new commits without touching your files — you are just refreshing your local picture of reality.</div></div>
+        <div class="wl-line"><code>git merge origin/main</code>
+          <div class="wl-note">Fold main's new commits into your branch, resolving any conflicts now, while they are small. Some teams prefer <code>git rebase origin/main</code>, which replays your commits on top of new main for a straighter history — ask which convention your team uses.</div></div>
+        <div class="wl-line"><code>git push</code>
+          <div class="wl-note">Update the branch on the server so the merge request — and its pipeline — see the synced version.</div></div>
+        <div class="wl-line"><code>git switch main</code>
+          <div class="wl-note">The MR merged. Your change lives in main now; time to leave the scaffolding behind.</div></div>
+        <div class="wl-line"><code>git pull</code>
+          <div class="wl-note">Bring your own merged change (and everyone else's) down into local main. Satisfying moment: you pull your own work back as part of the shared history.</div></div>
+        <div class="wl-line"><code>git branch -d feature/invoice-rounding</code>
+          <div class="wl-note">Delete the local branch label. Lowercase <code>-d</code> is the safe version — it refuses unless the work is merged. The commits are not deleted; only the sticky note pointing at them is.</div></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>If your team merges with <em>squash</em> (GitLab compresses your whole branch into one new commit on main), <code>git branch -d</code> may protest that the branch is "not fully merged" — Git cannot see your original commits inside the squashed one. Once you have confirmed the MR merged on GitLab, deleting with <code>-D</code> is fine. This confuses everyone exactly once.</p></div>
+
+      <h2>Naming: boring, predictable, greppable</h2>
+      <p>Branch names are communication. On a team of ten, <code>git branch -r</code> lists dozens of branches; good names let anyone tell at a glance what each is and who cares about it. The near-universal convention is a <em>type prefix</em>, a slash, then a short lowercase description with hyphens — plus the ticket id if your team tracks work in an issue tracker: <code>feature/PAY-482-invoice-rounding</code>. GitLab even groups branches by prefix in its UI, like folders. Flip through the prefixes you will actually meet:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">feature/</span><span class="flip-back">New capability or enhancement. Cut from main, merged back via MR within days. The workhorse — most branches you ever make are these.</span></button>
+        <button class="flip" type="button"><span class="flip-front">fix/ or bugfix/</span><span class="flip-back">Repairs a bug that will ship with the normal next release. Same lifecycle as a feature branch; the prefix just tells reviewers what kind of diff to expect.</span></button>
+        <button class="flip" type="button"><span class="flip-front">hotfix/</span><span class="flip-back">An emergency repair to something already in production. Cut from the release branch or tag of the broken version — not from main — then merged back to both.</span></button>
+        <button class="flip" type="button"><span class="flip-front">release/</span><span class="flip-back">A version being stabilised for shipping, like release/2.4. Long-lived compared to feature branches; accepts only fixes, never new features.</span></button>
+        <button class="flip" type="button"><span class="flip-front">chore/ and docs/</span><span class="flip-back">Housekeeping that changes no behaviour — dependency bumps, config tidying, documentation. Reviewers know they can review these quickly.</span></button>
+        <button class="flip" type="button"><span class="flip-front">main</span><span class="flip-back">The default branch — the always-shippable trunk everything else branches from and merges into. Protected: the server rejects direct pushes. Older repos call it master.</span></button>
+      </div>
+
+      <p>Whatever the local flavour, follow the repo you are in. Thirty seconds of <code>git branch -r</code> before your first branch tells you the house style — matching it matters more than any convention from a book, including this one.</p>
+
+      <h2>Release branches: freezing a version without stopping the kitchen</h2>
+      <p>Feature branches manage <em>parallel work</em>. A <dfn>release branch</dfn> manages <em>parallel time</em>: it lets the team stabilise and ship version 2.4 while main is already becoming version 2.5. It is a long-lived branch, cut from main at the moment of a planned freeze, that accepts only bug fixes from then on. The seasonal menu at the printers: typo corrections yes, new dishes no.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The freeze">
+          <h3>1. Cut release/2.4 from main</h3>
+          <div class="diagram">
+            <div class="d-box">main<small>features keep landing here</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">release/2.4<small>frozen: fixes only from now on</small></div>
+          </div>
+          <p class="step-cap">On freeze day, someone cuts the release branch from main. Everything that made the cut is in; anything merged to main after this moment waits for 2.5. The train doors close.</p>
+        </div>
+        <div class="step" data-title="Stabilise">
+          <h3>2. Two timelines run side by side</h3>
+          <div class="diagram">
+            <div class="d-box">main<small>new features &#8594; version 2.5</small></div>
+            <div class="d-box hot">release/2.4<small>testing finds bugs &#8594; fix branches target here</small></div>
+          </div>
+          <p class="step-cap">QA and pilot users hammer the release branch. Fixes for what they find are small branches cut from — and merged back into — release/2.4 itself. Meanwhile main charges ahead, unbothered.</p>
+        </div>
+        <div class="step" data-title="Ship + tag">
+          <h3>3. Tag and ship from the release branch</h3>
+          <div class="diagram">
+            <div class="d-box dim">main</div>
+            <div class="d-box good">release/2.4<small>tag v2.4.0 &#8594; deployed</small></div>
+          </div>
+          <p class="step-cap">When the release branch is stable, its tip is tagged v2.4.0 — a permanent, immovable label from chapter 96 — and that exact commit is what goes to production. Everyone can point at precisely what shipped.</p>
+        </div>
+        <div class="step" data-title="Fixes flow back">
+          <h3>4. Merge the fixes back to main</h3>
+          <div class="diagram">
+            <div class="d-box hot">main<small>receives the 2.4 fixes too</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box">release/2.4<small>its fixes must not be lost</small></div>
+          </div>
+          <p class="step-cap">Every fix made on the release branch is also merged back to main — otherwise version 2.5 ships with bugs that 2.4 already fixed. Regressions of exactly this kind are why the step is ritual, not optional.</p>
+        </div>
+        <div class="step" data-title="Hotfix later">
+          <h3>5. Months later: a production emergency</h3>
+          <div class="diagram">
+            <div class="d-box dim">main<small>already deep into 2.5 — too risky to ship</small></div>
+            <div class="d-box hot">release/2.4<small>hotfix branch &#8594; tag v2.4.1</small></div>
+          </div>
+          <p class="step-cap">A crash appears in production long after the freeze. You cannot ship main — it is full of unreviewed 2.5 work. So the hotfix branches from release/2.4, ships as v2.4.1, and merges back to main as well. This is the moment release branches exist for.</p>
+        </div>
+      </div>
+
+      <p>Who actually uses them? Teams that ship <em>versions</em>: mobile apps waiting on store review, libraries with numbered releases, on-premise software, and regulated environments — a large bank cannot deploy main forty times a day, so it ships audited, tagged releases cut from release branches. At the other end sits <dfn>trunk-based development</dfn>: everyone merges tiny branches into main daily and main itself deploys continuously, tags marking what went out — no release branches, because there is no gap between "done" and "shipped" to manage. You inherit your team's choice rather than make it: if the repo has <code>release/*</code> branches, follow the freeze rules; if not, short feature branches into main is the whole game.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any active GitLab project and the strategy is visible in the furniture. The branch dropdown shows the prefixes: <code>feature/…</code>, <code>fix/…</code>, maybe a <code>release/3.2</code>. Settings &#8594; Repository lists the protected branches — main, and usually <code>release/*</code> — with "Allowed to push: No one", which is why everything travels by merge request. Every MR names a source and target branch at the top: source <code>feature/x</code>, target <code>main</code> for normal work; target <code>release/2.4</code> for a stabilisation fix — the target line is the fastest way to read what kind of change you are looking at. The "Delete source branch when merge request is accepted" tickbox is the after-merge cleanup from the lifecycle, automated. And when a teammate says "that missed the 2.4 cut" or "cherry-pick it onto the release branch", you now know they are talking about the freeze in step one of the release stepper.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. You are about to start a new feature. Where does the branch come from?</p>
+          <div class="q-opts">
+            <button data-opt="a">From your previous feature branch, since it has your latest work</button>
+            <button data-opt="b">From main as it was when you last pulled, whenever that was</button>
+            <button data-opt="c">From main, freshly pulled, moments before you cut the branch</button>
+          </div>
+          <p class="q-explain">Switch to main, pull, then <code>git switch -c feature/x</code>. Branching from a stale main means starting life already behind; branching from another feature branch drags that branch's changes into yours.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Your feature branch is for a one-line fix in <code>billing/rounding.py</code>. Which files does the branch contain?</p>
+          <div class="q-opts">
+            <button data-opt="a">Only the one file you plan to change</button>
+            <button data-opt="b">Every file in the repository, as of the commit you branched from</button>
+            <button data-opt="c">Whichever files you list when you create the branch</button>
+          </div>
+          <p class="q-explain">A branch is never a selection of files — it always carries the whole repository snapshot. You change one line; at merge time Git folds in only what differs.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why do teams insist on one change per branch?</p>
+          <div class="q-opts">
+            <button data-opt="a">So each change can be reviewed on its own and reverted cleanly if it turns out bad</button>
+            <button data-opt="b">Because Git limits how many files one branch may modify</button>
+            <button data-opt="c">To keep the number of branches on the server low</button>
+          </div>
+          <p class="q-explain">Git has no such limits — the rule is for humans. A branch mixing three changes is hard to review, and if one of the three breaks production you cannot revert it without dragging the innocent two along.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. What is a release branch for?</p>
+          <div class="q-opts">
+            <button data-opt="a">A personal long-term branch where a senior engineer accumulates their work</button>
+            <button data-opt="b">A faster lane for merging features into main without review</button>
+            <button data-opt="c">Freezing a version so it can be stabilised and shipped while main moves on to the next version</button>
+          </div>
+          <p class="q-explain">A release branch like <code>release/2.4</code> is cut from main at a planned freeze, accepts only fixes, gets tagged and shipped — and its fixes are merged back to main so the next version does not regress.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Your merge request just merged. What happens to the feature branch?</p>
+          <div class="q-opts">
+            <button data-opt="a">Keep it forever — deleting it would destroy your commits</button>
+            <button data-opt="b">Delete it, on the server and locally — its commits now live in main</button>
+            <button data-opt="c">Reuse it for your next feature to save setup time</button>
+          </div>
+          <p class="q-explain">Deleting a merged branch removes only the label; the commits are safe in main's history. Reusing old branches is how unrelated changes leak into your next merge request.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Branches exist so many people can change one codebase in parallel: main stays always-shippable, all work happens on branches, and merge requests are the only door back in — enforced by protected branches, not politeness.</li>
+          <li>You branch the whole repository, never individual files — and you branch from up-to-date main (switch, pull, then <code>git switch -c feature/x</code>) unless you are hotfixing a shipped version, in which case you branch from its release branch or tag.</li>
+          <li>The lifecycle is always the same seven stations: fresh main, cut branch, small commits, push and open a merge request, sync with main while you wait, merge, delete the branch and pull.</li>
+          <li>One change per branch, and short-lived — days, not weeks. Small branches review well, revert cleanly, and merge without drama; long branches rot as main drifts away beneath them.</li>
+          <li>Name branches with the house convention — type prefix, slash, lowercase-hyphenated description, ticket id if the team uses one: <code>feature/PAY-482-invoice-rounding</code>. Thirty seconds of <code>git branch -r</code> reveals the local style.</li>
+          <li>Release branches freeze a version (<code>release/2.4</code>) so it can be stabilised, tagged, and shipped while main becomes the next version; fixes made there merge back to main. Teams that deploy main continuously skip them entirely — follow whichever system your repo already uses.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

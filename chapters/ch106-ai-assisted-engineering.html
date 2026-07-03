@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-assisted engineering, done right — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch106">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>AI-assisted engineering, done right</h1>
+        <p class="ch-tagline">The same assistant can make you dramatically better or quietly hollow. The difference is one rule and two working modes — and by the end of this chapter they will be muscle memory.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 107 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Two friends move to a new city the same month, and both need to learn to drive. The first hires a chauffeur. Every morning the chauffeur glides him through traffic while he answers email in the back seat. It feels like winning. A year later he still cannot drive — and the day the chauffeur calls in sick, he cannot get to the one meeting that matters.</p>
+        <p>The second hires a driving instructor. She sits in the driver's seat from day one. The instructor beside her explains the clutch, lets her stall the car in an empty lot, quizzes her before every roundabout — <em>"who has right of way here?"</em> — and grabs the wheel only when something is genuinely about to go wrong. Six months in, she drives anywhere alone, and the instructor's role has shrunk to the occasional consult on unfamiliar roads.</p>
+        <p>Same city, same traffic, same amount of help. The difference was never the helper — it was who held the wheel. Your AI assistant will happily be the chauffeur or the instructor. It becomes whichever one you ask for. This chapter is about asking for the instructor.</p>
+      </section>
+
+      <h2>Two ways to hold the same tool</h2>
+      <p>You have spent this whole act becoming a working engineer: committing with <a href="ch096-git-fundamentals.html">git</a>, opening <a href="ch099-merge-requests.html">merge requests</a>, <a href="ch100-reading-diffs-review.html">reading diffs like a reviewer</a>, and letting <a href="ch103-pytest.html">tests gate your merges</a>. AI assistance sits on top of all of it — and it comes in two fundamentally different shapes.</p>
+      <p><dfn>Ghostwriter mode</dfn> is when you describe an outcome, the AI produces the whole change, and you paste it in without really reading it — the work ships, but the understanding never enters your head. It is the chauffeur. It feels fast, and for a throwaway script it is honestly fine. But for code that lands in a shared repository under your name, ghostwriter mode has a compounding cost: every ghostwritten change widens the gap between what you have shipped and what you actually understand, and that gap always gets discovered at the worst possible moment — in a review, in an incident, in a meeting where someone asks a simple question and watches you go quiet.</p>
+      <p>The alternative is two modes that build skill instead of hiding gaps. <dfn>Tutor mode</dfn> is using the AI to teach you — explaining code, quizzing you, unpacking design decisions — with no code changing at all. <dfn>Pair mode</dfn> is building together in small steps, where the AI proposes and you dispose: you read every line, run every change, and accept nothing you cannot explain.</p>
+      <p>One rule governs everything, and it is worth memorising word for word:</p>
+      <div class="callout note"><span class="co-label">Note</span>
+      <p><strong>Never ship a change you cannot defend in review.</strong> Not "never use AI" — use it constantly. But when a reviewer asks <em>"why did you catch the exception here and not one level up?"</em>, the answer "the AI wrote it" is not an answer anyone respects. The merge request carries your name, <code>git blame</code> will point at you at 2 a.m. six months from now, and the only acceptable state is that you can walk through every line and say why it is there. Whoever typed it, you own it.</p></div>
+
+      <h2>Mode one: the AI as tutor</h2>
+      <p>The tutor is the most underused mode, and it is pure profit: no risk, no diff, just understanding entering your head faster than any textbook could put it there. Three prompt patterns carry most of the weight.</p>
+      <p><strong>Explain-this-code.</strong> Paste any function that confuses you and ask for a line-by-line walkthrough — but always tell the tutor what you already know, so it pitches the explanation at your level instead of at a beginner's or an expert's. You did exactly this manually in <a href="ch105-reading-a-new-codebase.html">the last chapter</a> when you mapped a strange repository; the tutor turns a forty-minute head-scratch into five minutes of dialogue.</p>
+      <p><strong>Quiz-me.</strong> Reading an explanation feels like learning; being tested reveals whether it was. Ask the AI to quiz you — one question at a time, waiting for your answer, correcting your wording and not just your conclusion. This is the same active-recall trick this course's quizzes use, and you can point it at anything: <a href="ch017-decorators.html">decorators</a>, pipeline YAML, the codebase you were assigned yesterday.</p>
+      <p><strong>Why-is-this-designed-so.</strong> The deepest of the three. Code tells you <em>what</em>; it rarely tells you <em>why</em>. Ask: "Why a queue here instead of calling the worker directly? What would break under load if it were a direct call?" Design rationale is exactly the knowledge that separates someone who can type code from someone who can defend it — and it is the knowledge reviewers probe for.</p>
+
+      <p>Flip each card for the exact prompt shape. These six patterns are worth stealing verbatim:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">explain this code</span><span class="flip-back">"Explain this function line by line. Assume I am fluent with functions and loops but new to asyncio. End with the one thing most likely to trip up a newcomer."</span></button>
+        <button class="flip" type="button"><span class="flip-front">quiz me</span><span class="flip-back">"Quiz me on this module — five questions, one at a time. Wait for my answer before revealing yours, and correct my wording, not just my verdict."</span></button>
+        <button class="flip" type="button"><span class="flip-front">why is it designed so</span><span class="flip-back">"Why does this code use a retry queue instead of a direct call? What failure is it defending against, and what would break without it?"</span></button>
+        <button class="flip" type="button"><span class="flip-front">predict, then check</span><span class="flip-back">"I think this function returns an empty list when the input is None. Am I right? If not, show me exactly where my mental model went wrong."</span></button>
+        <button class="flip" type="button"><span class="flip-front">shrink the step</span><span class="flip-back">"That change is too big for me to review honestly. Split it into steps of at most twenty lines each, and stop after every step so I can read and run it."</span></button>
+        <button class="flip" type="button"><span class="flip-front">what did I miss</span><span class="flip-back">"Here is my own summary of what this diff does and why. What did I get wrong or leave out?" — the fastest way to audit your understanding before a review does.</span></button>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>The "predict, then check" card is the secret weapon. Committing to a prediction <em>before</em> asking turns a passive explanation into a test of your mental model — and a wrong prediction teaches you more in thirty seconds than three right ones. Make it a reflex: never ask "what does this do?" without first saying what you <em>think</em> it does.</p></div>
+
+      <h2>Mode two: the AI as pair</h2>
+      <p>Pair mode is where code actually changes — and where discipline matters most. The shape is borrowed from human pair programming: one small intention at a time, a visible proposal, and a navigator (you) who approves every move. Big generated changes are the failure mode; a five-hundred-line diff outruns anyone's ability to review honestly, which quietly converts pair mode back into ghostwriting. Small steps keep you inside your own headlights.</p>
+      <p>Here is one full turn of the loop. Watch where the highlight sits at each step — it alternates between the AI and you, and every "you" step is a checkpoint the change cannot pass without your understanding.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="State one intent">
+          <h3>1. You state one small intent</h3>
+          <div class="diagram">
+            <div class="d-box hot">You<small>"Add retry to fetch_page(). Smallest diff. Stop there."</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">AI pair</div>
+            <div class="d-box dim">Repo<small>untouched</small></div>
+          </div>
+          <p class="step-cap">One change, clearly bounded, with an explicit stop instruction. The prompt sets the step size — vague, open-ended asks are how you end up with a diff you cannot review.</p>
+        </div>
+        <div class="step" data-title="Pair proposes">
+          <h3>2. The pair proposes a small diff</h3>
+          <div class="diagram">
+            <div class="d-box dim">You</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">AI pair<small>+9 -2 in fetch.py, with its reasoning</small></div>
+            <div class="d-box dim">Repo</div>
+          </div>
+          <p class="step-cap">A proposal, not a decision. Nine added lines is a size you can hold in your head completely — which is the whole point.</p>
+        </div>
+        <div class="step" data-title="You read every line">
+          <h3>3. You read every line — and interrogate</h3>
+          <div class="diagram">
+            <div class="d-box hot">You<small>"Why catch ConnectionError here and not in the caller?"</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box">AI pair<small>explains, or revises</small></div>
+            <div class="d-box dim">Repo</div>
+          </div>
+          <p class="step-cap">This is <a href="ch100-reading-diffs-review.html">diff-reading</a> turned inward: review the AI's code exactly as you would a teammate's. Any line you cannot explain triggers a tutor question on the spot. Nothing advances until every line is boring to you.</p>
+        </div>
+        <div class="step" data-title="Run it, test it">
+          <h3>4. You run it and test it</h3>
+          <div class="diagram">
+            <div class="d-box dim">You</div>
+            <div class="d-box dim">AI pair</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Tests<small>pytest: 14 passed, incl. the new retry case</small></div>
+          </div>
+          <p class="step-cap">Reading is necessary but not sufficient — execution is the judge. You run the changed path and the test suite locally, the same gate <a href="ch101-gitlab-pipelines.html">the pipeline</a> will apply later, plus one new test for the behaviour you just added.</p>
+        </div>
+        <div class="step" data-title="Commit under your name">
+          <h3>5. You commit — because now you can defend it</h3>
+          <div class="diagram">
+            <div class="d-box good">You<small>git commit, honest message</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Merge request<small>a change you can answer for</small></div>
+          </div>
+          <p class="step-cap">The commit is the moment of ownership. You could now rewrite this change from scratch if you had to — which means the AI made you faster without making you hollow. Then the loop repeats for the next small intent.</p>
+        </div>
+      </div>
+
+      <p>Notice what the loop is really doing: it inserts your understanding between every proposal and every commit. The chauffeur version of this loop deletes steps 3 and 4. That is the entire difference between the two friends in the story.</p>
+
+      <div class="code-title">the same request, two ways</div>
+      <pre><code class="language-bash"># ghostwriter ask (the chauffeur)
+"Build the retry logic for our fetcher and make all the tests pass."
+
+# pair ask (the instructor)
+"I want retry with exponential backoff in fetch_page().
+ Step 1 only: the smallest diff that retries twice on
+ ConnectionError. Explain why you catch it where you do.
+ Stop there - I will read it, run the tests, then ask for step 2."</code></pre>
+
+      <h2>Verify like you mean it: run it, test it, read the diff</h2>
+      <p>Modern AI code has a dangerous property: it <em>looks</em> finished. Clean names, tidy docstrings, plausible structure. Human beginners write code that looks as uncertain as it is; AI writes code whose polish is completely uncorrelated with its correctness. So verification cannot be a vibe — it has to be three mechanical habits you run every single time.</p>
+      <p><strong>Read the diff</strong> — every line, before anything executes, predicting what it does. <strong>Run it</strong> — actually exercise the changed path, because a read-through catches logic you disagree with but not behaviour you did not anticipate (and when it breaks, you can now <a href="ch009-errors-and-tracebacks.html">read the traceback</a> yourself). <strong>Test it</strong> — run the suite, and add the edge case the AI did not think of, because a green suite only vouches for the cases it contains.</p>
+      <p>Time to feel this in your hands. Below, a scripted stand-in AI pair — the same <code>fake_llm</code> trick from <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> — proposes a perfectly professional-looking helper function. Your job is step 4 of the loop. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="Review your AI pair's diff — run me">
+<textarea class="py-src" spellcheck="false">
+# Your AI pair is a scripted stand-in (as in ch045):
+# request in, proposed code out, as text.
+def fake_llm(request):
+    return '''
+def chunk(items, size):
+    """Split items into consecutive lists of length size."""
+    chunks = []
+    for i in range(0, len(items) - size + 1, size):
+        chunks.append(items[i:i + size])
+    return chunks
+'''
+
+proposal = fake_llm("Write chunk(items, size) -&gt; list of lists")
+print("The pair proposed this diff:")
+print(proposal)
+print("Eyeball check: clean name, docstring, tidy loop. Tempting")
+print("to merge on looks alone. Instead - run the tests:\n")
+
+namespace = {}
+exec(proposal, namespace)          # nothing is real until it runs
+chunk = namespace["chunk"]
+
+tests = [
+    (list(range(6)), 3, [[0, 1, 2], [3, 4, 5]]),
+    (list(range(7)), 3, [[0, 1, 2], [3, 4, 5], [6]]),  # uneven tail
+    ([], 3, []),
+]
+failed = 0
+for items, size, want in tests:
+    got = chunk(items, size)
+    ok = got == want
+    failed += (not ok)
+    label = "PASS" if ok else "FAIL"
+    detail = "" if ok else f"  got {got}, wanted {want}"
+    print(f"{label}  chunk(len={len(items)}, size={size}){detail}")
+
+print()
+if failed:
+    print(f"{failed} test failed. The polished diff silently DROPS the")
+    print("tail whenever len(items) is not a multiple of size.")
+    print("Fix the range() line above to  range(0, len(items), size)")
+    print("and press Run again.")
+else:
+    print("All green. NOW it is your code: you caught the bug,")
+    print("you made the fix, you can defend every line in review.")
+</textarea>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Notice what just happened: the buggy version would have sailed through a test suite that only used tidy, divisible-length inputs. "The tests pass" is only as strong as the tests — which is why the habit is all three: read the diff (you might have spotted the suspicious <code>- size + 1</code>), run it, <em>and</em> test it with the awkward case. Each habit catches what the other two miss.</p></div>
+
+      <h2>The honest-positioning rule</h2>
+      <p>Everything so far happens at your desk. This last part happens in rooms — standups, reviews, design discussions — and it decides your reputation. The rule: <strong>never fake depth.</strong> When you have used AI heavily, say so plainly and pair it with what you personally verified: <em>"I built this with AI assistance; I've read and can walk through every line; I tested the uneven-tail case by hand; the part I'm still shaky on is the backoff maths."</em> That sentence is not a confession — it is the most credible thing an engineer can say, because it shows exactly where the solid ground ends.</p>
+      <p>The alternative — bluffing an answer about code you do not understand — has a brutal asymmetry. Honest "I'll find out and come back to you" costs you nothing and is forgotten by lunch. Being caught improvising fake depth once can cost you a year of credibility, because now every confident answer you give gets silently discounted. Data scientists and senior engineers are extremely good at detecting the bluff; the probing "can you walk me through this function?" in a review is often precisely that detector.</p>
+      <p>And when you do get caught not knowing — because you will, everyone does — you now have the perfect recovery loop: take the question back to tutor mode. <em>"Why is this designed so?"</em>, understand it for real, and return with the actual answer. Done consistently, this converts every gap a reviewer finds into a permanent piece of your competence. That is the deeper principle under this whole chapter: <strong>convert AI leverage into real understanding.</strong> Every AI-assisted change should leave a residue — one concept, one API, one design pattern that is now yours. The ghostwritten engineer and the pair-mode engineer ship at similar speeds this quarter; by next year, one of them can architect systems and the other still cannot drive.</p>
+      <p>You already know this works, because you are the case study. You arrived at this course operating production AI systems you could not read the source of. Every chapter since has been exactly this workflow — explanation, prediction, quiz, small runnable steps — turning leverage into understanding, one concept at a time. The <a href="ch108-capstone-mini-harness.html">capstone</a> is two chapters away, and you will build it with AI at your side. Build it in pair mode, and it will be genuinely, defensibly yours.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You can spot both modes in any team's GitLab. Ghostwritten merge requests have a signature: huge, oddly uniform, over-commented, and an author who goes quiet when asked "why this data structure?". Pair-mode engineers ship small MRs whose descriptions say what was verified and how — and they answer review questions fluently, in seconds. Many organisations now write the rule of this chapter into policy almost word for word: <em>use any AI you like; you own every line you merge</em>. Some ask that AI assistance be noted in the MR description or commit message. And in reviews you will increasingly see the polite probe — "walk me through this bit?" — which is not hostility. It is the review system checking for exactly the ownership this chapter taught you to build.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Which change is acceptable to merge, according to this chapter's one rule?</p>
+          <div class="q-opts">
+            <button data-opt="a">Only code you typed entirely by hand</button>
+            <button data-opt="b">Any AI-written code, as long as the test suite is green</button>
+            <button data-opt="c">Any change you can explain and defend line by line in review — whoever typed it</button>
+          </div>
+          <p class="q-explain">The rule is about ownership, not authorship. AI can type every character, as long as your understanding stands behind every line — because the merge request, git blame, and the 2 a.m. incident call all carry your name.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. The <code>chunk()</code> function in the runner looked polished and would have passed a lazy test suite. What is the lesson?</p>
+          <div class="q-opts">
+            <button data-opt="a">AI code should be rewritten by hand to be safe</button>
+            <button data-opt="b">Polish is uncorrelated with correctness, so you need all three habits: read the diff, run it, and test the awkward edge case</button>
+            <button data-opt="c">Docstrings are a warning sign in generated code</button>
+          </div>
+          <p class="q-explain">The bug (dropping the uneven tail) hid behind clean naming and a tidy docstring, and only an awkward-length input exposed it. Each verification habit catches what the other two miss — that is why it is a trio, not a pick-one.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. Which of these is a tutor-mode prompt?</p>
+          <div class="q-opts">
+            <button data-opt="a">"Write the whole feature and open the merge request."</button>
+            <button data-opt="b">"Explain what this decorator does, then quiz me until I can explain it back correctly."</button>
+            <button data-opt="c">"Fix all the failing tests — I don't need the details."</button>
+          </div>
+          <p class="q-explain">Tutor mode changes your head, not the code: explain-this-code, quiz-me, why-is-this-designed-so. The other two are ghostwriter asks — outcomes delivered with your understanding bypassed.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. Why does pair mode insist on small steps instead of one big generated change?</p>
+          <div class="q-opts">
+            <button data-opt="a">A small diff can be fully read, questioned, and verified — a huge one outruns honest review and quietly becomes ghostwriting</button>
+            <button data-opt="b">Small diffs use fewer tokens and cost less</button>
+            <button data-opt="c">GitLab rejects merge requests over a certain size</button>
+          </div>
+          <p class="q-explain">Step size is what keeps your understanding in the loop. Nine lines you can hold completely in your head; five hundred lines you can only skim — and skimming is how unowned code gets merged under your name.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A reviewer asks why your AI-assisted change uses a queue instead of a direct call, and you genuinely do not know. Best move?</p>
+          <div class="q-opts">
+            <button data-opt="a">Improvise a confident-sounding rationale</button>
+            <button data-opt="b">Say the AI chose it, so the question is not really for you</button>
+            <button data-opt="c">Say you will find out — then ask your AI "why is this designed so?", understand it, and come back with the real answer</button>
+          </div>
+          <p class="q-explain">Honest positioning plus the tutor loop turns every exposed gap into permanent competence. Bluffing risks your long-term credibility on one roll of the dice, and deflecting to the AI concedes you shipped a line you cannot defend.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>The same assistant is a chauffeur or a driving instructor — your prompts decide which, and only one of them leaves you able to drive alone.</li>
+          <li>One rule governs all of it: never ship a change you cannot defend in review. Whoever typed it, the merge request and git blame carry your name.</li>
+          <li>Tutor mode builds understanding with zero risk: explain-this-code, quiz-me, why-is-this-designed-so — plus predict-then-check to test your mental model, not just fill it.</li>
+          <li>Pair mode is a loop with you as the gate: one small intent, one small diff, read every line, run it and test it, then commit. Big generated diffs silently turn pairing back into ghostwriting.</li>
+          <li>AI code looks finished whether or not it is — polish is uncorrelated with correctness, so verification is three mechanical habits: read the diff, run it, test the awkward case.</li>
+          <li>Never fake depth: "AI-assisted, verified X, still shaky on Y" builds trust; one caught bluff destroys it. Convert every gap into a tutor session, and AI leverage compounds into real skill.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

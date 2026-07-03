@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why Python looks the way it does — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch001">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act I · The Language</div>
+        <h1>Why Python looks the way it does</h1>
+        <p class="ch-tagline">Python threw away the braces and semicolons and made the layout of the page carry the logic itself. Twenty minutes from now you will read block structure at a glance — the way you skim a well-made checklist.</p>
+        <div class="ch-meta"><span>~20 min</span><span>Chapter 1 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>It is 6:05 on a Monday morning, and a brand-new duty manager at a busy hotel is holding two versions of the same emergency procedure. The first came from the legal department: one enormous paragraph, every rule wrapped in brackets inside other brackets — <em>"in the event of an alarm (whereas the guest has checked in {deliver notice; escort to assembly point;} otherwise {log the room as vacant;})"</em>. Technically complete. Practically unreadable at speed.</p>
+        <p>The second version was written by the outgoing manager, by hand, the night before she left. It is a checklist. Big steps sit at the left edge of the page. Sub-steps are indented beneath the step they belong to. Here and there a short pencil note explains <em>why</em> a step exists. Nobody has to teach the new manager how to read it — the shape of the page carries the meaning. When the fire panel chirps at 6:07, guess which document she grabs.</p>
+        <p>Python is the second document. Its whole visual design comes down to one deliberate decision: <strong>the shape of the text should BE the structure of the logic</strong>. This chapter teaches you to read that shape.</p>
+      </section>
+
+      <h2>One decision explains everything: layout is logic</h2>
+      <p>Every programming language needs a way to say "these lines belong together". A group of lines that belong together — the body of a loop, the consequence of a decision — is called a <dfn>block</dfn>, which simply means a bundle of instructions treated as one unit. Most older languages mark blocks with punctuation: an opening brace <code>{</code> to say "the bundle starts here" and a closing brace <code>}</code> to say "the bundle ends here".</p>
+      <p>Here is the thing, though. Programmers who write brace languages <em>also</em> indent their code — they push the inner lines a few spaces to the right — purely so humans can read it. The machine reads the braces; the humans read the indentation. Two systems, describing the same structure, that can silently drift apart. A misplaced brace with tidy-looking indentation is one of the classic ways bugs hide in plain sight.</p>
+      <p>Python's designer, Guido van Rossum, started building the language in late 1989 with a simple bet: since humans already read structure from <dfn>indentation</dfn> — the whitespace pushing a line in from the left margin — why not make the machine read it from the same place? Delete the braces. Promote the indentation you were doing anyway from decoration to law. One source of truth, and it is the one your eyes were already using.</p>
+      <p>This idea has a wonderfully odd name: the <em>off-side rule</em>, coined by computer scientist Peter Landin in 1966 and borrowed from football — a line on the pitch that you may not cross. In Python, the left margin is that line. Where a line starts is not styling. It is meaning.</p>
+
+      <h2>The same rule, written twice</h2>
+      <p>Look at the identical piece of logic in a brace language (JavaScript here) and in Python. Read both slowly — not for the words, for the punctuation.</p>
+
+      <div class="code-title">The brace-language version (JavaScript)</div>
+      <pre><code class="language-javascript">// JavaScript: punctuation carries the structure
+for (const message of inbox) {
+  if (message.startsWith("URGENT")) {
+    escalate(message);
+  } else {
+    park(message);
+  }
+}</code></pre>
+
+      <div class="code-title">The Python version</div>
+      <pre><code class="language-python"># Python: layout carries the structure
+for message in inbox:
+    if message.startswith("URGENT"):
+        escalate(message)
+    else:
+        park(message)</code></pre>
+
+      <p>Same shape, same logic. But count what Python deleted: six braces, four semicolons, and two pairs of parentheses around the conditions. Nothing was added except two colons — and the indentation, which the JavaScript version had anyway. That is why people say Python "reads like English": it is not that the words are special, it is that the noise is gone. What remains on the page is almost purely the logic.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Job</th><th>Brace language</th><th>Python</th></tr>
+        <tr><td>End of an instruction</td><td>semicolon <code>;</code></td><td>the end of the line</td></tr>
+        <tr><td>Start of a block</td><td>opening brace <code>{</code></td><td>a colon <code>:</code> plus an indent</td></tr>
+        <tr><td>End of a block</td><td>closing brace <code>}</code></td><td>return to the previous margin</td></tr>
+        <tr><td>Note for humans</td><td><code>//</code> to end of line</td><td><code>#</code> to end of line</td></tr>
+      </table></div>
+
+      <p>One vocabulary word before we go further: a single instruction — one line that does one thing — is called a <dfn>statement</dfn>, meaning one complete sentence of code. In brace languages a statement ends with a semicolon, like a full stop you must type. In Python, a statement ends where the line ends. Press Enter, the sentence is over. (Python does allow a semicolon to cram two statements onto one line — <code>a = 1; b = 2</code> — but nobody writes that; it fights the whole design.)</p>
+
+      <h2>The colon: a small promise</h2>
+      <p>If layout is the structure, the language still needs one tiny signal to say "a block is about to begin". That signal is the <dfn>colon</dfn> — the <code>:</code> at the end of a line, which is Python's way of promising "an indented block follows me". Every time you see a line ending in a colon — a loop, a decision, later a function or a class — the very next thing must be at least one line indented beneath it. Colon and indent travel as a pair; a colon with nothing indented after it is an error, and an indent with no colon above it is an error too.</p>
+      <p>This gives you a lovely reading trick: <strong>colon lines are the headings of your code</strong>. Skim only the lines that end in colons and you get the outline of a Python file, the way skimming headings gives you the outline of a report.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Because whitespace is load-bearing, Python is strict about it. The convention — near-universal, and written into Python's own style guide, PEP 8 — is <strong>four spaces per level</strong>, never a mix of tabs and spaces. Mixing them looks identical on screen but is not identical to the machine, and Python 3 refuses to guess: it stops with an error rather than run a program whose shape is ambiguous. Every serious editor handles this for you (the Tab key inserts spaces); you only meet the problem when pasting code between tools.</p></div>
+
+      <h2>Comments: notes to the next human</h2>
+      <p>The pencil notes in the margin of that hotel checklist exist in Python too. A <dfn>comment</dfn> is text the machine completely ignores, written purely for the next human reader. It starts with a hash sign <code>#</code> and runs to the end of the line — everything after the <code>#</code> is invisible to Python.</p>
+
+      <pre><code class="language-python"># This whole line is a comment. Python never sees it.
+retries = 3  # a comment can also sit at the end of a real line</code></pre>
+
+      <p>Good comments do not narrate <em>what</em> the code does — the code already says that. They record <em>why</em>: "the vendor's API times out under 3 retries", "the client insists reports run at 6am". When you read production agent code, the comments are where the scars and the tribal knowledge live. (You will also meet text wrapped in triple quotes sitting under a function's first line — that is documentation with superpowers, and it gets proper treatment when we reach functions.)</p>
+
+      <h2>print: your window into a running program</h2>
+      <p>One more tool and you can read and run real code. <dfn><code>print()</code></dfn> is a built-in command that writes text to the screen — it is how a program reports what it is doing while it runs. Give it one thing or several, separated by commas, and it prints them on one line with spaces in between, then moves to the next line:</p>
+
+      <pre><code class="language-python">print("Starting triage")
+print("Messages found:", 4)</code></pre>
+
+      <p>Do not let its smallness fool you. Nearly every log line you have ever scrolled through in an agent trace started life as a <code>print</code> or its grown-up sibling, a logger call. When engineers debug, the oldest and most honest technique is still to sprinkle <code>print</code> statements through the code and watch what actually happens — you will do exactly that two sections from now.</p>
+
+      <h2>The words that carry this chapter</h2>
+      <p>Flip each card until the back feels obvious. These six words are the reading kit for every Python file you will ever open.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">statement</span><span class="flip-back">One complete instruction — one sentence of code. In Python it ends where the line ends. No semicolon needed.</span></button>
+        <button class="flip" type="button"><span class="flip-front">block</span><span class="flip-back">A bundle of statements that belong together — the body of a loop or a decision. Marked by indentation, not braces.</span></button>
+        <button class="flip" type="button"><span class="flip-front">indentation</span><span class="flip-back">The whitespace pushing a line in from the left. In Python it is law, not styling: it says which block a line belongs to. Four spaces per level.</span></button>
+        <button class="flip" type="button"><span class="flip-front">colon</span><span class="flip-back">The : at the end of a line. A promise that an indented block follows. Colon lines are the headings of your code.</span></button>
+        <button class="flip" type="button"><span class="flip-front">comment</span><span class="flip-back">Text after a # that Python ignores completely. Written for the next human. The best ones explain why, not what.</span></button>
+        <button class="flip" type="button"><span class="flip-front">print()</span><span class="flip-back">The built-in command that writes to the screen. A program's voice — and the ancestor of every log line you have ever read.</span></button>
+      </div>
+
+      <h2>Seeing structure at a glance</h2>
+      <p>Here is the skill this chapter exists to give you: reading a Python file the way an architect reads a floor plan — shape first, details second. Step through the method:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Squint at the margin">
+          <h3>1. Squint at the left edge</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">Margin — level 0<small>the spine: setup and top-level flow</small></div>
+              <div class="d-box dim">One indent — level 1<small>happens inside something</small></div>
+              <div class="d-box dim">Two indents — level 2<small>inside something, inside something</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Blur the words and look only at where lines start. The lines at the margin are the spine of the program — the story read top to bottom. Everything pushed right is detail that happens inside something else. Deeper means more conditional, more nested, more "only sometimes".</p>
+        </div>
+        <div class="step" data-title="Find the colons">
+          <h3>2. Find the colon lines — they are the headings</h3>
+          <div class="diagram">
+            <div class="d-box hot">for message in inbox:<small>a colon — "a block follows me"</small></div>
+            <span class="d-arrow">&#8595;</span>
+            <div class="d-box dim">the indented block<small>owned by the colon line above</small></div>
+          </div>
+          <p class="step-cap">Every line ending in a colon opens a door. Skim only the colon lines and you have the outline: here is a loop, inside it a decision, over there a function. This is how experienced reviewers "read" a 400-line file in ninety seconds.</p>
+        </div>
+        <div class="step" data-title="Read a block as one thought">
+          <h3>3. Read each block as a single thought</h3>
+          <div class="diagram">
+            <div class="d-box">for message in inbox:</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">everything indented under it<small>= "what happens for each message"</small></div>
+          </div>
+          <p class="step-cap">All the lines indented under a colon line are one unit — one paragraph of logic. You can summarise the whole block in a phrase ("decide what to do with this message") without reading any line inside it. Zoom in only when you need to.</p>
+        </div>
+        <div class="step" data-title="The dedent closes the door">
+          <h3>4. A return to the margin is the closing brace you never type</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">    park(message)<small>last line inside the loop</small></div>
+              <div class="d-box hot">print("Triage complete")<small>back at the margin — runs once, after the loop</small></div>
+            </div>
+          </div>
+          <p class="step-cap">When the indentation steps back left, the block is over — no closing symbol needed. The dedent IS the closing brace. A line back at the margin after a loop runs once, after the whole loop finishes. This single observation resolves half of all "why did this run five times?" confusions.</p>
+        </div>
+      </div>
+
+      <h2>Now read a real snippet by shape</h2>
+      <p>Below is a small nightly-check script of the kind that sits behind many an operations dashboard. Before you click anything, try the squint: two colon lines, two levels of indent, a spine of four margin lines. Then click the annotated lines and confirm your reading.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">nightly_check.py — read it by shape first</div>
+        <div class="wl-line"><code># Nightly check: which agent runs need attention?</code>
+          <div class="wl-note">A comment — the hash makes the whole line invisible to Python. It answers "why does this file exist?" for the human who opens it at 2am.</div></div>
+        <div class="wl-line"><code>inbox = ["ok billing-bot", "FAILED triage-bot", "ok summary-bot"]</code>
+          <div class="wl-note">A statement at the margin: create a list of three reports and give it the name <code>inbox</code>. What "giving something a name" really means is the whole of the <a href="ch002-names-and-objects.html">next chapter</a>.</div></div>
+        <div class="wl-line"><code>alerts = 0</code>
+          <div class="wl-note">Another spine statement: start a counter at zero. Notice there is no semicolon — the end of the line ends the statement.</div></div>
+        <div class="wl-line"><code>for line in inbox:</code>
+          <div class="wl-note">A colon line — a heading. It promises an indented block and means "do the following once for each item in inbox". Loops get their full chapter in <a href="ch006-control-flow.html">control flow</a>; today you only need the shape.</div></div>
+        <div class="wl-line"><code>    if line.startswith("FAILED"):</code>
+          <div class="wl-note">One indent in: this happens inside the loop, for each line. And it is itself a colon line — a decision that opens its own, deeper block. Deeper indent, deeper question.</div></div>
+        <div class="wl-line"><code>        alerts = alerts + 1</code>
+          <div class="wl-note">Two indents in: this runs only for lines that start with "FAILED". Position tells you that before you read a single word.</div></div>
+        <div class="wl-line"><code>        print("Needs a rerun:", line)</code>
+          <div class="wl-note">Still at level 2, so still inside the decision: report the failure to the screen. In production this would be a log line; the idea is identical.</div></div>
+        <div class="wl-line"><code>print("Checks finished. Alerts:", alerts)</code>
+          <div class="wl-note">Back at the margin — both doors have closed. This runs exactly once, after the loop is completely done. If it were indented one level, it would print once per message. Same words, different position, different program.</div></div>
+      </div>
+
+      <h2>Run it, then break it on purpose</h2>
+      <p>Reading is half the skill; the other half is watching the rules enforce themselves. This is a live Python environment running in your browser. Press <strong>Run</strong>, read the output next to the code, and then start vandalising — the errors are the lesson.</p>
+
+      <div class="pyrun" data-title="A tiny triage bot — run me, then break me">
+<textarea class="py-src" spellcheck="false">
+# A tiny triage bot.
+# Lines starting with "#" are comments -- Python skips them.
+
+inbox = [
+    "URGENT: payment gateway down",
+    "newsletter: 12 tips for tidy inboxes",
+    "URGENT: client demo moved to 9am",
+    "canteen menu for Friday",
+]
+
+for message in inbox:
+    if message.startswith("URGENT"):
+        print("Escalate now  :", message)
+    else:
+        print("Park for later:", message)
+
+print()
+print("Triage complete:", len(inbox), "messages sorted.")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Three experiments, in order. <strong>One:</strong> delete the four spaces before the first <code>print</code> and run — Python refuses with an <code>IndentationError</code>, because the shape no longer makes sense. <strong>Two:</strong> remove the colon after <code>else</code> and run — a <code>SyntaxError</code>, the promise of a block with no promise made. <strong>Three:</strong> take the final <code>print("Triage complete", ...)</code> line and indent it to sit inside the loop — no error this time, but it prints after every message instead of once. That third one is the important lesson: indentation mistakes are not always errors. Sometimes they are just a different program.</p></div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Those error names are worth a second look, because you will meet them in real logs. <code>IndentationError: unexpected indent</code> means a line is pushed right with no colon line above to own it. <code>IndentationError: expected an indented block</code> means the opposite — a colon made its promise and no block followed. Both are Python defending the one rule everything else stands on.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will use this skill constantly, and not only on Python. Open any agent framework's source and skim just the colon lines — you will map the file in a minute. In a merge request, watch for diffs where a line's <em>only</em> change is its indentation: in Python that is a logic change, not a formatting change, and reviewers who miss it approve bugs. Editors help you see structure too — thin vertical <em>indent guides</em> mark each level, and clicking the fold arrow in the margin collapses a whole block to one line, which is exactly the "read each block as one thought" trick, automated. And the same layout-is-structure idea governs the YAML configuration files that define most agent deployments — indent a key one level too deep and it silently belongs to the wrong section. That story gets its own chapter: <a href="ch005-yaml-and-json.html">YAML and JSON</a>.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. In Python, what does indentation actually do?</p>
+          <div class="q-opts">
+            <button data-opt="a">It is a style convention — the machine ignores it</button>
+            <button data-opt="b">It defines which block each line belongs to — the machine reads structure from it</button>
+            <button data-opt="c">It makes the program run faster by organising the file</button>
+          </div>
+          <p class="q-explain">In brace languages indentation is decoration and the braces carry the structure. Python deleted the braces and made the indentation itself load-bearing — one source of truth, the one your eyes already use.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">2. A line ends with a colon. What must come next?</p>
+          <div class="q-opts">
+            <button data-opt="a">At least one line indented beneath it — the block the colon promised</button>
+            <button data-opt="b">A closing colon to match it</button>
+            <button data-opt="c">A blank line, to separate sections</button>
+          </div>
+          <p class="q-explain">The colon is a promise: "an indented block follows me". A colon with nothing indented after it is an IndentationError — the promise was broken.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">3. Python has no semicolons at line ends. How does it know where a statement stops?</p>
+          <div class="q-opts">
+            <button data-opt="a">It looks for the next capital letter</button>
+            <button data-opt="b">Every statement must end with a full stop</button>
+            <button data-opt="c">The end of the line ends the statement</button>
+          </div>
+          <p class="q-explain">Press Enter, the sentence is over. This is why Python code has so little punctuation noise: the line break you were typing anyway does the semicolon's job.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. A <code>print</code> line sits at the left margin, directly after an indented loop. When does it run?</p>
+          <div class="q-opts">
+            <button data-opt="a">Once per item, as part of the loop</button>
+            <button data-opt="b">Exactly once, after the whole loop finishes</button>
+            <button data-opt="c">Never — code after a loop is unreachable</button>
+          </div>
+          <p class="q-explain">The return to the margin — the dedent — is the closing brace you never type. Back at level 0 means outside the loop, so the line runs once, after the loop completes. Indent that same line one level and it would run once per item: same words, different program.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">5. What does Python do with everything after a <code>#</code> on a line?</p>
+          <div class="q-opts">
+            <button data-opt="a">Ignores it completely — it exists only for human readers</button>
+            <button data-opt="b">Prints it to the screen as a warning</button>
+            <button data-opt="c">Runs it only when the program is in debug mode</button>
+          </div>
+          <p class="q-explain">A comment is invisible to the machine. The best ones record why the code is the way it is — the tribal knowledge the next reader will be grateful for.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Python's one big design decision: the layout IS the logic. Indentation defines block structure — it is law, not styling.</li>
+          <li>A colon at the end of a line promises an indented block. Colon lines are the headings of your code: skim them and you have the file's outline.</li>
+          <li>No semicolons — the end of the line ends the statement. No braces — the return to the previous margin (the dedent) closes the block.</li>
+          <li>To see structure at a glance: squint at the left edge, find the colon lines, read each block as one thought, and treat every dedent as a closed door.</li>
+          <li>Comments (<code>#</code> to end of line) are invisible to Python and precious to humans; <code>print()</code> is the program's voice and the ancestor of every log line you have ever read.</li>
+          <li>Indentation mistakes are not always errors — moving a line one level in or out can silently produce a <em>different, valid program</em>. That is why Python reviewers read whitespace like logic. Because it is.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

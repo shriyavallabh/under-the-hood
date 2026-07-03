@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deep agents vs Claude Code — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch072">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VIII · Deep Agents</div>
+        <h1>Deep agents vs Claude Code</h1>
+        <p class="ch-tagline">Two teams, two codebases, zero coordination — and the same four organs grew anyway. Learn to see the shark and the dolphin in every agent you operate.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 73 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Put a photograph of a shark next to a photograph of a dolphin. Same torpedo body, same dorsal fin, same crescent tail. Yet one is a fish whose lineage is older than trees, and the other is a mammal whose ancestors walked on land and then, fifty million years ago, waded back into the sea. They never consulted each other. The ocean designed them both — because moving fast through water has exactly one good answer, and any body that commits to that life gets squeezed into the same shape. Biologists call this <strong>convergent evolution</strong>: unrelated lineages, same problem, same solution.</p>
+        <p>Now put the deepagents source code next to a Claude Code session. A todo-list tool. A task tool that spawns fresh-context subagents. Files used as memory. A compression trick for when the context window fills. Two teams with completely different starting points — a Python library from the LangChain world, a terminal product from an AI lab — grew the same four fins. This chapter is the dissection lab. We lay the shark and the dolphin side by side, find every organ that matches because the ocean demanded it, and every organ that differs because a fish and a mammal are still different animals.</p>
+      </section>
+
+      <h2>Two lineages, one ocean</h2>
+      <p>Quick recap of where Act VIII stands. In <a href="ch067-create-deep-agent-anatomy.html">the anatomy chapter</a> you opened <code>create_deep_agent</code> and found <a href="ch054-create-agent.html">LangChain's <code>create_agent</code></a> loop with extra equipment bolted on. You then met each piece: the <a href="ch068-planning-and-todos.html"><code>write_todos</code> planning tool</a>, the <a href="ch069-virtual-filesystem.html">virtual filesystem</a> behind <code>ls</code>, <code>read_file</code>, <code>write_file</code> and <code>edit_file</code>, and the <a href="ch070-subagents.html"><code>task</code> tool</a> that spawns subagents. And <a href="ch071-the-token-bill.html">the previous chapter</a> priced the subagent trick: delegation can roughly double your token bill, because the child re-reads what the parent already saw — what it buys is not a discount but a clean parent context.</p>
+      <p>Separately, you have almost certainly <em>operated</em> the other animal. Claude Code is the terminal agent from Anthropic that edits real files, runs shell commands, and works on codebases for hours. If you have ever watched it print a little checklist, dispatch a subagent, jot notes into a scratch file, or announce that it is "compacting" the conversation — you have already field-observed every organ this chapter dissects.</p>
+      <p>Here is the framing that makes the whole comparison click: the two systems are different <em>kinds</em> of thing. Claude Code is a <dfn>harness</dfn> — a finished, runnable product that wraps the agent loop in everything a human operator needs: a terminal interface, permission prompts, configuration, session management. You do not assemble it; you drive it. deepagents is a <dfn>library</dfn> — code you install with <code>pip</code> and embed inside <em>your own</em> product. You pick the model, supply the tools, choose where files live, and ship the result to your users. One is a vehicle; the other is an engine on a pallet with excellent mounting brackets.</p>
+      <p>Different kind of artefact, different team, different ecosystem. Yet both swim in the same ocean: tasks that run for hours, touch hundreds of tool calls, and generate far more information than one context window can hold. That ocean is about to explain every matching fin.</p>
+
+      <h2>The vocabulary for the dissection</h2>
+      <p>Six terms carry this chapter. Flip each card until the definitions feel obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">harness</span><span class="flip-back">A finished product wrapping the agent loop — interface, permissions, config, session handling included. You operate it. Claude Code is one.</span></button>
+        <button class="flip" type="button"><span class="flip-front">library</span><span class="flip-back">Code you import to build your own agent product. No interface, no opinions about your users. deepagents is one.</span></button>
+        <button class="flip" type="button"><span class="flip-front">virtual filesystem</span><span class="flip-back">File tools whose "disk" is really the agent's state object, not your machine. The model reads and writes paths; no real file is touched unless you choose a disk-backed backend.</span></button>
+        <button class="flip" type="button"><span class="flip-front">scratchpad</span><span class="flip-back">A file the agent writes to itself mid-task — notes, findings, half-finished drafts — so detail can leave the context window and be re-read later.</span></button>
+        <button class="flip" type="button"><span class="flip-front">compaction</span><span class="flip-back">Claude Code's survival move when the window fills: summarise the transcript, then continue in a fresh context that starts from the summary.</span></button>
+        <button class="flip" type="button"><span class="flip-front">subagent</span><span class="flip-back">The same agent loop started again with a fresh, empty history and a narrow brief. It does the messy work in its own context and returns only a short result.</span></button>
+      </div>
+
+      <h2>The four organs, side by side</h2>
+      <p>Every agent built to run for hours must answer four questions. How do I keep sight of the goal? How do I keep detail out of my working memory? How do I stop one messy subtask from polluting everything? And what do I do when the window fills anyway? Watch how each animal answers. This table is the heart of the chapter — take it slowly.</p>
+
+      <div class="tbl"><table>
+        <tr><th>The organ</th><th>deepagents (the library)</th><th>Claude Code (the harness)</th><th>Why it must exist</th></tr>
+        <tr><td><strong>Write the plan down</strong></td><td>The built-in <code>write_todos</code> tool. The model calls it to record and update a step list, held in agent state rather than in the fading transcript.</td><td>The <code>TodoWrite</code> tool. Same move — and the harness renders the checklist live in your terminal, ticking items off as they finish.</td><td>Over a long run, the model's attention drifts off the goal. An explicit plan it can re-read re-anchors it.</td></tr>
+        <tr><td><strong>Delegate with a clean slate</strong></td><td>The <code>task</code> tool spawns a subagent — a fresh loop with an empty history and a narrow brief. Only its final summary returns to the parent.</td><td>The <code>Task</code> tool does exactly the same; custom subagents (their own prompt, their own tool list) are defined as files under <code>.claude/agents/</code>.</td><td>A messy subtask — reading forty files, hitting dead ends — would junk up the parent's context. Isolation keeps the parent's window clean.</td></tr>
+        <tr><td><strong>Offload to files</strong></td><td>File tools over a <em>virtual</em> filesystem: with the default StateBackend, "files" live inside the agent's state object; a FilesystemBackend swaps in your real disk.</td><td>Real files, real disk: reading, writing and editing your actual project — plus scratchpad files for notes the agent writes to itself mid-task.</td><td>The context window is expensive, tiny RAM. Files are cheap, unlimited disk. Park the detail, keep only a pointer in context.</td></tr>
+        <tr><td><strong>Remember across sessions</strong></td><td>A CompositeBackend routes paths by longest prefix — so <code>/memories/</code> can point at a durable store while everything else stays ephemeral. The agent writes its own long-term notes there.</td><td>Memory files: <code>CLAUDE.md</code> at the project root (plus user-level memory files), loaded at the start of every session — instructions and facts that outlive any one conversation.</td><td>Every new session starts blank. Without a durable, re-loaded file, the agent re-learns your preferences from scratch each morning.</td></tr>
+        <tr><td><strong>Survive a full window</strong></td><td>Summarisation middleware: when the history grows past a threshold, older messages are condensed into a summary and the loop carries on.</td><td>Compaction: <code>/compact</code> on demand, or automatic compaction as the window approaches its limit — summarise, then continue from the summary.</td><td>Hour-long tasks generate more text than any window holds. Compression is the last resort once planning, files and subagents have done their part.</td></tr>
+      </table></div>
+
+      <p>Read down the middle two columns and the convergence is almost eerie. Nobody standardised this — no committee, no shared spec. Two teams shipped independently, and an operator of either system could sit down at the other and recognise every control within minutes. Same ocean, same fins.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The chapter promise says four ideas; the table shows five rows. The memory row is really the filesystem idea wearing a longer watch: <code>/memories/</code> and <code>CLAUDE.md</code> are just files that survive the session and get re-read. Count four organs or five — what matters is that <em>both</em> animals grew all of them.</p></div>
+
+      <h2>One task, two animals</h2>
+      <p>Tables are for reference; motion is for understanding. Step through the same job — "research rooftop solar and draft a report" — running on both systems at once.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Plan">
+          <h3>1. Both write the plan down first</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">deepagents<small>write_todos(["research", "draft", "polish"])</small></div>
+              <div class="d-box hot">Claude Code<small>TodoWrite — a 3-item checklist appears in your terminal</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Before touching the task, each agent externalises its plan. The plan is stored outside the raw transcript — in agent state on one side, in the harness's todo state on the other — so it cannot fade or be compressed away.</p>
+        </div>
+        <div class="step" data-title="Delegate">
+          <h3>2. Both hand research to a fresh-context subagent</h3>
+          <div class="diagram">
+            <div class="d-box dim">Parent<small>context stays clean</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">deepagents<small>task("gather facts on rooftop solar")</small></div>
+              <div class="d-box hot">Claude Code<small>Task — subagent starts with an empty history</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The subagent reads twenty sources and hits three dead ends — all inside its own context. The parent never sees the mess. The tokens are still paid; what you buy is the parent's clean window.</p>
+        </div>
+        <div class="step" data-title="Files">
+          <h3>3. Both park the detail in files</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">deepagents<small>write_file("/notes/research.md", findings) — virtual FS</small></div>
+              <div class="d-box hot">Claude Code<small>writes notes/research.md — a real scratchpad on your disk</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Parent gets<small>"done — notes in /notes/research.md"</small></div>
+          </div>
+          <p class="step-cap">The subagent's full findings go to a file; only a one-line pointer returns to the parent. Same gesture, different disk: the library's default disk is the state object, the harness's disk is your actual machine.</p>
+        </div>
+        <div class="step" data-title="Compress">
+          <h3>4. The window fills — both compress</h3>
+          <div class="diagram">
+            <div class="d-box dim">40 old messages</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">deepagents<small>summarisation middleware condenses old history</small></div>
+              <div class="d-box hot">Claude Code<small>auto-compact — transcript becomes a summary</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">1 summary<small>+ the plan, safe outside</small></div>
+          </div>
+          <p class="step-cap">Hours in, the transcript outgrows the window. Both animals squash the old turns into a summary and keep going. Anything precious — the plan, the research — already lives outside the transcript, so it survives.</p>
+        </div>
+        <div class="step" data-title="Remember">
+          <h3>5. Both consult long-term memory to finish</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">deepagents<small>read_file("/memories/style.md") — persistent prefix</small></div>
+              <div class="d-box hot">Claude Code<small>CLAUDE.md was loaded at session start</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Report<small>drafted in the house style</small></div>
+          </div>
+          <p class="step-cap">"Reports open with a one-line answer" was learned weeks ago. It survived because it lives in a durable file that every session re-reads — the memory organ. The report comes out right on the first draft.</p>
+        </div>
+      </div>
+
+      <h2>Run all four organs yourself</h2>
+      <p>Here is the entire convergent design in miniature — a dict playing the filesystem, a function playing the subagent, a list-squash playing compaction, and a scripted model standing in for the LLM (the same <code>fake_llm</code> trick as <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>, so this runs offline in your browser). Press <strong>Run</strong> and watch a compaction fire mid-task — and notice what survives it.</p>
+
+      <div class="pyrun" data-title="The four organs in forty lines — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- Organ: files as external memory (a dict plays the disk) --
+FILES = {"/memories/style.md": "House style: open with the answer."}
+
+def write_file(path, text):
+    FILES[path] = text
+    return f"wrote {path}"
+
+def read_file(path):
+    return FILES.get(path, "ERROR: no such file")
+
+# ---- Organ: the plan, kept OUTSIDE the transcript -------------
+TODOS = []
+def write_todos(steps):
+    TODOS[:] = steps
+    return "plan recorded: " + " / ".join(steps)
+
+# ---- Organ: a subagent = the same loop with a FRESH history ---
+def run_subagent(brief):
+    print(f"    [subagent] fresh context | brief: {brief}")
+    findings = ("Rooftop installs doubled in two years; panel "
+                "prices fell about 40 percent; grid connection "
+                "queues are now the main bottleneck.")
+    write_file("/notes/research.md", findings)      # detail -&gt; file
+    return "done - findings in /notes/research.md"  # summary -&gt; parent
+
+# ---- Organ: compaction - squash old turns into a summary ------
+def compact(history):
+    return [history[0], f"[SUMMARY of {len(history) - 1} messages]"]
+
+# ---- The 'model': scripted, like fake_llm in the ReAct chapter
+SCRIPT = [
+    "ACTION: write_todos(research, draft, polish)",
+    "ACTION: task(gather facts on rooftop solar)",
+    "ACTION: read_file(/notes/research.md)",
+    "ACTION: read_file(/memories/style.md)",
+    "FINAL: report drafted from the notes, in the house style.",
+]
+
+WINDOW = 6            # pretend the context window holds 6 messages
+history = ["TASK: write a short report on rooftop solar"]
+
+for turn, reply in enumerate(SCRIPT, 1):
+    history.append(reply)
+    print(f"--- turn {turn} --- {reply}")
+    if reply.startswith("FINAL:"):
+        break
+    call = reply.split("ACTION:")[1].strip()
+    name, _, arg = call.partition("(")
+    arg = arg.rstrip(")")
+    if name == "write_todos":
+        obs = write_todos([s.strip() for s in arg.split(",")])
+    elif name == "task":
+        obs = run_subagent(arg)
+    else:
+        obs = read_file(arg)
+    history.append("OBSERVATION: " + obs)
+    print("OBSERVATION:", obs)
+    if len(history) &gt; WINDOW:              # the window is full
+        history = compact(history)
+        print("*** window full -&gt; compacted:", history[1])
+
+print()
+print("Parent transcript ended at", len(history), "messages.")
+print("Plan (outside the transcript, SURVIVED):", TODOS)
+print("Files on the (virtual) disk:", sorted(FILES))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Two experiments worth a minute each. First, drop <code>WINDOW</code> from 6 to 3 and re-run — compaction fires earlier and eats more turns, yet the printed plan and the files come through untouched, because they live outside the transcript. That is precisely why both systems store the todo list and the notes <em>outside</em> the message history. Second, delete the <code>write_file</code> line inside the subagent: the parent now holds only "done", and the findings are gone forever. That is exactly what "the agent forgot its own research" looks like in production logs.</p></div>
+
+      <h2>Where the animals differ</h2>
+      <p>Convergent evolution never makes two lineages identical — a dolphin still surfaces to breathe. The differences here are just as instructive as the similarities, and they cluster around three things: what kind of artefact each is, who guards the dangerous actions, and which ecosystem each plugs into.</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>deepagents</th><th>Claude Code</th></tr>
+        <tr><td>What it is</td><td>A library: <code>pip install</code>, then <code>from deepagents import create_deep_agent</code> inside your own app</td><td>A harness: a finished terminal product you run as-is</td></tr>
+        <tr><td>Who assembles it</td><td>You — choose the model, the tools, the prompt, the file backend, in code</td><td>The vendor — loop, tools and interface arrive pre-wired; you configure, not construct</td></tr>
+        <tr><td>Model choice</td><td>Any chat model the LangChain ecosystem can initialise</td><td>Claude models</td></tr>
+        <tr><td>Permissions</td><td>None built in — you build the gates yourself (e.g. LangGraph's <code>interrupt()</code> before risky tools)</td><td>Built in: per-action permission prompts, allow/deny rules in settings, a plan-first read-only mode</td></tr>
+        <tr><td>Persistence</td><td>LangGraph checkpointers and threads — the machinery from <a href="ch061-checkpointing.html">the checkpointing chapter</a></td><td>Session files managed by the harness; resume a past session from the command line</td></tr>
+        <tr><td>Ecosystem</td><td>LangChain middleware, streaming, tracing and evaluation tooling</td><td>MCP servers, hooks, skills, and the wider Claude toolchain</td></tr>
+      </table></div>
+
+      <p>The permissions row deserves the most attention, because it falls straight out of the harness-versus-library split. Claude Code ships with a human sitting in front of it, so it can — and does — stop and ask before running a shell command or editing a file, with allow-lists and deny-lists to tune how often it asks. A library cannot assume there is a human, a terminal, or even a screen. So deepagents ships <em>no</em> permission prompt at all: if your deep agent can call a tool that deletes records, nothing will pause for approval unless <em>you</em> build that pause — typically with the <a href="ch062-human-in-the-loop.html">human-in-the-loop interrupt pattern</a> you already know. Freedom and responsibility arrive in the same box.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>This is the single most common mistake teams make when they move from operating a harness to building on a library: they assume "the framework" is guarding something. It is not. The harness had guardrails because a product team built them; your deepagents app has exactly the guardrails you wrote, and not one more. Audit your tool list with that sentence in mind.</p></div>
+
+      <p>The filesystem difference is subtler but just as consequential. Claude Code's file tools touch your real disk — that is the whole point of a coding agent, and why its permission system exists. deepagents' file tools are, by default, an illusion: with the StateBackend, <code>write_file("/notes/x.md", ...)</code> stores text in the agent's state object, and your real disk is never touched. Swap in a FilesystemBackend and the identical tool calls hit real files; a StoreBackend lands them in a database-backed store; a CompositeBackend routes different path prefixes to different homes. The <em>model-facing interface</em> never changes — the model just writes files — while you decide what "disk" means. That indirection is something a harness never needed to invent: its disk was always real.</p>
+
+      <h2>Why everyone keeps inventing the same crab</h2>
+      <p>Biologists joke that nature cannot stop evolving crabs — the flat, armoured, pinchy body plan has emerged independently at least five times, often enough to earn its own name, carcinisation. Agent engineering has its own carcinisation, and you can name the selection pressures precisely, because you met each one earlier in this course:</p>
+      <p><strong>The model is stateless.</strong> From <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>: the transcript is the model's only memory, and anything not re-asserted fades. Selection pressure: keep the goal somewhere it can be re-read. Result: a todo tool.</p>
+      <p><strong>The window is finite.</strong> From <a href="ch030-tokens-embeddings-context.html">the context chapter</a>: there is a hard ceiling on how much the model can see at once, and hour-long tasks blow through it. Selection pressure: park information outside the window. Result: files as memory — and compression when even that is not enough.</p>
+      <p><strong>Tokens cost money, and the whole history is re-sent every turn.</strong> From <a href="ch041-tokens-and-cost.html">the cost chapter</a>: hoarding detail in context is the most expensive possible place to keep it. Selection pressure: keep the working set small. Result: offloading, summarising, delegating.</p>
+      <p><strong>Clutter degrades reasoning, not just budgets.</strong> From <a href="ch048-failure-modes.html">the failure-modes chapter</a>: a context stuffed with dead ends makes the model measurably worse at the task in front of it. Selection pressure: quarantine the mess. Result: fresh-context subagents.</p>
+      <p>Stateless model, finite window, per-token pricing, clutter-degraded reasoning. Any team building an agent meant to run for hours swims into all four currents, and the design space funnels them to the same four organs — the way water funnels every fast swimmer into a torpedo with fins. It is not copying. It is physics.</p>
+      <p>The evidence keeps arriving: teams who never talk — open-source coding agents, research-agent startups, enterprise harness builders — keep publishing lessons that read like translations of one another. Plan explicitly, use files as memory, isolate subtasks, compress on overflow. Believe the lesson.</p>
+
+      <div data-bars data-title="Parent agent's context after the same three-part job (illustrative round numbers)" data-unit="tokens" data-note="The work happened either way — the detail lives in files and subagent transcripts instead of the parent's window. The total bill may even be higher; the parent's clarity is what improves.">
+        <div class="bar" data-label="Everything inline, no organs" data-value="150000"></div>
+        <div class="bar" data-label="With files + subagents + summary" data-value="40000"></div>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will now spot these organs everywhere. In a trace of a deepagents run, the tool calls read <code>write_todos</code>, <code>task</code>, <code>write_file</code>; in a Claude Code session log the same beats appear as <code>TodoWrite</code>, <code>Task</code>, and file edits. A merge request adding <code>.claude/agents/reviewer.md</code> is someone growing the subagent organ in the harness; a merge request wiring a CompositeBackend with a <code>/memories/</code> prefix is the same organ sprouting library-side. And when a teammate sighs "it auto-compacted mid-task and lost the thread", you know which organ hiccupped — and that the fix is moving precious material into the plan or a file, where compression cannot reach it.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Both systems grew a planning tool — <code>write_todos</code> in deepagents, <code>TodoWrite</code> in Claude Code. What problem does writing the plan down actually solve?</p>
+          <div class="q-opts">
+            <button data-opt="a">It makes the logs easier for humans to read</button>
+            <button data-opt="b">Over a long run the model drifts off the goal; an explicit plan it can re-read re-anchors it</button>
+            <button data-opt="c">The API refuses long tasks unless a plan is registered first</button>
+          </div>
+          <p class="q-explain">The model is stateless and its attention fades over hundreds of turns. A plan stored outside the fading transcript is something it can keep re-reading to stay on course. Prettier logs are a bonus, not the reason.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. In both animals, what does a subagent hand back to its parent when it finishes?</p>
+          <div class="q-opts">
+            <button data-opt="a">Its complete transcript, so the parent can audit every step</button>
+            <button data-opt="b">Nothing — subagents run fire-and-forget</button>
+            <button data-opt="c">Only a short result or summary; the messy detail stays in the subagent's own context or gets parked in files</button>
+          </div>
+          <p class="q-explain">The point of delegation is context isolation: the subagent absorbs the twenty-file mess, and the parent receives one clean paragraph (often plus a file path). Returning the full transcript would re-pollute the very window you were protecting.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. A deepagents agent, running with the default backend, calls <code>write_file("report.md", draft)</code>. Where does that file end up?</p>
+          <div class="q-opts">
+            <button data-opt="a">On your real disk, in the current working directory</button>
+            <button data-opt="b">Inside the agent's state object — no real file exists unless you chose a disk-backed backend</button>
+            <button data-opt="c">Uploaded to a cloud bucket managed by the framework</button>
+          </div>
+          <p class="q-explain">The default StateBackend makes the filesystem virtual: the model believes it is writing files, but the bytes live in agent state. Swapping in a FilesystemBackend routes the very same tool calls to real disk — the model-facing interface never changes.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. A teammate is building a customer-facing app on deepagents and asks: "Where do I switch on the permission prompt before dangerous tools run?" What is the honest answer?</p>
+          <div class="q-opts">
+            <button data-opt="a">There is no built-in prompt — that is harness behaviour; in a library you build the gate yourself, e.g. with a human-in-the-loop interrupt</button>
+            <button data-opt="b">Set a flag on the agent and prompts appear automatically</button>
+            <button data-opt="c">The model will refuse dangerous actions on its own, so no gate is needed</button>
+          </div>
+          <p class="q-explain">Claude Code can prompt because it ships with a terminal and a human in front of it. A library assumes neither, so it ships no gate at all — your app has exactly the guardrails you wrote. The interrupt pattern from the human-in-the-loop chapter is the standard way to add one.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. Two teams that never spoke shipped near-identical features: plan tool, subagents, files, compression. What is the best explanation?</p>
+          <div class="q-opts">
+            <button data-opt="a">One team quietly copied the other's source code</button>
+            <button data-opt="b">A standards body specified the four features and both complied</button>
+            <button data-opt="c">Both faced the same constraints — stateless models, finite costly context, long horizons — and those constraints force the same designs</button>
+          </div>
+          <p class="q-explain">This is convergent evolution: no spec, no copying, just the same ocean. Any team building hour-long agents hits the same four pressures, and the design space funnels them to the same four organs — which is why yet more agent products keep growing them too.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>deepagents and Claude Code grew the same organs independently: <code>write_todos</code> vs <code>TodoWrite</code> for planning, <code>task</code> vs <code>Task</code> for fresh-context subagents, a filesystem (virtual vs real disk plus scratchpads) for offloading detail, durable memory files (<code>/memories/</code> vs <code>CLAUDE.md</code>), and summarisation vs compaction for full windows.</li>
+          <li>The deep split is harness versus library: Claude Code is a finished product you operate; deepagents is an engine you embed in your own product — you choose the model, the tools, and what "disk" means.</li>
+          <li>deepagents' filesystem is virtual by default (StateBackend); FilesystemBackend, StoreBackend and CompositeBackend let the same file tools target real disk, a store, or a composed mix — with a persistent <code>/memories/</code> prefix as the memory trick.</li>
+          <li>Permission prompts are harness behaviour. A library ships none: on deepagents, every guardrail is one you built, typically with a human-in-the-loop interrupt.</li>
+          <li>The convergence is not fashion but physics: stateless models, finite windows, per-token pricing, and clutter-degraded reasoning push every long-running agent toward the same four designs.</li>
+          <li>You can now read either animal fluently — and predict the anatomy of the next agent system you meet before you open its docs.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading real code: a full LangGraph app — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch065">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VII · LangGraph</div>
+        <h1>Reading real code: a full LangGraph app</h1>
+        <p class="ch-tagline">Ninety lines. One support desk. Every idea from Act VII — state, nodes, routing, pauses, persistence — working together in code you can now read cold.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 66 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Walk into a well-run customer support office. At the front desk, a clerk reads each incoming letter and stamps it: <em>billing</em>, <em>technical</em>, or <em>refund</em>. On the wall behind her hangs a chart saying which desk each stamp goes to. Ordinary questions go to the desk with the product manuals, where someone looks up the answer and writes a kind reply. Refund requests go to a different desk — the one with the locked cash drawer. The clerk there fills in the slip, then stops. She cannot open the drawer. Only the floor manager's signature can, and the manager might be in a meeting until Monday.</p>
+        <p>Here is the quiet genius of the office: after every step, each case file is photocopied into the records room. If the power fails on Friday night, Monday's shift pulls file 4712 and finds it exactly where it paused — stamped, routed, waiting on one signature. Nothing is lost, nothing is redone from scratch.</p>
+        <p>You have spent seven chapters learning each station in this office one at a time. Today you read the blueprint of the whole building — in Python.</p>
+      </section>
+
+      <h2>You already know every part</h2>
+      <p>Quick recap of where Act VII has taken you, because this chapter invents nothing new — it only assembles. In <a href="ch058-stategraph-anatomy.html">StateGraph anatomy</a> you learned that a graph app has exactly three ingredients: a state schema (the shared case file), nodes (plain functions that read the state and return updates), and edges (who runs after whom). In <a href="ch059-conditional-edges.html">conditional edges</a> you met the router — a small function that returns the <em>name</em> of the next node, letting the graph branch. In <a href="ch060-compile-invoke-stream.html">compile, invoke, stream</a> you saw the lifecycle: build, <code>.compile()</code>, <code>.invoke()</code>. Then <a href="ch061-checkpointing.html">checkpointing</a> gave the graph its records room, <a href="ch062-human-in-the-loop.html">interrupts</a> gave it the manager's signature gate, and <a href="ch064-bring-your-own-graph.html">bring your own graph</a> gave you the conviction that control flow should be deterministic even when an LLM fills in the data.</p>
+      <p>What you are about to read is a <dfn>triage</dfn> app — triage simply means sorting incoming work by what kind of help it needs. A support ticket comes in; an LLM classifies it; deterministic code routes it; ordinary questions get answered with a knowledge-base tool; refunds hit a human approval gate and pause — durably — until someone decides. This is not a toy shape. Swap the nouns and it is a loan-approval flow, an expense-claim flow, a content-moderation flow. The refund gate is the same approval gate a bank's risk team insists on.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Reading chapters like this one (<a href="ch050-reading-real-code-5.html">you have done five before</a>) has one rule: read the code cold first, before any annotations. Fluency is when a page of unfamiliar code stops being a wall and starts being a story with a plot you can follow. Give the listing below one honest pass on your own. Then we will walk it together, twice.</p></div>
+
+      <h2>The whole app, cold</h2>
+      <p>Here is the complete application — about ninety lines, nothing hidden, no <code>...</code> ellipses. Notice the seven numbered zones in the comments: schema, tools, nodes, router, wiring, checkpointer, run. Real repositories rarely label their zones this politely, but the zones are always there once you know to look.</p>
+
+      <div class="code-title">triage_app.py — the complete listing</div>
+<pre><code class="language-python">"""Support-ticket triage: a complete LangGraph application.
+
+Flow: classify, then route, then one of two desks, then END.
+Refunds pause for human approval; a checkpointer makes the pause safe.
+"""
+from typing import TypedDict, Literal
+
+from langchain.chat_models import init_chat_model
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import interrupt, Command
+
+llm = init_chat_model("anthropic:claude-sonnet-4-5")
+
+# ---------- 1. The state schema ----------
+class TicketState(TypedDict, total=False):
+    ticket_id: str
+    customer: str
+    text: str          # what the customer wrote
+    category: str      # filled in by classify()
+    amount: float      # filled in by handle_refund()
+    approved: bool     # filled in by the human gate
+    reply: str         # what we finally send back
+
+# ---------- 2. Plain-Python tools ----------
+KB = {
+    "sync":    "KB-17: sign out and back in to reset the sync token.",
+    "invoice": "KB-31: invoices regenerate within 24 hours of a plan change.",
+}
+
+def search_kb(text: str) -&gt; str:
+    hits = [note for key, note in KB.items() if key in text.lower()]
+    return "\n".join(hits) or "No matching notes."
+
+def issue_refund(customer: str, amount: float) -&gt; None:
+    print(f"[payments] refunded {amount} to {customer}")  # imagine a real API
+
+# ---------- 3. Nodes: plain functions over the state ----------
+def classify(state: TicketState) -&gt; dict:
+    prompt = (
+        "Classify this support ticket as exactly one word - "
+        f"billing, technical, or refund:\n\n{state['text']}"
+    )
+    category = llm.invoke(prompt).content.strip().lower()
+    return {"category": category}
+
+def answer_with_docs(state: TicketState) -&gt; dict:
+    notes = search_kb(state["text"])          # the tool call
+    prompt = (
+        f"Using ONLY these notes:\n{notes}\n\n"
+        f"Write a short, kind reply to:\n{state['text']}"
+    )
+    return {"reply": llm.invoke(prompt).content}
+
+def handle_refund(state: TicketState) -&gt; dict:
+    prompt = f"Extract the refund amount as a bare number:\n{state['text']}"
+    amount = float(llm.invoke(prompt).content.strip())
+    decision = interrupt({                    # the graph pauses HERE
+        "question": f"Approve refund of {amount} for {state['customer']}?",
+        "ticket_id": state["ticket_id"],
+    })
+    if decision == "approve":
+        issue_refund(state["customer"], amount)  # side effect AFTER the gate
+        return {"amount": amount, "approved": True,
+                "reply": f"Done - {amount} is on its way back to you."}
+    return {"amount": amount, "approved": False,
+            "reply": "We reviewed your request and cannot refund this plan."}
+
+# ---------- 4. The router ----------
+def route_ticket(state: TicketState) -&gt; Literal["handle_refund",
+                                                "answer_with_docs"]:
+    if state["category"] == "refund":
+        return "handle_refund"
+    return "answer_with_docs"
+
+# ---------- 5. Wire the graph ----------
+builder = StateGraph(TicketState)
+builder.add_node("classify", classify)
+builder.add_node("answer_with_docs", answer_with_docs)
+builder.add_node("handle_refund", handle_refund)
+
+builder.add_edge(START, "classify")
+builder.add_conditional_edges("classify", route_ticket)
+builder.add_edge("answer_with_docs", END)
+builder.add_edge("handle_refund", END)
+
+# ---------- 6. Checkpointer + compile ----------
+checkpointer = InMemorySaver()   # swap for Postgres in production
+app = builder.compile(checkpointer=checkpointer)
+
+# ---------- 7. Run it ----------
+config = {"configurable": {"thread_id": "ticket-4712"}}
+state = app.invoke(
+    {"ticket_id": "4712", "customer": "Asha",
+     "text": "Please refund my 999 annual plan."},
+    config,
+)
+print(state["__interrupt__"])    # paused: waiting for a human
+
+# ...minutes or days later, possibly in a different process...
+state = app.invoke(Command(resume="approve"), config)
+print(state["reply"])
+</code></pre>
+
+      <p>How was the cold read? If you caught even half of it — an LLM classifies, a plain <code>if</code> routes, refunds pause at <code>interrupt()</code>, and a <code>thread_id</code> ties the resume back to the pause — you have already crossed the line this course exists to get you across. Now let us watch one ticket travel through it, then annotate the two zones that carry all the weight.</p>
+
+      <h2>One ticket's journey</h2>
+      <p>Step through what actually happens when Asha's refund request arrives. Keep the office from the story in your head: front desk, wall chart, locked drawer, records room.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Ticket in">
+          <h3>1. The ticket enters on its own thread</h3>
+          <div class="diagram">
+            <div class="d-box hot">Ticket 4712<small>"Please refund my 999 annual plan"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">classify</div>
+            <div class="d-box dim">router</div>
+            <div class="d-box dim">desks</div>
+          </div>
+          <p class="step-cap"><code>app.invoke(...)</code> is called with <code>thread_id: "ticket-4712"</code>. That id is the case-file number: every checkpoint this run produces will be filed under it. The initial state has just three fields — id, customer, text.</p>
+        </div>
+        <div class="step" data-title="Classify">
+          <h3>2. The classifier stamps the ticket</h3>
+          <div class="diagram">
+            <div class="d-box dim">Ticket 4712</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">classify<small>LLM says: "refund"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">state<small>category = "refund"</small></div>
+          </div>
+          <p class="step-cap">One LLM call, one word back. The node returns <code>{"category": "refund"}</code> and LangGraph merges it into the shared state — then writes a checkpoint. The photocopier hums.</p>
+        </div>
+        <div class="step" data-title="Route">
+          <h3>3. The router reads the stamp — no LLM involved</h3>
+          <div class="diagram">
+            <div class="d-box hot">route_ticket<small>category == "refund"?</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">handle_refund<small>chosen</small></div>
+            <div class="d-box dim">answer_with_docs<small>not today</small></div>
+          </div>
+          <p class="step-cap">The conditional edge runs plain Python and returns a node <em>name</em>. The LLM supplied the data; deterministic code makes the control-flow decision. That split is the whole philosophy of <a href="ch064-bring-your-own-graph.html">bring your own graph</a>.</p>
+        </div>
+        <div class="step" data-title="Pause">
+          <h3>4. The gate: interrupt() freezes the run</h3>
+          <div class="diagram">
+            <div class="d-box hot">handle_refund<small>interrupt({"question": ...})</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">checkpointer<small>state saved under ticket-4712</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">process<small>free to exit</small></div>
+          </div>
+          <p class="step-cap">Mid-node, <code>interrupt()</code> halts the graph. <code>invoke</code> returns early, and the returned state carries an <code>__interrupt__</code> entry describing what it is waiting for — the payload your approval screen displays. The server can now redeploy, crash, or sleep for the weekend. The case file is safe in the records room.</p>
+        </div>
+        <div class="step" data-title="Resume">
+          <h3>5. The human signs; the graph wakes up</h3>
+          <div class="diagram">
+            <div class="d-box hot">Manager<small>Command(resume="approve")</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">handle_refund<small>replays from the top</small></div>
+          </div>
+          <p class="step-cap">A new <code>invoke</code> with the same <code>thread_id</code> reloads the checkpoint and re-enters the node <em>from its first line</em>. This time <code>interrupt()</code> does not pause — it returns the resume value, <code>"approve"</code>, and execution flows on past the gate.</p>
+        </div>
+        <div class="step" data-title="Finish">
+          <h3>6. Side effect, reply, END</h3>
+          <div class="diagram">
+            <div class="d-box good">issue_refund<small>the one real-world action</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">state<small>reply written</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">END</div>
+          </div>
+          <p class="step-cap">Only now — behind the signature — does money move. The node returns its final updates, the edge leads to END, and the last checkpoint records a finished thread. Asha gets her reply.</p>
+        </div>
+      </div>
+
+      <h2>Annotated, zone one: state, classifier, router</h2>
+      <p>Now read like a reviewer. Click each annotated line; the goal, as always, is for every note to feel slightly unnecessary by the time you reach it.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">triage_app.py — the brain</div>
+        <div class="wl-line"><code>class TicketState(TypedDict, total=False):</code>
+          <div class="wl-note">The shared whiteboard, as a <code>TypedDict</code> (<a href="ch016-type-hints-and-pydantic.html">ch16</a>). <code>total=False</code> means keys are allowed to be missing — and they are: a fresh ticket has only three fields, and each node fills in more as the run progresses. The schema is a contract about what <em>may</em> exist, not what must.</div></div>
+        <div class="wl-line"><code>    category: str      # filled in by classify()</code>
+          <div class="wl-note">Read those trailing comments — they name which node writes each field. Real teams do exactly this, because in a graph app the state schema is the one page everyone must agree on. A reviewer checks these comments against the nodes like an auditor checks a ledger.</div></div>
+        <div class="wl-line"><code>def classify(state: TicketState) -&gt; dict:</code>
+          <div class="wl-note">A node is just a function: full state in, <em>partial update</em> out (<a href="ch058-stategraph-anatomy.html">ch58</a>). No base class, no decorator, no framework ceremony. If you can read a Python function, you can read a LangGraph node.</div></div>
+        <div class="wl-line"><code>    category = llm.invoke(prompt).content.strip().lower()</code>
+          <div class="wl-note">The LLM call, plus two seatbelts. <code>.content</code> pulls the text out of the message object (<a href="ch052-messages-and-models.html">ch52</a>); <code>.strip().lower()</code> defends against the model replying <code>"Refund."</code> with a capital letter and a full stop. Production code is full of small distrust like this — the router downstream needs an exact match.</div></div>
+        <div class="wl-line"><code>    return {"category": category}</code>
+          <div class="wl-note">Nodes return only what changed — one key here — and LangGraph merges it into the state. Returning the whole state would work but invites accidental overwrites; returning the delta is the house style you will see everywhere.</div></div>
+        <div class="wl-line"><code>def route_ticket(state: TicketState) -&gt; Literal["handle_refund",</code>
+          <div class="wl-note">The router from <a href="ch059-conditional-edges.html">ch59</a>. It returns the <em>name of a node</em>, never an answer for the customer. The <code>Literal</code> type hint lists every destination — tooling uses it to draw the graph, and reviewers use it to see all possible branches at a glance.</div></div>
+        <div class="wl-line"><code>    if state["category"] == "refund":</code>
+          <div class="wl-note">The most important <code>if</code> in the file, and the LLM does not get a vote in it. The model produced the <em>data</em> (the category); this deterministic line makes the <em>decision</em>. Anything touching money routes through code you can unit-test.</div></div>
+        <div class="wl-line"><code>builder.add_conditional_edges("classify", route_ticket)</code>
+          <div class="wl-note">The wiring: after <code>classify</code>, call <code>route_ticket</code> and jump to whichever node it names. Because the router returns real node names, no extra mapping dict is needed. This one line is the wall chart from the story.</div></div>
+      </div>
+
+      <h2>Annotated, zone two: the gate, the checkpointer, the resume</h2>
+      <p>Zone two is where this app earns its keep. Everything here exists so that a pause of three days costs the same as a pause of three seconds.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">triage_app.py — the gate and the records room</div>
+        <div class="wl-line"><code>    amount = float(llm.invoke(prompt).content.strip())</code>
+          <div class="wl-note">A second LLM call extracts the amount. Note the naked <code>float(...)</code> — if the model replies "999 rupees", this raises <code>ValueError</code>. A reviewer would flag it and ask for <a href="ch036-structured-output.html">structured output</a> instead. Reading real code includes spotting what you would push back on.</div></div>
+        <div class="wl-line"><code>    decision = interrupt({</code>
+          <div class="wl-note">The gate from <a href="ch062-human-in-the-loop.html">ch62</a>. <code>interrupt()</code> stops the graph mid-node and hands this payload out to whoever is listening — a review dashboard, an approvals queue, a chat message to the duty manager. The run is now frozen, not failed.</div></div>
+        <div class="wl-line"><code>        "question": f"Approve refund of {amount} for {state['customer']}?",</code>
+          <div class="wl-note">Write interrupt payloads for the human who will read them. This dict becomes the text on someone's approval screen; a lazy payload like <code>{"node": "handle_refund"}</code> forces the approver to go read the code. Kindness here is an operational feature.</div></div>
+        <div class="wl-line"><code>    if decision == "approve":</code>
+          <div class="wl-note">On resume, <code>interrupt()</code> returns whatever value the human sent back. The node cannot tell the difference between a three-second pause and a three-day one — the code reads as if the answer arrived instantly.</div></div>
+        <div class="wl-line"><code>        issue_refund(state["customer"], amount)  # side effect AFTER the gate</code>
+          <div class="wl-note">The only line in the whole app that touches the outside world with consequences — and it sits strictly behind the approval. The LLM never calls this function; it cannot. Your code does, and only after a human said yes. This placement <em>is</em> the security model.</div></div>
+        <div class="wl-line"><code>checkpointer = InMemorySaver()   # swap for Postgres in production</code>
+          <div class="wl-note">The records room (<a href="ch061-checkpointing.html">ch61</a>). <code>InMemorySaver</code> keeps checkpoints in the process's memory — perfect for demos, gone on restart. Production swaps in a Postgres or Redis checkpointer from the <code>langgraph-checkpoint-*</code> packages; the rest of the file does not change by a single character.</div></div>
+        <div class="wl-line"><code>app = builder.compile(checkpointer=checkpointer)</code>
+          <div class="wl-note"><code>.compile()</code> (<a href="ch060-compile-invoke-stream.html">ch60</a>) turns the builder's wiring into a runnable app, and handing it the checkpointer is what upgrades <code>interrupt()</code> from "crash politely" to "pause durably".</div></div>
+        <div class="wl-line"><code>config = {"configurable": {"thread_id": "ticket-4712"}}</code>
+          <div class="wl-note">One thread per ticket. The <code>thread_id</code> is the case-file number: it tells the checkpointer where to file this run's state, and later, where to find it again. Two tickets on two threads never see each other's state.</div></div>
+        <div class="wl-line"><code>print(state["__interrupt__"])    # paused: waiting for a human</code>
+          <div class="wl-note">When a run pauses, <code>invoke</code> returns early and the result carries a special <code>__interrupt__</code> entry holding the gate's payload. In a real service this is what you would render into the approvals queue instead of printing.</div></div>
+        <div class="wl-line"><code>state = app.invoke(Command(resume="approve"), config)</code>
+          <div class="wl-note">The wake-up call. Same <code>thread_id</code>, but instead of new ticket data we pass <code>Command(resume="approve")</code>. LangGraph reloads the checkpoint, re-enters <code>handle_refund</code>, and this time <code>interrupt()</code> returns <code>"approve"</code>. This line can run in a different process, on a different machine, days later — as long as it reaches the same checkpointer.</div></div>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>On resume, the paused node replays <em>from its first line</em> — LangGraph does not freeze Python mid-function; it re-runs the node and feeds the saved answer into <code>interrupt()</code>. So in this app the amount-extraction LLM call runs twice: once before the pause, once on resume. Harmless here, but if the code before an <code>interrupt()</code> sent an email or charged a card, it would happen twice. The rule reviewers enforce: side effects go <em>after</em> the gate, or in a separate node that runs before the gating node.</p></div>
+
+      <h2>Run the whole shape, right now</h2>
+      <p>LangGraph itself cannot run inside this page, so below is the same architecture rebuilt small in pure Python: a scripted <code>fake_llm</code>, an <code>Interrupt</code> exception standing in for <code>interrupt()</code>, a dict standing in for the checkpointer, and a fifteen-line engine standing in for <code>.compile()</code>. The nodes and router are shaped exactly like the real ones. Press <strong>Run</strong> and watch a refund pause, resume, and finish — then watch a technical ticket sail straight through.</p>
+
+      <div class="pyrun" data-title="The triage graph, miniaturised — run me">
+<textarea class="py-src" spellcheck="false">
+# The triage app's whole shape, in pure Python you can run here.
+# fake_llm stands in for the model; Interrupt stands in for
+# interrupt(); the CHECKPOINTS dict is the records room.
+
+class Interrupt(Exception):
+    def __init__(self, question):
+        self.question = question
+
+def fake_llm(prompt):
+    if "Classify" in prompt:
+        return "refund" if "refund" in prompt.lower() else "technical"
+    return "Sign out and back in - that resets the sync token."
+
+# ---- nodes: the same shape as the real app ----
+def classify(state):
+    return {"category": fake_llm("Classify: " + state["text"])}
+
+def answer_with_docs(state):
+    notes = "KB-17: sign out and back in to reset the sync token."
+    return {"reply": fake_llm("Answer using: " + notes)}
+
+def handle_refund(state):
+    if "_resume" not in state:            # first visit: pause
+        raise Interrupt("Approve refund for " + state["customer"] + "?")
+    if state["_resume"] == "approve":     # replay visit: act
+        return {"approved": True, "reply": "Refund issued."}
+    return {"approved": False, "reply": "Refund declined."}
+
+def route_ticket(state):
+    if state["category"] == "refund":
+        return "handle_refund"
+    return "answer_with_docs"
+
+NODES = {"classify": classify,
+         "answer_with_docs": answer_with_docs,
+         "handle_refund": handle_refund}
+EDGES = {"classify": route_ticket,        # the conditional edge
+         "answer_with_docs": "END",
+         "handle_refund": "END"}
+
+CHECKPOINTS = {}                          # thread_id: saved state
+
+def invoke(payload, thread_id):
+    state = CHECKPOINTS.get(thread_id, {})
+    if isinstance(payload, dict):
+        state.update(payload)             # a new ticket arrives
+    else:
+        state["_resume"] = payload        # Command(resume=...)
+    node = state.pop("_paused_at", "classify")
+    while node != "END":
+        try:
+            state.update(NODES[node](state))
+        except Interrupt as pause:
+            state["_paused_at"] = node    # checkpoint the pause
+            CHECKPOINTS[thread_id] = state
+            print("  PAUSED:", pause.question)
+            return state
+        nxt = EDGES[node]
+        node = nxt(state) if callable(nxt) else nxt
+    CHECKPOINTS[thread_id] = state
+    return state
+
+print("--- ticket 4712, a refund request ---")
+invoke({"customer": "Asha", "text": "Please refund my 999 plan."},
+       "ticket-4712")
+
+print("--- the manager decides (try changing to 'decline') ---")
+s = invoke("approve", "ticket-4712")
+print("  reply:", s["reply"])
+
+print("--- ticket 4713, a technical question ---")
+s = invoke({"customer": "Ravi", "text": "My sync keeps failing."},
+           "ticket-4713")
+print("  reply:", s["reply"])
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Three experiments, in rising order of ambition. One: change <code>"approve"</code> to <code>"decline"</code> and confirm the other branch runs. Two: notice <code>handle_refund</code> gets entered <em>twice</em> for ticket 4712 — add a <code>print("entering handle_refund")</code> at its top and see the replay with your own eyes; that is the exact behaviour the Careful box warned about. Three: add a fourth category — a new node <code>escalate</code>, a new entry in <code>NODES</code> and <code>EDGES</code>, one more branch in <code>route_ticket</code> — and route tickets containing the word "urgent" to it. If that takes you under ten minutes, you can extend a real LangGraph app.</p></div>
+
+      <h2>The Act VII victory lap</h2>
+      <p>Stand back and look at what just happened. In <a href="ch057-why-graphs.html">why graphs?</a> you learned <em>why</em> enterprises want agents as explicit state machines — every step visible, every branch gateable. In <a href="ch058-stategraph-anatomy.html">StateGraph anatomy</a> you met state, nodes, and edges. <a href="ch059-conditional-edges.html">Conditional edges</a> taught the graph to choose, and showed you that the <a href="ch045-react-loop-by-hand.html">ReAct loop you built by hand</a> is secretly a two-node graph. <a href="ch060-compile-invoke-stream.html">Compile, invoke, stream</a> gave you the run lifecycle; <a href="ch061-checkpointing.html">checkpointing</a> made runs survive restarts; <a href="ch062-human-in-the-loop.html">interrupts</a> put a human signature into the flow; <a href="ch063-subgraphs-multi-agent.html">subgraphs</a> showed graphs composing into teams; and <a href="ch064-bring-your-own-graph.html">bring your own graph</a> named the philosophy: let the LLM fill in data, never let it freestyle the control flow where it matters.</p>
+      <p>Today you read a ninety-line production shape cold and, more importantly, you knew what to <em>challenge</em>: the naked <code>float()</code>, the demo-only checkpointer, the placement of the side effect. That is not "can follow along" — that is reviewer-grade reading. One quick lap of the vocabulary and Act VII is yours:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">StateGraph</span><span class="flip-back">The builder you declare an app into: one state schema, some nodes, some edges. Calling .compile() turns it into a runnable graph.</span></button>
+        <button class="flip" type="button"><span class="flip-front">node</span><span class="flip-back">A plain function: full state in, partial update out. LangGraph merges the update and checkpoints the result.</span></button>
+        <button class="flip" type="button"><span class="flip-front">conditional edge</span><span class="flip-back">A router function that returns the name of the next node. Deterministic Python decides where control goes — even when an LLM produced the data it reads.</span></button>
+        <button class="flip" type="button"><span class="flip-front">checkpointer</span><span class="flip-back">The records room: saves the state after every step, filed by thread_id. InMemorySaver for demos; Postgres or Redis backends in production.</span></button>
+        <button class="flip" type="button"><span class="flip-front">thread_id</span><span class="flip-back">The case-file number, passed in config. Same id = same saved conversation of state; it is how a resume finds its pause.</span></button>
+        <button class="flip" type="button"><span class="flip-front">interrupt / Command</span><span class="flip-back">interrupt(payload) pauses the run and surfaces the payload to a human; invoking again with Command(resume=value) replays the node with that value as the answer.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any LangGraph repository and you will find this chapter's zones scattered across files instead of stacked in one: the state schema in <code>state.py</code>, nodes in <code>nodes.py</code>, wiring in <code>graph.py</code>, and a <code>langgraph.json</code> at the root if the team deploys to a managed platform. In merge requests, the phrases to recognise are "added a node for X" (a new desk), "route on Y" (a new stamp on the wall chart), "wired up the Postgres checkpointer" (the records room went from demo to durable), and "put an interrupt before the write" (someone installed a signature gate). When an incident review says "the run resumed after the deploy and double-sent the email", you now know exactly what happened: a side effect sat <em>before</em> an <code>interrupt()</code>, and the node replayed. You can read all of it now — and you can push back on the parts that deserve it.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A refund ticket pauses at the gate on Friday evening. Over the weekend the server is redeployed. On Monday the approver clicks approve and the run finishes correctly. What made that possible?</p>
+          <div class="q-opts">
+            <button data-opt="a">Python kept the paused function alive in memory across the redeploy</button>
+            <button data-opt="b">The checkpointer had saved the thread's state, so a new process with the same thread_id could reload and resume it</button>
+            <button data-opt="c">The LLM remembered the ticket and reconstructed the state from its training</button>
+          </div>
+          <p class="q-explain">Nothing survives in process memory across a redeploy. The checkpointer wrote the state to storage after every step, filed under the thread_id — so any process that can reach that storage can pick the run up exactly where it paused.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. What does <code>route_ticket</code> return?</p>
+          <div class="q-opts">
+            <button data-opt="a">The reply text that will be sent to the customer</button>
+            <button data-opt="b">True or False, depending on whether the ticket is valid</button>
+            <button data-opt="c">The name of the next node the graph should run</button>
+          </div>
+          <p class="q-explain">Routers answer exactly one question: where does control go next? They return a node name as a string, and the conditional edge jumps there. The customer-facing answer is some node's job, never the router's.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. A ticket arrives reading "My invoice looks wrong for last month." Which path does it take through the graph?</p>
+          <div class="q-opts">
+            <button data-opt="a">classify, then answer_with_docs (which calls search_kb), then END</button>
+            <button data-opt="b">classify, then handle_refund, where it pauses for approval</button>
+            <button data-opt="c">Straight to END — no node matches billing questions</button>
+          </div>
+          <p class="q-explain">The classifier will stamp it "billing", the router's <code>if</code> only diverts "refund", so everything else flows to <code>answer_with_docs</code> — which finds KB-31 via the invoice keyword and drafts a reply. No gate, no pause.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Inside <code>handle_refund</code>, the line <code>decision = interrupt({...})</code> eventually gives <code>decision</code> a value. Where does that value come from?</p>
+          <div class="q-opts">
+            <button data-opt="a">The LLM's next message, generated after the pause</button>
+            <button data-opt="b">The value a human passed in via Command(resume=...) when the graph was invoked again</button>
+            <button data-opt="c">The payload dict that was passed into interrupt()</button>
+          </div>
+          <p class="q-explain">The payload travels outward, to the human's screen; the resume value travels inward, from the human. When the thread is re-invoked with <code>Command(resume="approve")</code>, the node replays and <code>interrupt()</code> returns that value.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. Why must <code>issue_refund(...)</code> sit <em>after</em> the <code>interrupt()</code> call rather than before it?</p>
+          <div class="q-opts">
+            <button data-opt="a">Purely a style convention — either position behaves the same</button>
+            <button data-opt="b">Because interrupt() deletes any state written before it runs</button>
+            <button data-opt="c">Because on resume the node replays from its first line, so anything before the gate executes twice — and a real side effect would happen twice, before anyone approved it</button>
+          </div>
+          <p class="q-explain">LangGraph cannot freeze Python mid-function; resuming means re-running the node and feeding the saved answer into interrupt(). Code before the gate therefore runs on both visits — fine for reading state, dangerous for moving money.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A full LangGraph app is five familiar parts assembled: a state schema, node functions, a router, edge wiring, and a compiled graph with a checkpointer. You had learned every one before this chapter began.</li>
+          <li>Nodes return partial updates and LangGraph merges them — the whole app communicates through one shared, checkpointed state.</li>
+          <li>Routers return node names, and the decisions that matter are plain <code>if</code> statements: the LLM fills in data, deterministic code steers control flow.</li>
+          <li><code>interrupt()</code> plus <code>Command(resume=...)</code> make "wait for a human" a first-class, durable graph state — and the checkpointer plus <code>thread_id</code> are what let that pause survive restarts and redeploys.</li>
+          <li>On resume, a node replays from its first line — so real side effects belong after the gate, or in an earlier node. Reviewers check this placement the way auditors check signatures.</li>
+          <li>You just read ninety lines of production-shaped graph code cold and knew what to challenge. That is the Act VII exit exam, and you passed it.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

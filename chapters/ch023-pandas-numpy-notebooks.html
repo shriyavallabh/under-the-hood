@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataFrames and notebooks — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch023">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act III · The Data Scientist's World</div>
+        <h1>DataFrames and notebooks</h1>
+        <p class="ch-tagline">The spreadsheet that lives inside Python, the idioms filling every data science merge request, and why a notebook can show you code that never ran.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 23 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Month-end at a wholesale distributor's office. The owner walks over with three questions: which cities bought the most, which orders were above 500 rupees, and does every order have a matching entry in the customer register. The junior clerk opens the sales ledger — six hundred pages — and starts crawling down it row by row with a ruler and a pencil. He will be here until Thursday.</p>
+        <p>The senior clerk does something completely different. She unclips the ledger, deals the pages into one pile per city, totals each pile, and staples everything back together. Three minutes. Then she lays the ledger and the customer register side by side and matches them by customer number. She never reads rows one at a time; she operates on whole columns and whole piles. And every trick goes onto a worksheet — step, result, step, result — so anyone can retrace her thinking tomorrow.</p>
+        <p>The senior clerk is <strong>pandas</strong>. The pile trick is <strong>groupby</strong>. The side-by-side matching is <strong>merge</strong>. The whole-column habit is <strong>vectorisation</strong>. And her worksheet is a <strong>Jupyter notebook</strong>, complete with its one famous trap: reading the worksheet in the wrong order.</p>
+      </section>
+
+      <h2>The other dialect of Python</h2>
+      <p>In <a href="ch022-reading-real-code-2.html">the last chapter</a> you toured a full engineering package: modules, classes, entry points, the whole machine. That was the software engineer's dialect of Python — code organised around <em>objects and functions</em>. Act III introduces the second dialect, spoken by data scientists: code organised around <em>tables</em>. Same language, same rules from Act I, but the sentences read differently — fewer loops, fewer classes, long chains of operations on DataFrames.</p>
+      <p>Three tools define this world. <strong>pandas</strong> gives Python a spreadsheet-like table you drive with code; <strong>numpy</strong> is the fast number engine underneath it; <strong>Jupyter notebooks</strong> are where data scientists spend their day. You will recognise the imports atop nearly every data science file — two famous aliases, via the <code>import ... as</code> trick from <a href="ch011-imports-and-modules.html">the imports chapter</a>:</p>
+
+      <div class="code-title">the first two lines of almost every DS file on Earth</div>
+      <pre><code class="language-python">import pandas as pd
+import numpy as np</code></pre>
+
+      <h2>Series and DataFrames: a spreadsheet that lives in Python</h2>
+      <p>A <dfn>DataFrame</dfn> is pandas' table: rows and named columns, like one sheet of a spreadsheet, held in memory as a Python object. Each column is a <dfn>Series</dfn> — a single labelled column of values sharing one type. Under the hood a DataFrame is close to something from <a href="ch004-collections.html">the collections chapter</a>: a dict of equal-length columns sharing row labels. That shared set of labels is the <dfn>index</dfn> — the bold row numbers (or names) down the left edge.</p>
+      <p>Where do DataFrames come from? Usually from a file. <code>pd.read_csv</code> reads a CSV — a plain-text spreadsheet — and hands back a DataFrame in one line:</p>
+
+      <div class="code-title">loading a table</div>
+      <pre><code class="language-python">import pandas as pd
+
+orders = pd.read_csv("orders.csv")   # file -&gt; DataFrame, one line
+
+orders.head()      # peek at the first 5 rows
+orders.shape       # (6, 3)  -&gt; 6 rows, 3 columns
+orders.dtypes      # the type of each column: int64, object (text)...</code></pre>
+
+      <div class="code-title">what orders.head() prints</div>
+      <pre><code class="language-python">   order_id    city  amount
+0       101    Pune    1200
+1       102  Mumbai     450
+2       103    Pune    2300
+3       104   Delhi     800
+4       105  Mumbai    1500</code></pre>
+
+      <p>Read that output like a native: the unnamed bold column on the left (0, 1, 2...) is the index; every other column is a Series; and each Series has a <dfn>dtype</dfn> — one data type shared by the whole column, such as <code>int64</code> for whole numbers or <code>object</code> for text. One dtype per column is not a limitation — it is the source of all the speed, as the numpy section will show.</p>
+      <p>Flip these cards until each feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">DataFrame</span><span class="flip-back">A table in memory: named columns, labelled rows. Effectively a dict of equal-length Series sharing one index.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Series</span><span class="flip-back">One column: an ordered, labelled list of values with a single dtype. Grab one with df["amount"].</span></button>
+        <button class="flip" type="button"><span class="flip-front">index</span><span class="flip-back">The row labels down the left edge — usually 0, 1, 2... but can be dates or IDs. .loc selects by them.</span></button>
+        <button class="flip" type="button"><span class="flip-front">dtype</span><span class="flip-back">The one data type shared by a whole column — int64, float64, object (text), datetime64. Uniformity is what makes columns fast.</span></button>
+        <button class="flip" type="button"><span class="flip-front">NaN</span><span class="flip-back">"Not a Number" — the missing-value marker. Appears wherever data has holes, including unmatched rows after a merge.</span></button>
+        <button class="flip" type="button"><span class="flip-front">vectorised</span><span class="flip-back">One operation applied to a whole column in one call — df["amount"] * 1.18 — no Python loop. Runs in compiled C underneath.</span></button>
+      </div>
+
+      <h2>.loc and .iloc: names versus positions</h2>
+      <p>Every table question starts with "which rows, which columns?" — and pandas gives you two selectors that look like twins and behave like strangers. <code>.loc</code> selects by <em>label</em> (index value, column name); <code>.iloc</code> by <em>integer position</em>, counting from zero like a list. Think of a hotel corridor: <code>.loc["301"]</code> asks for the room <em>named</em> 301; <code>.iloc[3]</code> walks to the <em>fourth door</em>, whatever its number plate says. While the index is the default 0, 1, 2... the two agree — which is exactly why the difference bites later, once filtering or sorting makes labels drift away from positions.</p>
+
+      <div class="code-title">the selection idioms</div>
+      <pre><code class="language-python">orders.loc[3]                  # the row whose index LABEL is 3
+orders.iloc[3]                 # the 4th row by POSITION (from 0)
+
+orders["amount"]               # one column, as a Series
+orders.loc[:, ["city", "amount"]]      # all rows, two columns
+orders.loc[2:4, "amount"]      # label slice: rows 2..4 INCLUSIVE
+orders.iloc[0:3]               # position slice: rows 0,1,2 (end excluded)</code></pre>
+
+      <p>Notice the shape of every <code>.loc</code> call: <strong>rows first, comma, columns second</strong>. Read it that way and dense selection lines stop looking like hieroglyphics. A small aha from <a href="ch014-dunders-object-protocol.html">the dunders chapter</a>: all this square-bracket magic is just <code>__getitem__</code> — the protocol you already know, on an object holding a million rows.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Two classic traps. First, <code>.loc</code> slices <em>include</em> the end label; <code>.iloc</code> slices exclude it like normal Python lists — same-looking code, off-by-one results. Second, to <em>change</em> values, write through <code>.loc</code> in one step (<code>df.loc[mask, "amount"] = 0</code>); chaining selections before assigning (<code>df[mask]["amount"] = 0</code>) may edit a temporary copy, and modern pandas rejects it outright.</p></div>
+
+      <h2>Filtering: ask the whole column a question</h2>
+      <p>Here is the mental shift that makes pandas pandas. To find big orders you do not loop over rows asking each "are you big?". You ask the <em>entire column</em> at once, and the answer comes back as a column of True and False — one verdict per row. That Series is a <dfn>boolean mask</dfn>, and putting it inside square brackets keeps only the True rows:</p>
+
+      <div class="code-title">boolean masks</div>
+      <pre><code class="language-python">mask = orders["amount"] &gt; 500    # a Series of True/False, one per row
+orders[mask]                     # keep only the True rows
+
+# usually written in one line:
+big = orders[orders["amount"] &gt; 500]
+
+# combine conditions with &amp; (and) and | (or) — parentheses REQUIRED
+pune_big = orders[(orders["amount"] &gt; 500) &amp; (orders["city"] == "Pune")]</code></pre>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Masks need <code>&amp;</code> and <code>|</code> instead of Python's <code>and</code>/<code>or</code>, and every condition needs its own parentheses. Forgetting them produces the "truth value of a Series is ambiguous" error — one of the most-googled messages in data science, now one you can diagnose on sight.</p></div>
+
+      <h2>groupby: split, apply, combine</h2>
+      <p>Back to the senior clerk dealing pages into piles. That is precisely what <dfn>groupby</dfn> does; the textbook name is <em>split-apply-combine</em> — split rows into groups by a column's value, apply a calculation to each group, combine the answers into a new table. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="One table">
+          <h3>1. Start: one flat table</h3>
+          <div class="diagram">
+            <div class="d-box hot">orders — 6 rows<small>Pune 1200 · Mumbai 450 · Pune 2300 · Delhi 800 · Mumbai 1500 · Pune 650</small></div>
+          </div>
+          <p class="step-cap">Six orders, three cities, interleaved. The question: revenue per city.</p>
+        </div>
+        <div class="step" data-title="Split">
+          <h3>2. Split into one pile per city</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">Pune<small>1200, 2300, 650</small></div>
+              <div class="d-box hot">Mumbai<small>450, 1500</small></div>
+              <div class="d-box hot">Delhi<small>800</small></div>
+            </div>
+          </div>
+          <p class="step-cap"><code>orders.groupby("city")</code> deals every row into a pile keyed by city. No calculation yet — just sorting.</p>
+        </div>
+        <div class="step" data-title="Apply">
+          <h3>3. Apply a calculation to each pile</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Pune<small>sum -&gt; 4150</small></div>
+              <div class="d-box">Mumbai<small>sum -&gt; 1950</small></div>
+              <div class="d-box hot">Delhi<small>sum -&gt; 800</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Picking the <code>amount</code> column and calling <code>.sum()</code> totals each pile independently. Swap in <code>.mean()</code>, <code>.count()</code>, or <code>.max()</code> for different questions.</p>
+        </div>
+        <div class="step" data-title="Combine">
+          <h3>4. Combine into a new table</h3>
+          <div class="diagram">
+            <div class="d-box good">result<small>Pune 4150 · Mumbai 1950 · Delhi 800</small></div>
+          </div>
+          <p class="step-cap">The per-pile answers are stapled into a new Series, indexed by city. One line of code, three mental steps.</p>
+        </div>
+      </div>
+
+      <div class="code-title">groupby in code</div>
+      <pre><code class="language-python">orders.groupby("city")["amount"].sum()
+# city
+# Delhi      800
+# Mumbai    1950
+# Pune      4150
+
+# several answers at once, with named columns:
+orders.groupby("city").agg(
+    orders=("order_id", "count"),
+    revenue=("amount", "sum"),
+    biggest=("amount", "max"),
+)</code></pre>
+
+      <p>That second form — <code>.agg()</code> with named results — fills merge requests. Read it aloud: "group orders by city; per city, count order IDs into <em>orders</em>, sum amounts into <em>revenue</em>, take the max into <em>biggest</em>."</p>
+
+      <h2>merge: matching two tables by a key</h2>
+      <p>The clerk's second trick: the sales ledger says <em>which customer</em> ordered, the register says <em>who that customer is</em>, and the customer number appears in both. <dfn>merge</dfn> lines two tables up on a shared key column and stitches their columns together — SQL's JOIN, or a VLOOKUP that brings back every column at once:</p>
+
+      <div class="code-title">merging two tables</div>
+      <pre><code class="language-python">full = orders.merge(customers, on="customer_id", how="left")</code></pre>
+
+      <p><code>on=</code> names the shared key. <code>how=</code> answers the awkward question every join faces: <em>what about rows with no partner on the other side?</em></p>
+
+      <div class="tbl"><table>
+        <tr><th><code>how=</code></th><th>Which rows survive</th><th>Feels like</th></tr>
+        <tr><td><code>"inner"</code></td><td>Only rows whose key exists in <em>both</em> tables</td><td>Strict intersection — unmatched rows vanish silently</td></tr>
+        <tr><td><code>"left"</code></td><td>Every left-table row; right-side columns become NaN where unmatched</td><td>"Keep all my orders, decorate where you can"</td></tr>
+        <tr><td><code>"right"</code></td><td>Every right-table row</td><td>Mirror image of left</td></tr>
+        <tr><td><code>"outer"</code></td><td>Every row from both sides, NaN in the gaps</td><td>Full union — nothing lost, lots of holes</td></tr>
+      </table></div>
+
+      <p>The quiet danger with merges is not syntax, it is <em>row count</em>. If the key is duplicated on the right-hand side, each left row matches multiple partners and the table silently grows — the classic "why did my revenue double?" bug. Careful authors add <code>validate="one_to_many"</code> (or <code>"one_to_one"</code>) so pandas errors out if the key relationship is not what they believed. Spotting <code>validate=</code> in a merge request means the author wore a seatbelt.</p>
+
+      <h2>Vectorised operations: the end of the for-loop</h2>
+      <p>By now you may have noticed what is <em>missing</em> from every example: loops. In the engineering dialect, processing six values means a <code>for</code> loop or a <a href="ch008-comprehensions.html">comprehension</a>. In the data dialect, you write the operation <em>once</em>, against the whole column, and it applies to every row simultaneously — the style called <dfn>vectorised</dfn>:</p>
+
+      <div class="code-title">whole-column arithmetic</div>
+      <pre><code class="language-python">orders["with_gst"] = orders["amount"] * 1.18          # every row at once
+orders["big"] = orders["amount"] &gt; 1000               # whole column of booleans
+orders["rupees_lakh"] = orders["amount"] / 100_000</code></pre>
+
+      <p>This is not just style — it is speed. A Python loop pays interpreter overhead on every row; a vectorised operation hands the whole column to compiled C in one call. The gap is often a factor of fifty, which is why the reviewer comment "vectorise this" is never pedantry:</p>
+
+      <div data-bars data-title="Adding 18% GST to one million amounts (illustrative round numbers)" data-unit="ms"
+           data-note="A Python for-loop pays per-row interpreter cost; the vectorised call runs once in compiled C. Real ratios vary, but this order of magnitude is typical.">
+        <div class="bar" data-label="Python for-loop over rows" data-value="400"></div>
+        <div class="bar" data-label="Vectorised column op" data-value="8"></div>
+      </div>
+
+      <h2>numpy, in exactly two paragraphs</h2>
+      <p>Where does that compiled speed come from? <dfn>numpy</dfn>, the library underneath pandas. Its one big idea is the <dfn>array</dfn>: a block of values sharing one type, packed into one contiguous strip of memory — unlike a Python list, a collection of pointers to scattered objects. Uniform and contiguous means numpy can run arithmetic in tight compiled C loops, and that is the engine every pandas column drives. A Series is, in essence, a numpy array wearing an index.</p>
+      <p>What you need is recognition, not mastery. You will see <code>np.array([...])</code> building arrays; <code>np.mean</code>, <code>np.where</code>, <code>np.round</code> operating on whole columns; and <code>df.to_numpy()</code> unwrapping a DataFrame when a machine-learning library wants raw numbers. File it away: in <a href="ch024-what-is-a-model.html">the next chapter</a> a "model" turns out to be largely numpy arrays of learned numbers, and neural-network tensors are the same idea with more dimensions.</p>
+
+      <h2>Now build it yourself: pandas with the covers off</h2>
+      <p>You cannot import pandas in this page's sandbox — a gift, because the best way to <em>own</em> these idioms is to build toy versions with the plain dicts and lists from <a href="ch004-collections.html">the collections chapter</a>. Below: a mask filter, a groupby, a vectorised op, and a left-join lookup in twenty lines of stdlib Python. Press <strong>Run</strong>, then read the pandas one-liners in the comments.</p>
+
+      <div class="pyrun" data-title="a toy DataFrame — filter, groupby, vectorise, merge">
+<textarea class="py-src" spellcheck="false">
+# A DataFrame, with the covers off: a dict of equal-length columns.
+sales = {
+    "order_id": [101, 102, 103, 104, 105, 106],
+    "city":     ["Pune", "Mumbai", "Pune", "Delhi", "Mumbai", "Pune"],
+    "amount":   [1200,   450,      2300,   800,     1500,     650],
+}
+
+# --- FILTER: build a boolean mask, keep rows where it is True
+# pandas: sales[sales["amount"] &gt; 700]
+mask = [a &gt; 700 for a in sales["amount"]]
+print("mask:          ", mask)
+kept = [oid for oid, keep in zip(sales["order_id"], mask) if keep]
+print("big orders:    ", kept)
+
+# --- GROUPBY: split into piles by city, then total each pile
+# pandas: sales.groupby("city")["amount"].sum()
+totals = {}
+for city, amount in zip(sales["city"], sales["amount"]):
+    totals[city] = totals.get(city, 0) + amount
+print("city revenue:  ", totals)
+
+# --- VECTORISE: one operation applied down a whole column
+# pandas: sales["amount"] * 1.18
+with_gst = [round(a * 1.18, 2) for a in sales["amount"]]
+print("with 18% GST:  ", with_gst)
+
+# --- MERGE (left join): match another table by key
+# pandas: sales.merge(managers, on="city", how="left")
+managers = {"Pune": "Asha", "Mumbai": "Rahul"}   # note: no Delhi!
+matched = [managers.get(c, "NaN") for c in sales["city"]]
+print("manager column:", matched)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it on purpose. Change the mask threshold to 100 and rerun. Delete Mumbai from <code>managers</code> and watch NaN spread — a left join with missing keys. Swap <code>managers.get(c, "NaN")</code> for <code>managers[c]</code> and read the KeyError the holes cause.</p></div>
+
+      <h2>Reading a real pandas script, line by line</h2>
+      <p>Here is the whole chapter as one production-shaped script — the kind you will meet in real merge requests. Click each annotated line until every one is boring to you. Boring means fluent.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">monthly_report.py</div>
+        <div class="wl-line"><code>import pandas as pd</code>
+          <div class="wl-note">The universal alias: <code>pd.</code> anywhere in a file means you are in table-land.</div></div>
+        <div class="wl-line"><code>orders = pd.read_csv("orders.csv", parse_dates=["order_date"])</code>
+          <div class="wl-note">File in, DataFrame out. <code>parse_dates</code> reads that column as real timestamps (dtype <code>datetime64</code>) — without it, date comparisons quietly compare strings.</div></div>
+        <div class="wl-line"><code>customers = pd.read_csv("customers.csv")</code>
+          <div class="wl-note">A second table: the key column <code>customer_id</code> plus customer details the orders file lacks.</div></div>
+        <div class="wl-line"><code>recent = orders.loc[orders["order_date"] &gt;= "2026-06-01"]</code>
+          <div class="wl-note">A boolean mask inside <code>.loc</code>: ask the whole date column "June or later?", keep the True rows. Nothing is modified — <code>recent</code> is a new, smaller DataFrame.</div></div>
+        <div class="wl-line"><code>big = recent[recent["amount"] &gt; 500]</code>
+          <div class="wl-note">Second filter, shorthand form (mask directly in square brackets) — the bread and butter of every analysis script.</div></div>
+        <div class="wl-line"><code>full = big.merge(customers, on="customer_id",</code>
+          <div class="wl-note">Stitch customer details onto every order, matching on the shared key.</div></div>
+        <div class="wl-line"><code>                 how="left", validate="many_to_one")</code>
+          <div class="wl-note"><code>how="left"</code>: keep every order even when the customer record is missing (its new columns become NaN). <code>validate="many_to_one"</code> is the seatbelt: error out if <code>customer_id</code> is duplicated in <code>customers</code>, instead of silently multiplying rows.</div></div>
+        <div class="wl-line"><code>report = (full.groupby("city")</code>
+          <div class="wl-note">Split-apply-combine begins: one pile per city. The opening bracket lets the chain span several lines legally.</div></div>
+        <div class="wl-line"><code>              .agg(orders=("order_id", "count"),</code>
+          <div class="wl-note">Apply, with named results: count order IDs per pile into a column called <code>orders</code>...</div></div>
+        <div class="wl-line"><code>                   revenue=("amount", "sum")))</code>
+          <div class="wl-note">...and sum amounts into <code>revenue</code>. Combine is automatic: <code>report</code> has one row per city.</div></div>
+        <div class="wl-line"><code>report["revenue_lakh"] = report["revenue"] / 100_000</code>
+          <div class="wl-note">A vectorised op: divide the whole revenue column at once, bolt it on as a new column. No loop in the entire file.</div></div>
+        <div class="wl-line"><code>report.to_csv("city_report.csv")</code>
+          <div class="wl-note">The mirror of <code>read_csv</code>. The whole pipeline in one screen: load, filter, merge, group, derive, save.</div></div>
+      </div>
+
+      <h2>Jupyter notebooks: the lab bench</h2>
+      <p><em>Where</em> does a data scientist write all this? Rarely in a plain <code>.py</code> file. They live in a <dfn>Jupyter notebook</dfn> — an interactive document made of <dfn>cells</dfn>, each holding a chunk of code (or prose) with its result shown underneath. Behind the page sits a <dfn>kernel</dfn> — one running Python process that executes whichever cell you run and <em>remembers every variable</em> between runs.</p>
+      <p>Why do your data science colleagues love them? Their work is a conversation with data: load the table — <em>look at it</em>; filter — <em>look again</em>; group, plot, raise an eyebrow, adjust, replot. A script is a machine you run end to end; a notebook is a lab bench where every intermediate result stays visible. For exploration, that feedback loop is unbeatable.</p>
+      <p>The lab bench has one famous hazard, born of "the kernel remembers everything" plus "cells run in any order". Step through the classic accident:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Fresh notebook">
+          <h3>1. A fresh notebook, run top to bottom</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">In [1]<small>price = 100</small></div>
+              <div class="d-box">In [2]<small>total = price * 3</small></div>
+              <div class="d-box good">In [3]<small>print(total)  -&gt;  300</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The bracket numbers are <strong>execution counts</strong> — the order the kernel ran things. 1, 2, 3: all is well; the kernel remembers <code>price</code> and <code>total</code>.</p>
+        </div>
+        <div class="step" data-title="Edit without rerunning">
+          <h3>2. You edit a cell... and do not run it</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">In [1]<small>price = 200   (edited on screen, NOT run)</small></div>
+              <div class="d-box dim">In [2]<small>total = price * 3</small></div>
+              <div class="d-box dim">In [3]<small>print(total)  -&gt;  300</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The screen says 200. The kernel's memory still says 100. Document and process have quietly diverged.</p>
+        </div>
+        <div class="step" data-title="Run out of order">
+          <h3>3. You re-run only the last cell</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">In [1]<small>price = 200</small></div>
+              <div class="d-box dim">In [2]<small>total = price * 3</small></div>
+              <div class="d-box hot">In [4]<small>print(total)  -&gt;  300   (!?)</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The count jumps to [4] — a gap that betrays out-of-order running. Output 300 sits under code that plainly reads 200 x 3: the notebook is showing results its visible code never produced.</p>
+        </div>
+        <div class="step" data-title="Someone else reads it">
+          <h3>4. A colleague opens the saved file</h3>
+          <div class="diagram">
+            <div class="d-box warn">reader<small>"price is 200, so how is total 300?"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">stale outputs<small>saved inside the .ipynb</small></div>
+          </div>
+          <p class="step-cap">Outputs are saved <em>inside</em> the file, so the lie outlives the kernel. Non-sequential counts and outputs contradicting code are the fingerprints.</p>
+        </div>
+        <div class="step" data-title="The fix">
+          <h3>5. The professional habit: Restart and Run All</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box good">In [1]<small>price = 200</small></div>
+              <div class="d-box good">In [2]<small>total = price * 3</small></div>
+              <div class="d-box good">In [3]<small>print(total)  -&gt;  600</small></div>
+            </div>
+          </div>
+          <p class="step-cap">"Restart kernel and Run All" wipes memory and executes every cell top to bottom. If the notebook survives, its story is true. Careful teams do this before trusting any result — and always before committing.</p>
+        </div>
+      </div>
+
+      <h2>How a notebook shows up in a merge request</h2>
+      <p>The part that matters to you as a reviewer: a notebook's file format, <code>.ipynb</code>, is not Python — it is <a href="ch005-yaml-and-json.html">JSON</a>. Every cell is a JSON object holding its source code, its execution count, <em>and its saved outputs</em> — printed tables, even chart images as long base64 text strings:</p>
+
+      <div class="code-title">what an .ipynb file really is (trimmed)</div>
+      <pre><code class="language-json">{
+  "cells": [
+    {
+      "cell_type": "code",
+      "execution_count": 3,
+      "source": ["orders = pd.read_csv(\"orders.csv\")"],
+      "outputs": []
+    }
+  ]
+}</code></pre>
+
+      <p>Now recall how <a href="ch021-just-enough-git.html">git diffs</a> work: line by line, on raw text. Diffing JSON that embeds outputs means a one-line code change can produce a thousand-line diff — and merely <em>re-running</em> a notebook churns the diff too, since counts and outputs change. What lands in the merge request:</p>
+
+      <div class="code-title">a typical notebook diff — one real change, lots of noise</div>
+      <pre><code class="language-diff">--- a/analysis.ipynb
++++ b/analysis.ipynb
+@@ -47,11 +47,11 @@
+-   "execution_count": 3,
++   "execution_count": 7,
+    "outputs": [
+     {
+-     "text/plain": ["0    1200\n1     450\n..."]
++     "text/plain": ["0    1416.0\n1     531.0\n..."]
+     }
+    ],
+    "source": [
+-    "orders[\"amount\"].head()"
++    "(orders[\"amount\"] * 1.18).head()"
+    ]</code></pre>
+
+      <p>Reading that like a native: the <code>source</code> lines at the bottom are the only <em>actual</em> change — someone added the GST multiplication. Everything above is churn. Reviewer survival: hunt for the <code>"source"</code> chunks, ignore output noise, and ask "was this run clean, top to bottom?" — non-sequential execution counts answer that. Teams tame the noise by stripping outputs before commit (an <code>nbstripout</code> pre-commit hook), pairing notebooks with <code>.py</code> twins via <code>jupytext</code>, or using notebook-aware diff tools; modern GitLab and GitHub render friendlier notebook views, though raw JSON is still what git stores.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any data science merge request at a large company and you will recognise everything in it: <code>pd.read_csv</code> at the top; masks stacked with <code>&amp;</code> inside <code>.loc</code>; a <code>merge(...)</code> whose <code>how=</code> deserves a second look; a <code>groupby(...).agg(...)</code> chain carrying the business logic; an <code>.ipynb</code> diff that is 95 per cent output churn around three changed <code>"source"</code> lines. The highest-value review comments here are "this merge can duplicate rows", "vectorise this loop", and "does this notebook run clean top to bottom?" — you can now make all three.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. After filtering and sorting, the first row of a DataFrame carries index label 42. What do <code>df.iloc[0]</code> and <code>df.loc[0]</code> each give you?</p>
+          <div class="q-opts">
+            <button data-opt="a">Both return the first row — they are interchangeable</button>
+            <button data-opt="b">.iloc[0] fails; .loc[0] returns the first row</button>
+            <button data-opt="c">.iloc[0] returns the first row by position; .loc[0] hunts for the row LABELLED 0, which may be elsewhere or gone</button>
+          </div>
+          <p class="q-explain">.iloc counts positions like a list; .loc looks up index labels like a dict. They coincide only while the index is untouched — hence the surprises after filtering or sorting.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. What is <code>orders["amount"] &gt; 500</code>, on its own, before you put it inside square brackets?</p>
+          <div class="q-opts">
+            <button data-opt="a">The filtered DataFrame containing only big orders</button>
+            <button data-opt="b">A Series of True/False values, one verdict per row — a boolean mask</button>
+            <button data-opt="c">A single True or False for the whole column</button>
+          </div>
+          <p class="q-explain">The comparison is vectorised: every row answers at once, a whole column of verdicts. Filtering is the separate second step — the mask in square brackets keeps the True rows.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. In <code>orders.merge(customers, on="customer_id", how="left")</code>, what happens to an order whose customer_id is absent from <code>customers</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">The order row is kept, and its new customer columns are filled with NaN</button>
+            <button data-opt="b">The order row is silently dropped from the result</button>
+            <button data-opt="c">pandas raises an error about the missing key</button>
+          </div>
+          <p class="q-explain">A left join keeps every left-table row; missing partners leave NaN holes. Silent dropping is what <code>how="inner"</code> does — which is why reviewers always glance at the <code>how=</code>.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Why does a reviewer write "vectorise this" on a for-loop processing a DataFrame row by row?</p>
+          <div class="q-opts">
+            <button data-opt="a">Loops give different numerical answers than column operations</button>
+            <button data-opt="b">It is purely a style convention in the data science world</button>
+            <button data-opt="c">A whole-column operation runs once in compiled C via numpy, skipping Python's per-row interpreter cost — often tens of times faster</button>
+          </div>
+          <p class="q-explain">Columns are uniform numpy arrays underneath, so the whole operation runs once in compiled code. On large tables the loop-versus-vector gap is seconds versus minutes, not taste.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. A colleague's notebook shows a cell reading <code>price = 200</code>, yet a later output shows totals computed from <code>price = 100</code>. What most likely happened?</p>
+          <div class="q-opts">
+            <button data-opt="a">The .ipynb file is corrupted and should be deleted</button>
+            <button data-opt="b">Cells were edited or run out of order — the saved outputs reflect kernel history, not a clean top-to-bottom run</button>
+            <button data-opt="c">Jupyter caches old values on disk and will fix itself on reopening</button>
+          </div>
+          <p class="q-explain">The kernel remembers variables across runs, cells can run in any order, and outputs are saved inside the file. Diverging code and outputs plus non-sequential execution counts are the fingerprint; the remedy is "Restart kernel and Run All" before every commit.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A DataFrame is a dict of labelled columns (Series) sharing one index — a spreadsheet you drive with code, usually born from <code>pd.read_csv</code>.</li>
+          <li><code>.loc</code> selects by label, <code>.iloc</code> by position — rows first, then columns; they diverge the moment an index is filtered or re-sorted.</li>
+          <li>Filtering is a boolean mask: ask the whole column a question, keep the True rows — with <code>&amp;</code>, <code>|</code>, and mandatory parentheses to combine conditions.</li>
+          <li><code>groupby</code> is split-apply-combine; <code>merge</code> is key-matching between tables, with <code>how=</code> and <code>validate=</code> as the spots where bugs hide.</li>
+          <li>Vectorised column ops run in compiled C via numpy — arrays of one dtype in contiguous memory — which is why idiomatic pandas code has almost no for-loops.</li>
+          <li>Notebooks are lab benches: cells plus a kernel that remembers everything, which enables the out-of-order execution hazard — "Restart and Run All" is the honesty check.</li>
+          <li>An <code>.ipynb</code> is JSON with outputs baked in, so its git diff is mostly noise; in review, find the <code>"source"</code> changes and ask whether it runs clean top to bottom.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

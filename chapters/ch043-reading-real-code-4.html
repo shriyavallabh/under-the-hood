@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading real code: a tiny chat CLI — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch043">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IV · Talking to the Model</div>
+        <h1>Reading real code: a tiny chat CLI</h1>
+        <p class="ch-tagline">One complete, working chat app — about sixty lines. You will read every single line, recognise every idea from Act IV inside it, and run a browser-safe version yourself. This is the act's graduation exam, and you already know all the answers.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 44 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>There is a tiny diner near the railway station with exactly one counter, one cook, and a metal rail above the pass. When you order, the waiter writes your order on a paper ticket and clips it to the rail — next to every ticket from earlier in your meal. The cook has a strange rule: before making anything, he re-reads <em>your entire rail</em>, first ticket to last. It looks wasteful, but it is why he never forgets that you asked for less salt twenty minutes ago — he has no memory at all, only the rail. And he never plates a dish in one dramatic reveal; he slides it across the pass piece by piece, so you start eating while he is still cooking.</p>
+        <p>You are about to read the code for that diner. The waiter is a <code>while</code> loop, the ticket rail is a Python list called <code>history</code>, the forgetful cook is an LLM API, and the piece-by-piece pass is streaming. Sixty lines. Let's read the whole kitchen.</p>
+      </section>
+
+      <h2>You have already learned every word in this file</h2>
+      <p>This is the fourth "reading real code" chapter — the same drill as <a href="ch010-reading-real-code-1.html">chapter 10</a> and <a href="ch022-reading-real-code-2.html">chapter 22</a>, but with higher stakes, because this time the program talks to a real model. Quick recap of the Act IV pieces it stitches together: in <a href="ch033-first-api-call.html">your first API call</a> you learned that talking to a model is just an HTTPS request carrying a list of role-tagged messages. In <a href="ch040-streaming-responses.html">streaming responses</a> you saw that the reply can arrive as a stream of small chunks instead of one big blob. And in <a href="ch041-tokens-and-cost.html">tokens and cost</a> you learned that you pay for every token you send — including everything you have sent before.</p>
+      <p>Today those three ideas stop being separate lessons and become one program: a <dfn>CLI</dfn> — a command-line interface, a program you talk to by typing in a terminal — that behaves like a miniature version of every chat product you have ever used. There is genuinely nothing new in this chapter. That is the point. The skill being trained is <em>reading</em>: taking a file you have never seen and recognising, line by line, that you already know what everything does.</p>
+      <p>A good way to read any unfamiliar program: first skim the whole thing like a story, ignoring details, just asking "what are the characters and what happens?" Then go back and read line by line. We will do exactly that, in that order.</p>
+
+      <h2>The whole program, top to bottom</h2>
+      <p>Here is the complete file. Skim it once now — do not stop at anything confusing. Notice the shape: two small helper functions at the top, then a <code>main()</code> that runs a loop. That is the whole story: <em>set up, then loop forever — read, send, print, remember.</em></p>
+
+      <div class="code-title">chat.py — a complete chat app in about 60 lines</div>
+      <pre><code class="language-python"># chat.py — talk to a model from your terminal
+import os
+import sys
+import anthropic
+
+MODEL = "claude-opus-4-8"
+SYSTEM = "You are a concise, friendly assistant."
+
+
+def make_client():
+    """Fail fast, with a clear message, if there is no API key."""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        sys.exit("Set the ANTHROPIC_API_KEY environment variable first.")
+    return anthropic.Anthropic()
+
+
+def stream_reply(client, history):
+    """Send the whole history, print the reply as it arrives,
+    and return the finished text."""
+    parts = []
+    with client.messages.stream(
+        model=MODEL,
+        max_tokens=1024,
+        system=SYSTEM,
+        messages=history,
+    ) as stream:
+        for text in stream.text_stream:
+            print(text, end="", flush=True)
+            parts.append(text)
+    print()
+    return "".join(parts)
+
+
+def main():
+    client = make_client()
+    history = []
+    print("Tiny chat. Type 'quit' to leave.")
+    while True:
+        try:
+            user = input("you&gt; ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not user:
+            continue
+        if user.lower() in ("quit", "exit"):
+            print("bye")
+            break
+        history.append({"role": "user", "content": user})
+        print("assistant&gt; ", end="", flush=True)
+        try:
+            reply = stream_reply(client, history)
+        except anthropic.APIError as err:
+            print(f"\n[error talking to the API: {err}]")
+            history.pop()  # forget the turn that never got an answer
+            continue
+        history.append({"role": "assistant", "content": reply})
+
+
+if __name__ == "__main__":
+    main()
+</code></pre>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The model id and the SDK call shapes here are current as of mid-2026 (<code>client.messages.stream(...)</code> is the official streaming helper in the <code>anthropic</code> Python SDK). Model names rotate every few months — which is exactly why this file keeps the id in a single <code>MODEL</code> constant at the top. Upgrading the whole app to a newer model is a one-line edit.</p></div>
+
+      <h2>One message's round trip</h2>
+      <p>Before the line-by-line reading, watch a single message travel through the machine. Step through the journey — this is the diner in motion:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="You type">
+          <h3>1. You type a message</h3>
+          <div class="diagram">
+            <div class="d-box hot">You<small>"what is a monsoon?"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">history<small>list, 0 items</small></div>
+            <div class="d-box dim">API</div>
+          </div>
+          <p class="step-cap"><code>input()</code> blocks — the program stands perfectly still, waiting at the counter — until you press Enter. Your text lands in the variable <code>user</code>.</p>
+        </div>
+        <div class="step" data-title="Gatekeeping">
+          <h3>2. The waiter checks the order</h3>
+          <div class="diagram">
+            <div class="d-box hot">Checks<small>empty? "quit"?</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">history</div>
+            <div class="d-box dim">API</div>
+          </div>
+          <p class="step-cap">Two quick checks before spending money: an empty line loops back to the prompt (<code>continue</code>), and "quit" or "exit" ends the program (<code>break</code>). No API call happens for either.</p>
+        </div>
+        <div class="step" data-title="Onto the rail">
+          <h3>3. The ticket goes on the rail</h3>
+          <div class="diagram">
+            <div class="d-box dim">You</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">history<small>{"role": "user", ...}</small></div>
+            <div class="d-box dim">API</div>
+          </div>
+          <p class="step-cap">Your text is wrapped in the message shape from <a href="ch033-first-api-call.html">chapter 33</a> — a dict with a <code>role</code> and <code>content</code> — and appended to the <code>history</code> list. The rail grows by one ticket.</p>
+        </div>
+        <div class="step" data-title="Whole rail to the cook">
+          <h3>4. The WHOLE rail goes to the kitchen</h3>
+          <div class="diagram">
+            <div class="d-box dim">You</div>
+            <div class="d-box">history<small>every message so far</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">API<small>reads it all, every time</small></div>
+          </div>
+          <p class="step-cap">The API call sends <em>the entire history</em>, not just the newest message. The model is stateless — it remembers nothing between calls — so its only knowledge of the conversation is whatever you send. This one fact explains half of all chat-app behaviour.</p>
+        </div>
+        <div class="step" data-title="Reply streams back">
+          <h3>5. The reply arrives piece by piece</h3>
+          <div class="diagram">
+            <div class="d-box dim">history</div>
+            <div class="d-box">API</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Screen<small>"A mon" ... "soon is" ...</small></div>
+          </div>
+          <p class="step-cap">Instead of waiting for the full answer, the loop prints each chunk the moment it lands — that is the familiar "typing" effect of every chat product. Each chunk is also saved into a list called <code>parts</code>.</p>
+        </div>
+        <div class="step" data-title="Reply joins the rail">
+          <h3>6. The finished reply joins the rail too</h3>
+          <div class="diagram">
+            <div class="d-box good">history<small>user msg + assistant msg</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Loop<small>back to step 1</small></div>
+          </div>
+          <p class="step-cap">The chunks are glued back into one string and appended as an <code>assistant</code> message. Next turn, the model will see its own previous words — which is the only reason it can answer "what did you just say?". Then the loop swings back to the prompt.</p>
+        </div>
+      </div>
+
+      <h2>Now read it line by line</h2>
+      <p>Second pass — the close reading. Click each annotated line and check that the explanation matches what you expected. Your goal is for every line to feel boring; boring means you are fluent.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">chat.py — every line that matters</div>
+        <div class="wl-line"><code>import anthropic</code>
+          <div class="wl-note">The official SDK — the library that wraps raw HTTPS requests into friendly Python calls, exactly as in <a href="ch033-first-api-call.html">your first API call</a>. <code>os</code> and <code>sys</code> above it are stdlib: environment variables and a clean exit.</div></div>
+        <div class="wl-line"><code>MODEL = "claude-opus-4-8"</code>
+          <div class="wl-note">Configuration lives at the top as a named constant, not buried inside a function call. When the next model generation ships, this file needs a one-line change. Small file, professional habit.</div></div>
+        <div class="wl-line"><code>SYSTEM = "You are a concise, friendly assistant."</code>
+          <div class="wl-note">The standing instructions — the system prompt from <a href="ch037-prompting-that-matters.html">chapter 37</a>. It rides along on every request but never appears in <code>history</code>; the SDK sends it as a separate field.</div></div>
+        <div class="wl-line"><code>def make_client():</code>
+          <div class="wl-note">A tiny function with one job (<a href="ch007-functions.html">chapter 7</a>): build the client, or die with a useful message. Failing loudly at startup beats a confusing crash mid-conversation.</div></div>
+        <div class="wl-line"><code>    if not os.environ.get("ANTHROPIC_API_KEY"):</code>
+          <div class="wl-note">Credentials come from the environment, never from the source code — the config discipline from <a href="ch019-logging-config-env.html">chapter 19</a>. A key pasted into a file eventually gets committed and leaked.</div></div>
+        <div class="wl-line"><code>    return anthropic.Anthropic()</code>
+          <div class="wl-note">The client object — your authenticated phone line to the API. Built once, reused for every turn. It finds the key in the environment by itself.</div></div>
+        <div class="wl-line"><code>def stream_reply(client, history):</code>
+          <div class="wl-note">The second helper: make one API call, print the reply as it streams, hand back the finished text. Notice what it does NOT do — it never touches <code>input()</code> or modifies <code>history</code>. Talking to the network and managing the conversation are kept in separate functions.</div></div>
+        <div class="wl-line"><code>    parts = []</code>
+          <div class="wl-note">Streaming gives you the reply in fragments, but the history needs the complete text. So every chunk is printed AND collected here, to be reassembled at the end.</div></div>
+        <div class="wl-line"><code>    with client.messages.stream(</code>
+          <div class="wl-note">Two old friends in one line: the streaming call from <a href="ch040-streaming-responses.html">chapter 40</a>, wrapped in a <code>with</code> block — a context manager (<a href="ch018-context-managers.html">chapter 18</a>) that guarantees the network connection is closed properly even if something goes wrong mid-stream.</div></div>
+        <div class="wl-line"><code>        max_tokens=1024,</code>
+          <div class="wl-note">The hard ceiling on the reply's length, in tokens (<a href="ch041-tokens-and-cost.html">chapter 41</a>). Chat replies are short, so a modest cap doubles as a cost guardrail — a runaway answer cannot bill you forever.</div></div>
+        <div class="wl-line"><code>        messages=history,</code>
+          <div class="wl-note">The most important argument in the file. Not the latest message — the WHOLE list, every turn. The server keeps no memory of you between calls; this list IS the conversation.</div></div>
+        <div class="wl-line"><code>        for text in stream.text_stream:</code>
+          <div class="wl-note">You iterate over the stream like a list, but values are produced as they arrive over the network — the lazy-iteration idea from <a href="ch038-generators-and-yield.html">generators</a>. Each <code>text</code> is a few characters of reply.</div></div>
+        <div class="wl-line"><code>            print(text, end="", flush=True)</code>
+          <div class="wl-note"><code>end=""</code> stops print adding a newline after every fragment; <code>flush=True</code> forces the text onto the screen immediately instead of letting Python buffer it. Delete <code>flush=True</code> and the "typing" effect turns into awkward bursts.</div></div>
+        <div class="wl-line"><code>    return "".join(parts)</code>
+          <div class="wl-note">The fragments are glued into one complete string (<a href="ch003-strings-and-fstrings.html">chapter 3</a>) — this is what gets stored in history as the assistant's turn. Streaming is a delivery mechanism; the transcript still needs whole messages.</div></div>
+        <div class="wl-line"><code>    history = []</code>
+          <div class="wl-note">The ticket rail — an ordinary Python list (<a href="ch004-collections.html">chapter 4</a>), and the app's entire memory. Close the program and it is gone; real products persist this list in a database, but the shape is identical.</div></div>
+        <div class="wl-line"><code>    while True:</code>
+          <div class="wl-note">The heart of every chat app: an infinite loop (<a href="ch006-control-flow.html">chapter 6</a>) that only ends when a <code>break</code> fires. Read a message, answer it, repeat until the user leaves.</div></div>
+        <div class="wl-line"><code>        except (EOFError, KeyboardInterrupt):</code>
+          <div class="wl-note">Graceful exits for Ctrl-D and Ctrl-C — the two ways terminal users abandon a program. Without this, quitting with Ctrl-C would splatter a traceback (<a href="ch009-errors-and-tracebacks.html">chapter 9</a>) across the screen.</div></div>
+        <div class="wl-line"><code>        if user.lower() in ("quit", "exit"):</code>
+          <div class="wl-note">The quit command. <code>.lower()</code> makes it case-insensitive, and membership in a tuple checks both spellings at once. Every REPL-style tool you have used has a line like this.</div></div>
+        <div class="wl-line"><code>        history.append({"role": "user", "content": user})</code>
+          <div class="wl-note">Your words become a message dict — the exact wire shape from <a href="ch033-first-api-call.html">chapter 33</a> — and go onto the rail BEFORE the API call, because the call needs to include them.</div></div>
+        <div class="wl-line"><code>        except anthropic.APIError as err:</code>
+          <div class="wl-note">Networks fail, rate limits bite, servers overload. This catches any API failure, prints a short notice instead of a scary traceback, and lets the loop continue — the app survives. Production code would catch specific subclasses (rate limit vs auth) and retry differently for each.</div></div>
+        <div class="wl-line"><code>            history.pop()  # forget the turn that never got an answer</code>
+          <div class="wl-note">A subtle, professional touch. The user message was appended before the call failed. Leaving it there means the NEXT successful reply would also answer this ghost message — which the user believes failed. Popping it keeps the app's memory consistent with what the user saw on screen.</div></div>
+        <div class="wl-line"><code>        history.append({"role": "assistant", "content": reply})</code>
+          <div class="wl-note">The reply joins the rail with the <code>assistant</code> role. This closes the loop of memory: next turn, the model reads its own earlier words. Forget this line and the model would contradict itself constantly — a bug you may now recognise from flaky chat tools.</div></div>
+        <div class="wl-line"><code>if __name__ == "__main__":</code>
+          <div class="wl-note">The import guard from <a href="ch011-imports-and-modules.html">chapter 11</a>: run <code>main()</code> when the file is executed directly, but stay quiet if another file imports it — say, a test that wants to call <code>stream_reply</code> on its own.</div></div>
+      </div>
+
+      <h2>Why the bill grows: the history tax</h2>
+      <p>Look again at <code>messages=history</code>. Because the whole rail is re-sent every turn, the input size — and therefore the input cost from <a href="ch041-tokens-and-cost.html">chapter 41</a> — grows with every message. Turn one sends one message; turn ten sends nineteen (ten of yours, nine replies). The numbers below are illustrative round figures, but the shape is real and it is the shape of every chat bill in existence:</p>
+
+      <div data-bars data-title="Input tokens sent per turn as a chat grows" data-unit="tokens"
+           data-note="Illustrative numbers. Each turn re-sends everything before it, so input grows faster and faster — this is why long conversations get expensive and why context management is a whole discipline.">
+        <div class="bar" data-label="turn 1" data-value="40"></div>
+        <div class="bar" data-label="turn 2" data-value="130"></div>
+        <div class="bar" data-label="turn 3" data-value="260"></div>
+        <div class="bar" data-label="turn 4" data-value="430"></div>
+        <div class="bar" data-label="turn 5" data-value="640"></div>
+      </div>
+
+      <p>Sixty lines of code do not fix this — they just make it visible. Real products fight the history tax with caching, summarisation, and trimming, and you will meet those techniques when agents make the problem ten times worse in Act V.</p>
+
+      <h2>Run it yourself, right here</h2>
+      <p>The real file needs a terminal, an API key, and a network. This page has none of those — so below is the same program with two honest substitutions: the keyboard is replaced by a scripted list of user turns, and the network call is replaced by a <code>fake_llm_stream()</code> function that yields a canned reply in small chunks, exactly the way the real stream does. Every other line — the loop, the history, the quit check, the chunk-collecting — is the same code you just read. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="The chat CLI, browser-safe — run me">
+<textarea class="py-src" spellcheck="false">
+# The same chat CLI with two fakes: a scripted keyboard and a
+# scripted model. The loop, history, streaming and quit logic
+# are identical to the real file.
+
+SCRIPT = [                      # stands in for the keyboard
+    "hello! what are you?",
+    "what was the first thing I said to you?",
+    "quit",
+]
+
+def fake_llm_stream(history):   # stands in for the API call
+    users = [m["content"] for m in history if m["role"] == "user"]
+    if len(users) == 1:
+        reply = ("I am a scripted stand-in for a real model. "
+                 "The loop around me is the real thing.")
+    else:
+        reply = (f"You first said: '{users[0]}'. I only know that "
+                 "because the WHOLE history is re-sent every turn.")
+    for i in range(0, len(reply), 7):   # stream in 7-char chunks
+        yield reply[i:i + 7]
+
+def stream_reply(history):
+    parts = []
+    for chunk in fake_llm_stream(history):
+        print(chunk, end="")
+        parts.append(chunk)
+    print()
+    return "".join(parts)
+
+def main():
+    history = []
+    print("Tiny chat (simulated). The script types for you.")
+    for user in SCRIPT:
+        print(f"you&gt; {user}")
+        if user.lower() in ("quit", "exit"):
+            print("bye")
+            break
+        history.append({"role": "user", "content": user})
+        print("assistant&gt; ", end="")
+        reply = stream_reply(history)
+        history.append({"role": "assistant", "content": reply})
+
+    print()
+    print(f"history now holds {len(history)} messages:")
+    for m in history:
+        print(f"  {m['role']}: {m['content'][:44]}...")
+
+main()
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now break it, gently. Add a fourth message to <code>SCRIPT</code> before "quit" and watch the history keep growing. Comment out the <code>history.append(...)</code> for the assistant reply and re-run — the second answer can no longer see the first, the exact "bot forgot what it just said" bug from production. Change the chunk size from 7 to 1 and watch the stream get finer. Every experiment here is a production behaviour you will recognise later.</p></div>
+
+      <h2>Where the rest of Act IV plugs in</h2>
+      <p>This file is deliberately minimal, but it is also a chassis: every other Act IV idea bolts onto a specific line of it. This is worth internalising, because when you open a bigger chat codebase, these are exactly the attachment points you will find.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Act IV idea</th><th>Where it would plug into chat.py</th></tr>
+        <tr><td><a href="ch034-sampling-params.html">Sampling parameters</a></td><td>Extra arguments beside <code>max_tokens</code> in the API call — one line</td></tr>
+        <tr><td><a href="ch035-tool-calling.html">Tool calling</a></td><td>A <code>tools=[...]</code> argument, plus a branch after the reply: if the model requested a tool, run it and call again</td></tr>
+        <tr><td><a href="ch036-structured-output.html">Structured output</a></td><td>An output-format argument on the same call, when you need JSON instead of prose</td></tr>
+        <tr><td><a href="ch042-rag.html">RAG</a></td><td>Between reading your input and calling the API: retrieve relevant documents and prepend them to the message</td></tr>
+        <tr><td><a href="ch039-async-await.html">Async</a></td><td>Swap the client for its async twin so a server can hold hundreds of these conversations at once</td></tr>
+      </table></div>
+
+      <p>Add the tool-calling branch to this loop and you have built something with a grander name — that is literally the subject of <a href="ch044-what-is-an-agent.html">the next chapter</a>, and in <a href="ch045-react-loop-by-hand.html">chapter 45</a> you will build it with your own hands.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This file's skeleton is everywhere once you know its face. Every LLM SDK ships a quickstart that is a shorter version of it; every chat product — web, Slack bot, WhatsApp bridge — is this loop with the terminal swapped for a nicer front end and the <code>history</code> list swapped for a database table. In repositories, look for files named <code>chat.py</code>, <code>cli.py</code>, or <code>repl.py</code>. In merge requests, when someone says "we now truncate the history after 50 turns" or "the streaming handler drops the partial reply on disconnect", you can now picture the exact lines they changed. And when a teammate reports "the bot forgot the whole conversation", your first question is one you can ask with confidence: what exactly is in the messages list being sent?</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Why does <code>stream_reply</code> send the entire <code>history</code> list on every single turn?</p>
+          <div class="q-opts">
+            <button data-opt="a">For logging and audit purposes</button>
+            <button data-opt="b">It is a bug — only the newest message is needed</button>
+            <button data-opt="c">The model is stateless; whatever is in that list is the only conversation it can see</button>
+          </div>
+          <p class="q-explain">The API keeps no memory of you between calls. If the earlier messages were not re-sent, the model would meet every message as a total stranger. The history list IS the conversation — which is also why long chats get expensive.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. When the API call fails, the error handler runs <code>history.pop()</code>. What is that protecting against?</p>
+          <div class="q-opts">
+            <button data-opt="a">A memory leak from the list growing forever</button>
+            <button data-opt="b">A ghost message: the failed question would stay in history, so the next reply would answer something the user believes was never sent</button>
+            <button data-opt="c">Nothing — it is just tidiness with no visible effect</button>
+          </div>
+          <p class="q-explain">The user message goes into history before the call. If the call fails and the message stays, the transcript no longer matches what the user saw on screen — and the next successful reply would eerily respond to the "lost" question. Popping keeps memory and reality in sync.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. The streaming loop both prints each chunk and appends it to <code>parts</code>. Why collect the chunks at all?</p>
+          <div class="q-opts">
+            <button data-opt="a">History needs the complete reply as one string, so the fragments are reassembled with <code>"".join(parts)</code></button>
+            <button data-opt="b">To count how many chunks arrived, for billing</button>
+            <button data-opt="c">Printing consumes the text, so a backup copy is required</button>
+          </div>
+          <p class="q-explain">Streaming is only a delivery mechanism — the transcript still stores whole messages. The chunks are shown live for the user AND glued back together so the assistant's turn can join the history in one piece.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. You want to upgrade this app with RAG so it can answer questions about your company's documents. Where does the retrieval step go?</p>
+          <div class="q-opts">
+            <button data-opt="a">After the reply arrives — retrieve documents to double-check the answer</button>
+            <button data-opt="b">Between reading the user's input and calling the API — retrieve relevant text and include it in the message</button>
+            <button data-opt="c">Inside <code>make_client()</code>, when the program starts</button>
+          </div>
+          <p class="q-explain">RAG (chapter 42) fetches relevant context and puts it in front of the model, so it must happen before the API call that needs it: read the question, retrieve, stuff the findings into the message, then send. The rest of the file does not change.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. What breaks if you remove <code>flush=True</code> from the streaming print?</p>
+          <div class="q-opts">
+            <button data-opt="a">The program crashes with a TypeError</button>
+            <button data-opt="b">The reply text is lost and history stores an empty string</button>
+            <button data-opt="c">Nothing crashes — but Python buffers the output, so the smooth "typing" effect turns into jerky bursts</button>
+          </div>
+          <p class="q-explain">Python holds printed text in a buffer and releases it in batches for efficiency. <code>flush=True</code> forces each chunk onto the screen the instant it arrives. Without it the code still works; it just looks like the model is thinking in spasms.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A complete chat app is about sixty lines: a client, a history list, an infinite loop, one streaming API call, a quit command, and an error handler. Everything else in every chat product is decoration on this chassis.</li>
+          <li>The <code>history</code> list is the entire memory of the conversation, and it is re-sent whole on every turn because the model is stateless — that is why costs grow as chats get longer.</li>
+          <li>Streaming is a delivery mechanism, not a different kind of answer: chunks are printed live for the human and reassembled with <code>"".join(parts)</code> for the transcript.</li>
+          <li>Good error handling keeps memory consistent with reality — <code>history.pop()</code> after a failed call removes the question that never got answered.</li>
+          <li>Every other Act IV idea — sampling, tools, structured output, RAG, async — bolts onto a specific, identifiable line of this file.</li>
+          <li>Reading unfamiliar code is a two-pass skill: skim for the story first, then go line by line until every line is boring.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

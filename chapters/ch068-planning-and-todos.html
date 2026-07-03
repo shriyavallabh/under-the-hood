@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The planning tool — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch068">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VIII · Deep Agents</div>
+        <h1>The planning tool</h1>
+        <p class="ch-tagline">A tool that changes nothing in the world — no file, no API call, no side effect — yet reliably makes agents better at long tasks. This chapter explains the trick: the list is not a record of the plan, it is a way of keeping the plan in front of the model's eyes.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 69 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>The best wedding planner in the city carries a battered clipboard, and she rewrites her list constantly. Not once in the morning — constantly. After the flowers arrive: full rewrite. After the caterer calls: full rewrite. Her new assistant finally asks why she wastes time copying out a list she already wrote. She laughs. "The list has never carried a chair or folded a napkin. But a wedding day is loud. Whatever I wrote at seven a.m. is forty decisions behind me by noon, and a person who trusts her morning self gets surprised by her afternoon. Rewriting the list is how I remember what matters <em>now</em>."</p>
+        <p>Then the florist's van breaks down on the highway. The assistant panics. The planner does not — she uncaps her marker, strikes one line, writes two new ones, and keeps moving.</p>
+        <p>The clipboard is this chapter. It does no work, and it is the reason all the work gets done. Agents that run for hours carry exactly this clipboard, and in deepagents the tool that holds it is called <code>write_todos</code>.</p>
+      </section>
+
+      <h2>Picking up from the dissection</h2>
+      <p>In <a href="ch067-create-deep-agent-anatomy.html">the previous chapter</a> you opened up <code>create_deep_agent</code> and found the familiar <a href="ch045-react-loop-by-hand.html">ReAct loop</a> at its core, wearing four upgrades: a planning tool, a virtual file system, subagents, and a long system prompt teaching the model how to use all three. This chapter is a deep dive on the first upgrade — the strangest of the four, because when you read its code, it appears to do nothing at all.</p>
+      <p>The other upgrades earn their keep in obvious ways. Files store things (next chapter). Subagents do work. But the planning tool accepts a list of tasks from the model and hands the very same list straight back. No disk, no network, no calculation. Submitted in a merge request with no explanation, it might be rejected as dead code.</p>
+      <p>And yet: give a long-running agent this "useless" tool, and it stops wandering off halfway through big jobs. Understanding why is really an idea about <em>attention</em> — and it applies to every model you will ever operate.</p>
+
+      <h2>A tool that does absolutely nothing</h2>
+      <p>Mechanics first. In deepagents, <code>write_todos</code> is a built-in tool, registered like any <a href="ch035-tool-calling.html">tool you have met before</a> — the model sees its name, description, and schema, and calls it when it decides to. The schema asks for one thing: a list of items, each with a <code>content</code> string and a <code>status</code> of <code>pending</code>, <code>in_progress</code>, or <code>completed</code>. On the wire, a call looks like this:</p>
+
+      <div class="code-title">what the model sends when it "plans"</div>
+      <pre><code class="language-json">{
+  "name": "write_todos",
+  "arguments": {
+    "todos": [
+      {"content": "Survey the three competitor pricing pages", "status": "completed"},
+      {"content": "Draft the comparison table",                "status": "in_progress"},
+      {"content": "Write the summary with citations",          "status": "pending"}
+    ]
+  }
+}</code></pre>
+
+      <p>And here is a conceptually faithful, simplified version of the tool itself. The real implementation stores the list in the agent's LangGraph <a href="ch058-stategraph-anatomy.html">state</a> — the typed dictionary that flows through the graph — rather than a global variable, but the shape and the point are exactly this:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">write_todos — the whole trick, simplified</div>
+        <div class="wl-line"><code>from typing import Literal, TypedDict</code>
+          <div class="wl-note"><code>Literal</code> lets a type hint say "only these exact strings are allowed" — the schema generator turns it into a menu of three valid statuses, so the model cannot invent a fourth.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>class Todo(TypedDict):</code>
+          <div class="wl-note">A <code>TypedDict</code> is a plain dictionary with a declared shape (recall <a href="ch016-type-hints-and-pydantic.html">type hints</a>). Each item is just two fields. No dates, no owners, no priorities — deliberately minimal.</div></div>
+        <div class="wl-line"><code>    content: str</code></div>
+        <div class="wl-line"><code>    status: Literal["pending", "in_progress", "completed"]</code>
+          <div class="wl-note">Three statuses. If they feel familiar, they should — they are the same three you watch flip past in Claude Code's terminal checklist. Same lineage, as we will see.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>def write_todos(todos: list[Todo]) -&gt; str:</code>
+          <div class="wl-note">Note the argument: the <em>entire</em> list, every time. There is no <code>add_item</code> or <code>check_off_item</code>. To change one entry the model must restate the whole plan — and that restating, not the storage, is the feature.</div></div>
+        <div class="wl-line"><code>    """Create or update the task list for this job."""</code>
+          <div class="wl-note">The real tool's docstring is much longer — it coaches the model on when to plan (multi-step work), when not to (trivial asks), and how to maintain statuses. The description is doing prompt engineering, a trick you saw in <a href="ch037-prompting-that-matters.html">the prompting chapter</a>.</div></div>
+        <div class="wl-line"><code>    state["todos"] = todos   # agent state, not your disk</code>
+          <div class="wl-note">The list lives in run-scoped agent state — memory inside the graph, not a file on your machine. Nothing outside the agent changes. This is the "does nothing" line.</div></div>
+        <div class="wl-line"><code>    return f"Updated the list to {todos}"</code>
+          <div class="wl-note">The payoff line, hiding in plain sight. The tool result — containing the full, fresh plan — is appended to the transcript, right at the end, where the model's next turn will see it most clearly.</div></div>
+      </div>
+
+      <p>Read that last annotation again, because the entire chapter turns on it. Every tool result gets appended to the conversation history — that is just how <a href="ch045-react-loop-by-hand.html">the loop</a> works. So every time the model calls <code>write_todos</code>, a complete, current copy of its plan lands at the <em>newest</em> end of its own context. The tool is not a storage device. It is a delivery mechanism.</p>
+
+      <h2>Why writing it down makes the model smarter</h2>
+      <p>To see why delivery matters, remember two facts from earlier acts. First, from <a href="ch047-memory-and-context.html">the memory chapter</a>: a model has no memory between turns — everything it "knows" about the task is rebuilt, every turn, from the transcript you send it. Second, from <a href="ch030-tokens-embeddings-context.html">the context chapter</a>: attention over a long context is not uniform. Models attend most reliably to the beginning and the end of what they are given; material buried in the middle of a very long transcript gets noticeably less pull — researchers call this the <em>lost in the middle</em> effect.</p>
+      <p>Now picture an agent three hundred turns into a research task. The goal statement — the whole point of the run — was message one. Since then the transcript has filled with tens of thousands of tokens of tool chatter: search results, file contents, half-relevant web pages. The goal has not been deleted. It has done something quieter and worse: sunk into the saggy middle of the context, while the freshest, most attention-grabbing tokens are whatever the last tool spat out. This is why long-running agents drift. Nobody erased the plan; it just stopped being the loudest thing in the room.</p>
+      <p>The task list is the counter-move. Each time the agent updates its list, the full plan re-enters the transcript at the tail — the position attention favours most. The builders of Manus, a well-known autonomous agent, named this trick <dfn>recitation</dfn>: the agent constantly rewrites its own plan so that the global objective keeps appearing in the model's recent attention span, instead of receding into the middle. Their agent famously maintained a markdown checklist file it rewrote as it worked — same clipboard, different stationery.</p>
+      <p>Watch the geometry of it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Turn 2: plan is fresh">
+          <h3>1. Early in the run, the plan is at the tail</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Goal<small>message 1</small></div>
+              <span class="d-arrow">&#8595;</span>
+              <div class="d-box hot">Plan<small>write_todos result</small></div>
+              <span class="d-arrow">&#8595;</span>
+              <div class="d-box">First tool results</div>
+            </div>
+          </div>
+          <p class="step-cap">Turn two. The transcript is short, the plan sits near the end, and the model's next move is obviously anchored to it. Everything works; no trick needed yet.</p>
+        </div>
+        <div class="step" data-title="Turn 300: plan is buried">
+          <h3>2. Deep into the run, the plan has sunk</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Goal<small>message 1</small></div>
+              <span class="d-arrow">&#8595;</span>
+              <div class="d-box dim">Plan<small>40,000 tokens ago</small></div>
+              <span class="d-arrow">&#8595;</span>
+              <div class="d-box">Tool noise<small>searches, pages, logs</small></div>
+              <span class="d-arrow">&#8595;</span>
+              <div class="d-box hot">Latest tool result<small>loudest thing in the room</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Turn three hundred. Attention favours the tail; the plan is stranded in the middle. The model steers by whatever it saw last — the moment agents chase a side quest and forget step four existed.</p>
+        </div>
+        <div class="step" data-title="Recite">
+          <h3>3. The agent calls write_todos again</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Tool noise</div>
+              <span class="d-arrow">&#8595;</span>
+              <div class="d-box hot">write_todos<small>full list, statuses updated</small></div>
+              <span class="d-arrow">&#8595;</span>
+              <div class="d-box good">Fresh plan at the tail<small>attention re-anchored</small></div>
+            </div>
+          </div>
+          <p class="step-cap">One tool call, and a complete current copy of the plan is the newest thing in the context. The model's next turn reads it first. The world did not change — the model's field of view did.</p>
+        </div>
+        <div class="step" data-title="Steady state">
+          <h3>4. Recite regularly, and the plan never sinks far</h3>
+          <div class="diagram">
+            <div class="d-box good">Plan<small>recited</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">work</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Plan<small>recited</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">work</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Plan<small>recited</small></div>
+          </div>
+          <p class="step-cap">A well-prompted deep agent updates the list after every meaningful step — so the plan is never more than a few turns from the tail. Each rewrite is also a progress report you, the operator, can read.</p>
+        </div>
+      </div>
+
+      <p>There is a second, quieter benefit. Writing a plan forces the model to <em>commit</em>. A vague intention ("research the competitors, then summarise") becomes checkable text with statuses — and once "3 pending, 1 in progress" exists in the transcript, finishing early or skipping a step is visibly inconsistent with the model's own words. The list turns "did I finish?" from a feeling into a lookup.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">planning tool</span><span class="flip-back">A tool whose only job is to hold the agent's task list in state. It changes nothing outside the agent — its value is what it does to the context.</span></button>
+        <button class="flip" type="button"><span class="flip-front">recitation</span><span class="flip-back">Repeatedly rewriting the plan so it re-enters the recent end of the context, where attention is strongest. The cure for "lost in the middle".</span></button>
+        <button class="flip" type="button"><span class="flip-front">write_todos</span><span class="flip-back">deepagents' built-in planning tool. Takes the full list of {content, status} items and overwrites the previous list — no partial edits.</span></button>
+        <button class="flip" type="button"><span class="flip-front">plan-and-execute</span><span class="flip-back">An agent pattern: draft the whole plan first, then execute steps one by one. Coherent on long tasks, brittle when reality disagrees with the plan.</span></button>
+        <button class="flip" type="button"><span class="flip-front">stale plan</span><span class="flip-back">A plan the world has overtaken — a step is now impossible, pointless, or missing. Recovery is one tool call: rewrite the list.</span></button>
+        <button class="flip" type="button"><span class="flip-front">plan churn</span><span class="flip-back">The opposite failure: endlessly rewriting the list without executing anything. Real motion on the clipboard, zero motion in the world.</span></button>
+      </div>
+
+      <h2>See it fail, then see it recover</h2>
+      <p>Claims about attention are easy to nod along to and hard to feel, so here is a toy you can poke. The "model" below is a scripted stand-in with one deliberate handicap: it can only see the last four lines of its transcript — a brutally exaggerated version of the fade real attention applies to a long context. We give it a three-item party plan, let tool chatter pile up, and run it twice: once with the plan written only at the start, once with a <code>write_todos</code>-style recitation re-appending the list after every step. Same model, same window, same tasks. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="the recitation effect, simulated — run me">
+<textarea class="py-src" spellcheck="false">
+import re
+
+WINDOW = 4  # our toy model only "attends" to the last 4 transcript lines
+
+def fake_llm(visible_lines):
+    """A scripted model. It can only reason over what it can see."""
+    plan = None
+    for line in reversed(visible_lines):      # the newest plan it can see
+        if line.startswith("PLAN:"):
+            plan = line
+            break
+    if plan is None:                          # the plan has faded from view
+        return "FINAL: looks finished to me"
+    pending = [p.strip() for p in re.findall(r"\[pending\] ([a-z ]+)", plan)]
+    evidence = " ".join(l for l in visible_lines if l.startswith("RESULT:"))
+    for item in pending:
+        if item not in evidence:              # not visibly done yet
+            return "ACT: " + item
+    return "FINAL: every item is checked off"
+
+def run(recite):
+    todos = [["book venue", "pending"], ["send invites", "pending"],
+             ["order cake", "pending"]]
+    def render():
+        return "PLAN: " + " | ".join(f"[{s}] {t}" for t, s in todos)
+    history = [render()]                      # the plan, written once
+    for turn in range(1, 8):
+        reply = fake_llm(history[-WINDOW:])   # the attention window
+        print(f"  turn {turn}: {reply}")
+        if reply.startswith("FINAL"):
+            break
+        item = reply[5:]
+        history.append(f"RESULT: {item} -- done")
+        history.append("NOISE: vendor sent a 12-page attachment")
+        history.append("NOISE: calendar app chattered")
+        for t in todos:
+            if t[0] == item:
+                t[1] = "done"
+        if recite:                            # the write_todos effect:
+            history.append(render())          # fresh plan re-enters the window
+    done = [t for t, s in todos if s == "done"]
+    print(f"  completed {len(done)} of 3 tasks: {done}\n")
+
+print("WITHOUT recitation (plan written once, then sinks):")
+run(recite=False)
+print("WITH recitation (plan re-appended after every step):")
+run(recite=True)
+</textarea>
+      </div>
+
+      <p>Without recitation, the run ends with a confident "looks finished to me" — and the cake never gets ordered. Nothing crashed. The model did not disobey. The plan simply slid out of view under two lines of noise per step, and a model cannot follow a plan it cannot see. With recitation, the identical model completes all three tasks — the list keeps re-entering the window it actually reads.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now experiment. Widen <code>WINDOW</code> to 10 and watch the no-recitation run succeed — short tasks do not need planning tools, which is exactly why Claude Code skips the checklist for small asks. Then add three more noise lines per step and watch even the wide window fail. The ratio of noise to plan is the whole game, and real agent transcripts are almost all noise.</p></div>
+
+      <h2>Three ways to plan</h2>
+      <p>The living task list is best understood as the middle path between two older patterns. Pure <a href="ch045-react-loop-by-hand.html">ReAct</a> keeps the plan implicit: the model decides one step at a time, holding its intentions "in its head" — meaning nowhere. It adapts instantly to surprises but drifts badly on long horizons, as you just simulated. At the other extreme, <dfn>plan-and-execute</dfn> is a pattern where the model drafts the complete plan up front, then an executor marches through it step by step. It is coherent and cheap (the executor steps can even run on a smaller model), but brittle: when step two's results make step five pointless, a frozen plan executes step five anyway.</p>
+      <p>The deep-agents list is plan-and-execute with the freeze removed. The plan is explicit — written down, checkable, recited — but it is a <em>living document</em> the agent may rewrite on any turn, because rewriting costs exactly one tool call. You get ReAct's adaptability and plan-and-execute's coherence, paying only a few extra tokens per recitation.</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>Pure ReAct</th><th>Plan-and-execute</th><th>Living task list</th></tr>
+        <tr><td>Where the plan lives</td><td>Implicit — nowhere</td><td>Fixed, written once up front</td><td>Explicit, rewritten as the task evolves</td></tr>
+        <tr><td>On a surprise</td><td>Adapts instantly, may forget the goal</td><td>Keeps executing the stale plan</td><td>One <code>write_todos</code> call rewrites the route</td></tr>
+        <tr><td>Long-horizon coherence</td><td>Drifts</td><td>Strong until reality disagrees</td><td>Strong — the plan is recited into view</td></tr>
+        <tr><td>Where you have seen it</td><td>Quick chat-with-tools bots</td><td>Older pipeline tutorials</td><td>Claude Code, deepagents, Manus</td></tr>
+      </table></div>
+
+      <h2>When the plan goes stale</h2>
+      <p>A <dfn>stale plan</dfn> is one the world has overtaken: a pending step turns out to be impossible (the API the plan assumed does not exist), pointless (step two's findings already answer step five), or incomplete (the work uncovered three subtasks nobody listed). Staleness is not a failure — on any real multi-hour task it is a certainty. What separates good agents from bad is the recovery move, and here it is beautifully small: call <code>write_todos</code> again with a corrected list. Mark the dead step completed-with-a-note or drop it, split the step that grew, insert the discoveries. Because the tool overwrites the whole list, a replan and a recitation are the same act — recovering from staleness automatically re-anchors attention too.</p>
+      <p>Two failure modes bracket the healthy behaviour. <em>Plan-clinging</em>: the agent grinds through step four even though step two's results made it moot — doggedly doing work whose premise has collapsed. <em>Plan churn</em>: the agent rewrites its list five times in a row without executing anything — motion on the clipboard, none in the world. The system prompts that ship with these tools push against both, with rules you can almost quote if you have watched Claude Code work: keep exactly <em>one</em> item <code>in_progress</code> at a time; mark an item completed immediately when done, never batching completions; add newly discovered work to the list instead of silently doing it. Each rule has a purpose — one <code>in_progress</code> item makes drift detectable at a glance, immediate completion keeps the transcript's story true, and listing discovered work keeps the plan honest about the real size of the job.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>A task list makes an agent look organised, and looks can be bought cheaply. The list is self-reported: an agent can mark a step <code>completed</code> having done it badly, or having not done it at all. Planning tools fix attention, not honesty — verification (tests, checks, a reviewer agent) is a separate discipline, and <a href="ch048-failure-modes.html">the failure-modes chapter</a> is why you never skip it.</p></div>
+
+      <h2>You have been watching this tool for months</h2>
+      <p>If you operate Claude Code, none of this is new — you have just been seeing it from the outside. That checklist that appears in your terminal on any multi-step job, with items flipping from open to in-progress to done? That is <code>TodoWrite</code>, Claude Code's planning tool: same three statuses, same overwrite-the-whole-list semantics, same purpose. deepagents' <code>write_todos</code> is built quite openly on that playbook. Every pattern in this chapter is something you have watched happen live: the list appearing a few seconds into a big task (the plan being drafted), an item quietly splitting into three mid-run (stale-plan recovery), the single glowing in-progress item (the one-at-a-time rule).</p>
+      <p>And this hands you, the operator, a real lever: the task list is the agent's steering wheel, and it is visible. When the plan appears, read it. If step three aims at the wrong target, interrupting now costs seconds; letting the agent find out at step three costs twenty minutes and a pile of tokens. You are being shown the model's intentions before it acts on them — very few systems in your professional life are that courteous.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet planning tools everywhere agents run long. In deepagents code, look for <code>write_todos</code> in the tool list and a <code>todos</code> key in agent state. In Claude Code transcripts, the tool is <code>TodoWrite</code>. Manus's engineering write-ups describe the checklist file it rewrites as it works, and coined "recitation" for the practice. In merge requests you will read "gave the research agent a planning tool — long runs stopped losing the thread", and in system prompts you will find whole paragraphs coaching the model on when to plan and how to keep statuses current. When someone says an agent "keeps abandoning tasks halfway", your first diagnostic question writes itself: where is its plan, and when did the model last see it?</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. What does <code>write_todos</code> actually change when the model calls it?</p>
+          <div class="q-opts">
+            <button data-opt="a">It creates a checklist file on the user's disk</button>
+            <button data-opt="b">It schedules the listed tasks to run automatically</button>
+            <button data-opt="c">It updates a list in the agent's state and puts the fresh plan into the transcript — nothing outside the agent changes</button>
+          </div>
+          <p class="q-explain">The tool has no external side effect at all. Its entire value is internal: the current plan lands at the newest end of the context, where the model's next turn will attend to it most strongly.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Why does rewriting the task list help a model on a 300-turn task?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model permanently memorises anything it writes down</button>
+            <button data-opt="b">Attention favours the recent end of a long context, and each rewrite moves the plan back there — the recitation effect</button>
+            <button data-opt="c">Shorter lists reduce the per-turn token bill</button>
+          </div>
+          <p class="q-explain">Models rebuild their understanding from the transcript every turn, and material buried in the middle of a long context gets less attention. Recitation keeps dragging the plan back to the tail, where it is read most reliably. (Option a is exactly what models cannot do — they have no memory between turns.)</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. How does a living task list differ from classic plan-and-execute?</p>
+          <div class="q-opts">
+            <button data-opt="a">The plan stays explicit but can be rewritten on any turn, so a surprise costs one tool call instead of a stale march</button>
+            <button data-opt="b">It removes the need for a plan entirely</button>
+            <button data-opt="c">It lets the plan run without a model</button>
+          </div>
+          <p class="q-explain">Plan-and-execute freezes the plan up front and marches through it, which breaks when reality disagrees. The living list keeps the explicitness — written, checkable, recited — while making replanning as cheap as any other tool call.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Mid-run, the agent discovers that step 3 of its plan is impossible. What is the healthy recovery?</p>
+          <div class="q-opts">
+            <button data-opt="a">Keep executing the remaining steps as written — consistency matters most</button>
+            <button data-opt="b">Abandon planning and improvise the rest of the task</button>
+            <button data-opt="c">Call <code>write_todos</code> with a corrected list — drop or replace the dead step and carry on</button>
+          </div>
+          <p class="q-explain">Stale plans are a certainty on long tasks, not a failure. Because the tool overwrites the whole list, the replan doubles as a recitation — the corrected plan re-anchors attention in the same call. Option a is plan-clinging; option b throws away the anchor.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Why do these tools' prompts insist on exactly one item being <code>in_progress</code> at a time?</p>
+          <div class="q-opts">
+            <button data-opt="a">Models are technically unable to have two items in progress</button>
+            <button data-opt="b">It keeps the transcript's story honest and makes drift visible — to the model and to you — at a glance</button>
+            <button data-opt="c">It reduces API costs by limiting parallel calls</button>
+          </div>
+          <p class="q-explain">It is a discipline rule, not a technical limit. One glowing item means the list always answers "what is the agent doing right now?" truthfully — which is what lets an operator (or the model itself, on its next turn) spot a wander the moment it starts.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li><code>write_todos</code> is deliberately a no-op on the world: it stores {content, status} items in agent state and returns the list as a tool result. Its power is entirely in what that does to the context.</li>
+          <li>Models rebuild their understanding from the transcript every turn, and attention favours the recent end of a long context — so an unrecited plan sinks into the "lost in the middle" zone and the agent drifts.</li>
+          <li>Recitation — rewriting the full plan so it re-enters the tail of the context — is the fix, and the overwrite-the-whole-list design of <code>write_todos</code> makes every update a recitation for free.</li>
+          <li>The living task list is the middle path: pure ReAct adapts but drifts, plan-and-execute stays coherent but clings to stale plans, and a rewritable plan gives you both for one tool call per update.</li>
+          <li>Healthy plan hygiene: one item <code>in_progress</code>, mark items done immediately, add discovered work to the list. Watch for the two bracketing failures — plan-clinging and plan churn.</li>
+          <li>Claude Code's <code>TodoWrite</code> checklist is this exact tool worn on the outside. Read the plan when it appears — it shows you the agent's intentions before it spends your time and tokens on them.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What import actually does — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch011">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act II · The Engineering Layer</div>
+        <h1>What import actually does</h1>
+        <p class="ch-tagline">The lines at the top of every Python file look like boilerplate. They are not. Each one is a courier with a strict search route, a one-time reading ritual, and a superb memory. By the end of this chapter you will know exactly what happens — step by step — when a file says <code>import</code>.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 11 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>It is your first week at a big law firm, and you need the Stamp Duty Ready Reckoner. You do not go hunting for it yourself — you ask the archives clerk, a man of iron routine. First he checks the trolley beside his desk, where every book fetched earlier that day already sits. If your book is on the trolley, you get <em>that same copy</em>, instantly. If not, he walks his fixed route, always in the same order: the firm's own shelf first, then the standard reference wall, then the bought-in collection at the back. The first place that has the title wins; he never keeps searching after a match.</p>
+        <p>And here is his one eccentric habit: the very first time a book is fetched, he reads it cover to cover and sticks an index tab on every section — so that everyone after you gets a fully tabbed copy in seconds. Back at your desk, you write a short label on a slip of paper: "Reckoner". That slip is yours alone; the book is shared.</p>
+        <p>That clerk is <code>import</code>. The trolley, the route, the one-time reading, the label on your desk — Python does all four, every time, in exactly that order.</p>
+      </section>
+
+      <h2>You have been taking these lines on faith</h2>
+      <p>In <a href="ch010-reading-real-code-1.html">the last chapter</a> you read a real script that called a live LLM, and its first two lines were <code>import os</code> and <code>import requests</code>. You could read every other line by then, but those two you took on trust: "this makes <code>os</code> and <code>requests</code> available, somehow." And back in <a href="ch002-names-and-objects.html">names and objects</a> you learned that Python's assignment is just sticking a name label on an object. Hold on to that idea, because it is about to pay off: <strong>import is an assignment in disguise</strong>. It finds a file, runs it once, and binds a name to the result. Three moves. That is the whole trick — the rest of this chapter is watching each move in slow motion.</p>
+
+      <p>First, meet the three spellings you will see at the top of nearly every file:</p>
+
+      <div class="code-title">the three faces of import</div>
+      <pre><code class="language-python">import json                    # fetch the whole book; label it "json"
+from pathlib import Path       # fetch the whole book; label ONE chapter: "Path"
+import numpy as np             # fetch the whole book; label it with a nickname</code></pre>
+
+      <p>The differences are smaller than they look. <code>import json</code> brings the whole module to your desk under its own name — you then reach into it with a dot: <code>json.loads(...)</code>. <code>from pathlib import Path</code> does <em>exactly as much work</em> — the whole <code>pathlib</code> file still runs, cover to cover — but only one name, <code>Path</code>, lands on your desk. It is the photocopied chapter, not a lighter fetch. And <code>as</code> is nothing but a relabel: the book is the same, your slip of paper says <code>np</code>. That is it. Three keywords, one mechanism, different labels.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>A common early misconception: "I used <code>from pathlib import Path</code> so Python only loaded the <code>Path</code> part — that must be faster." It is not. The module always runs in full; <code>from ... import ...</code> only changes which names get copied onto your desk afterwards. Choose between the forms for readability, never for speed.</p></div>
+
+      <h2>A module is a file. A package is a folder.</h2>
+      <p>Time to name the machinery properly. A <dfn>module</dfn> is simply a <code>.py</code> file — one file, one module, no ceremony. The file <code>tools.py</code> <em>is</em> the module <code>tools</code>. A <dfn>package</dfn> is simply a folder that groups modules together, so that related files can travel under one name. When you see a dotted name in an import, you are reading a folder path with the slashes swapped for dots:</p>
+
+      <div class="code-title">a small project, and the imports that reach into it</div>
+      <pre><code class="language-python"># the folder tree on disk          # the import that reaches it
+#
+# agents/                          import agents
+#     __init__.py
+#     tools.py                     import agents.tools
+#     prompts.py                   from agents.prompts import SYSTEM_PROMPT
+#     memory/
+#         __init__.py
+#         store.py                 from agents.memory.store import save</code></pre>
+
+      <p>So <code>agents.memory.store</code> is not an incantation — it is a street address: folder <code>agents</code>, subfolder <code>memory</code>, file <code>store.py</code>. Once you see dotted imports as file paths, unfamiliar codebases become navigable: every <code>from x.y.z import thing</code> at the top of a file tells you exactly which drawer to open.</p>
+
+      <p>Which leaves that odd little file, <dfn>__init__.py</dfn> — the index card taped to the front of the cabinet. It does two jobs. First, it marks the folder as a package: "these files belong together, treat this folder as importable." Second — and this surprises people — <strong>it is a real module that runs</strong> whenever the package is first imported. Most <code>__init__.py</code> files are empty, and empty is perfectly respectable. But library authors often use it as a front desk, lifting the best names up to the surface so users can write <code>from agents import Researcher</code> instead of memorising the internal file layout:</p>
+
+      <div class="code-title">agents/__init__.py — a front desk for the package</div>
+      <pre><code class="language-python"># Lift the names users need up to the package's front door.
+from agents.researcher import Researcher
+from agents.tools import web_search</code></pre>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Modern Python can technically import from a folder with no <code>__init__.py</code> (a "namespace package"), but nearly every real project still includes the file — it makes intent explicit and keeps tools happy. When you browse a repository and see empty <code>__init__.py</code> files everywhere, nothing is missing. They are load-bearing blanks.</p></div>
+
+      <p>Before we follow the clerk down his route, pin the vocabulary. Flip each card until the back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">module</span><span class="flip-back">One .py file. The file greetings.py is the module greetings. Nothing more to it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">package</span><span class="flip-back">A folder of modules travelling under one name. Dots in an import are the folder path: agents.memory.store.</span></button>
+        <button class="flip" type="button"><span class="flip-front">__init__.py</span><span class="flip-back">The index card on the package's front: marks the folder as importable, and runs first when the package is imported. Often empty, always meaningful.</span></button>
+        <button class="flip" type="button"><span class="flip-front">sys.path</span><span class="flip-back">The clerk's route: an ordered list of folders Python searches for a module. First match wins.</span></button>
+        <button class="flip" type="button"><span class="flip-front">sys.modules</span><span class="flip-back">The trolley: a dict of every module already imported this run. A cache hit here means the file is never read again.</span></button>
+        <button class="flip" type="button"><span class="flip-front">name binding</span><span class="flip-back">The slip of paper on your desk. import json ends with an assignment: your file's name json now points at the shared module object.</span></button>
+      </div>
+
+      <h2>The search route: how Python finds things</h2>
+      <p>When Python meets <code>import agents</code>, where does it look? Not "everywhere" — that would be slow and unpredictable. It follows one ordered list, called <dfn>sys.path</dfn> — a plain Python list of folder paths that Python walks from front to back, taking the first match it finds. And before it takes even one step, it checks the trolley. Step through the route:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Check the cache">
+          <h3>1. Check the trolley first: sys.modules</h3>
+          <div class="diagram">
+            <div class="d-box hot">sys.modules<small>the cache — already imported this run?</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">sys.path<small>the search route</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">ModuleNotFoundError</div>
+          </div>
+          <p class="step-cap">Every import begins with a lookup in <code>sys.modules</code>, a dict (the very kind you met in <a href="ch004-collections.html">collections</a>) mapping module names to already-loaded module objects. Cache hit? Done — no file is opened, no code runs, you just get the existing object. This is why importing the same module in fifty files costs almost nothing.</p>
+        </div>
+        <div class="step" data-title="Your project first">
+          <h3>2. Cache miss: start walking sys.path — your project first</h3>
+          <div class="diagram">
+            <div class="d-box dim">sys.modules</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">script's folder<small>sys.path entry 0</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">stdlib<small>reference wall</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">site-packages</div>
+          </div>
+          <p class="step-cap">The first entry on the route is the folder containing the script you ran. Your own files win before anything else — convenient, and occasionally a trap: name a file <code>json.py</code> in your project and every <code>import json</code> nearby now fetches <em>your</em> file instead of the standard library. A classic, baffling bug that you can now diagnose in seconds.</p>
+        </div>
+        <div class="step" data-title="Standard library">
+          <h3>3. Then the standard library</h3>
+          <div class="diagram">
+            <div class="d-box dim">script's folder</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">stdlib<small>json, os, pathlib — ships with Python</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">site-packages</div>
+          </div>
+          <p class="step-cap">Next stop: the standard reference wall — the folders where Python's built-in modules live. <code>os</code>, <code>json</code>, <code>pathlib</code>, hundreds more, installed alongside Python itself. No download needed, ever.</p>
+        </div>
+        <div class="step" data-title="site-packages">
+          <h3>4. Then site-packages: everything pip installed</h3>
+          <div class="diagram">
+            <div class="d-box dim">stdlib</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">site-packages<small>requests, anthropic, langchain…</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">not found</div>
+          </div>
+          <p class="step-cap">The bought-in collection: a folder called <code>site-packages</code> where <code>pip install</code> drops third-party libraries. When <a href="ch010-reading-real-code-1.html">last chapter's script</a> said <code>import requests</code>, the clerk found it here. Which folder this is depends on your active environment — the subject of <a href="ch020-environments-and-packaging.html">chapter 20</a>.</p>
+        </div>
+        <div class="step" data-title="Not found">
+          <h3>5. End of the route: ModuleNotFoundError</h3>
+          <div class="diagram">
+            <div class="d-box dim">site-packages</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">ModuleNotFoundError<small>No module named 'reqeusts'</small></div>
+          </div>
+          <p class="step-cap">If the whole route yields nothing, Python raises <code>ModuleNotFoundError</code> — a traceback you already know how to read <a href="ch009-errors-and-tracebacks.html">bottom-up</a>. Ninety per cent of the time it means one of two things: a typo in the name, or the library is not installed in the environment that is actually running. Not mysterious. Just a clerk reporting an empty route.</p>
+        </div>
+      </div>
+
+      <p>Do not take my word for the route — print it. The runner below is live Python; the paths you see belong to the Python running inside your browser, but the shape is the same on any machine. We use <code>colorsys</code> as our test book because it is a sleepy little stdlib module nobody loads by default:</p>
+
+      <div class="pyrun" data-title="Inspect the route and the trolley — run me">
+<textarea class="py-src" spellcheck="false">
+import sys
+
+print("The route Python walks, in order (sys.path):")
+for i, entry in enumerate(sys.path):
+    print(f"  {i}. {entry or '(the current folder)'}")
+
+print()
+print("Books on the trolley already:", len(sys.modules), "modules")
+print("Is 'colorsys' on the trolley yet?", "colorsys" in sys.modules)
+
+import colorsys
+print("And after importing it?       ", "colorsys" in sys.modules)
+
+# Import it 'again' under a new label -- watch what happens:
+import colorsys as cs
+print("Same shared object both times?", cs is colorsys)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now poke at it. Change <code>colorsys</code> to a name that does not exist (misspell it) and read the <code>ModuleNotFoundError</code> for yourself. Then try <code>import json</code> and check whether it was <em>already</em> on the trolley before you asked — in many Python environments, some modules are loaded during startup, which is the cache doing its job before you even arrive.</p></div>
+
+      <h2>What actually happens at import time</h2>
+      <p>Here is the part that changes how you read every Python file from now on. When the clerk fetches a book for the first time, he reads it cover to cover — and Python does this literally: on first import, <strong>the module's code runs, top to bottom, exactly once</strong>. Every line. <code>def</code> lines execute and build function objects, just as you saw in <a href="ch007-functions.html">functions</a> — a <code>def</code> is not a passive declaration, it is a statement that runs and creates something. Top-level assignments run. And any loose <code>print(...)</code> or network call sitting at the top level of the file? It fires the moment someone imports the module — which is why well-behaved libraries keep their top level quiet: define things, do nothing.</p>
+      <p>The finished module object — with all its functions and variables attached — then goes on the trolley, and only <em>then</em> does your name get bound. Three moves, remember: <strong>find</strong> (the route), <strong>run once</strong> (the reading), <strong>bind</strong> (the label). The runner below performs an import <em>by hand</em>, doing each move ourselves, and then proves that the real <code>import</code> statement happily accepts our hand-made module — because a cache hit never checks where the book came from:</p>
+
+      <div class="pyrun" data-title="Perform an import by hand — run me">
+<textarea class="py-src" spellcheck="false">
+import sys, types
+
+# The contents of an imaginary file, greetings.py.
+# (In a real project this text would live on disk.)
+source = '''
+print("   ...greetings.py is RUNNING, top to bottom...")
+
+def hello(name):
+    return "Namaste, " + name
+
+FAVOURITE_CHAI = "adrak"
+'''
+
+print("MOVE 1 - find: we have the file's code in hand.")
+
+print("MOVE 2 - run it ONCE into a fresh, empty namespace:")
+module = types.ModuleType("greetings")
+exec(source, module.__dict__)          # this is the 'reading cover to cover'
+
+print("MOVE 3 - cache it on the trolley:")
+sys.modules["greetings"] = module
+
+print()
+print("Now watch a real import statement find our module:")
+import greetings                       # cache hit! the file does NOT run again
+print("greetings.hello('friend') ->", greetings.hello("friend"))
+print("greetings.FAVOURITE_CHAI  ->", greetings.FAVOURITE_CHAI)
+
+print()
+print("Import it a second time. Look for the RUNNING message... silence:")
+import greetings
+print("Still the exact same object?", sys.modules["greetings"] is greetings)
+</textarea>
+      </div>
+
+      <p>Read that output carefully: the "RUNNING" line printed once, during <em>our</em> <code>exec</code>, and never again — even though we wrote <code>import greetings</code> twice afterwards. The cache answered both times. This one fact explains several things you may have noticed operating real systems: why the first request to a freshly started service is slow (imports are running), why a config value read at the top of a module ignores changes made later (it ran once, at import), and why restarting a process is the only way to truly re-import everything.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>"Runs once per program" cuts both ways. If a module's top level does something heavy or has side effects — opens a connection, reads a large file — every importer pays that cost the first time, and <em>no one</em> can opt out. When you see agent frameworks lazily importing things inside functions, this is what they are dodging: they want startup fast and side effects deferred.</p></div>
+
+      <h2>Reading a real import block — and the two dialects</h2>
+      <p>You now know enough to read the top of any professional Python file the way a reviewer does. Below is the header of a typical file inside an AI project — click each annotated line:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">agents/researcher.py — the import block, annotated</div>
+        <div class="wl-line"><code>import os</code>
+          <div class="wl-note">Standard library, whole-module form. Found on the reference wall (stepper step 3). The convention: stdlib imports come first, as their own group.</div></div>
+        <div class="wl-line"><code>import json</code>
+          <div class="wl-note">Also stdlib. Note both lines use plain <code>import</code> — the file will say <code>json.loads(...)</code> later, and the <code>json.</code> prefix tells every reader exactly where that function came from. Explicit beats short.</div></div>
+        <div class="wl-line"><code>from pathlib import Path</code>
+          <div class="wl-note">The photocopied chapter: all of <code>pathlib</code> runs, but only <code>Path</code> lands in this file's namespace. Used when one name is needed often and its origin is obvious.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>import requests</code>
+          <div class="wl-note">The blank line above is deliberate — group two: third-party libraries, fetched from site-packages because someone ran <code>pip install requests</code>. Same library your <a href="ch010-reading-real-code-1.html">chapter 10 script</a> used to call the LLM API.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>from agents.prompts import SYSTEM_PROMPT</code>
+          <div class="wl-note">Group three: the project's own code. This is an <dfn>absolute import</dfn> — it spells out the full address from the top-level package down: folder <code>agents</code>, file <code>prompts.py</code>, name <code>SYSTEM_PROMPT</code>. Anyone reading it knows precisely which file to open.</div></div>
+        <div class="wl-line"><code>from .tools import web_search</code>
+          <div class="wl-note">A <dfn>relative import</dfn> — the leading dot means "in MY folder": since this file lives in <code>agents/</code>, <code>.tools</code> is <code>agents/tools.py</code>. Two dots (<code>..</code>) would mean the parent folder. Compact, but it only works for files that are part of a package.</div></div>
+      </div>
+
+      <p>Those last two lines are the two dialects for importing your own code, and teams argue mildly about them. <strong>Absolute imports</strong> (<code>from agents.tools import web_search</code>) are the widely preferred default: unambiguous, greppable, and they read the same from anywhere in the project. <strong>Relative imports</strong> (<code>from .tools import web_search</code>) shine inside libraries — if the package is ever renamed, none of its internal imports need to change. The one sharp edge worth remembering: relative imports only make sense <em>inside a package</em>. Run a file directly as a script — <code>python researcher.py</code> — and Python does not consider it part of any package, so its relative imports die with <code>ImportError: attempted relative import with no known parent package</code>. If you ever hit that message, you now know it is not the code that is broken; it is <em>how the file was launched</em>.</p>
+
+      <h2>Circular imports, briefly</h2>
+      <p>One last failure mode, because you will meet it in the wild and it looks scarier than it is. Suppose <code>a.py</code> imports <code>b</code>, and <code>b.py</code> imports <code>a</code>. Each needs the other. The clerk does not deadlock — the cache saves him from that — but he does something subtler and sneakier:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="a.py starts">
+          <h3>1. a.py starts running — and is cached immediately</h3>
+          <div class="diagram">
+            <div class="d-box hot">a<small>half-finished, but already on the trolley</small></div>
+            <div class="d-box dim">b<small>not started</small></div>
+          </div>
+          <p class="step-cap">The moment Python begins running <code>a.py</code>, it places the (still mostly empty) module <code>a</code> into <code>sys.modules</code>. The book goes on the trolley <em>before</em> the reading is finished — normally harmless, and the key to what happens next.</p>
+        </div>
+        <div class="step" data-title="a imports b">
+          <h3>2. Line 1 of a.py: import b — so b.py starts running</h3>
+          <div class="diagram">
+            <div class="d-box dim">a<small>paused at line 1</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">b<small>now running top to bottom</small></div>
+          </div>
+          <p class="step-cap"><code>a</code> pauses while <code>b</code> is read cover to cover. So far, business as usual — modules importing modules is the normal state of every project.</p>
+        </div>
+        <div class="step" data-title="b imports a">
+          <h3>3. Line 1 of b.py: from a import helper — cache hit on a half-book</h3>
+          <div class="diagram">
+            <div class="d-box hot">b<small>asks the trolley for a.helper</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box warn hot">a<small>on the trolley, but helper is defined LOWER in the file — it does not exist yet</small></div>
+          </div>
+          <p class="step-cap"><code>b</code> asks for <code>a</code>. The trolley has it — cache hit! But <code>a.py</code> is paused at line 1: everything below that line, including <code>def helper()</code>, has not run yet. <code>b</code> receives a half-finished module.</p>
+        </div>
+        <div class="step" data-title="The crash">
+          <h3>4. ImportError: cannot import name 'helper'</h3>
+          <div class="diagram">
+            <div class="d-box hot">ImportError<small>cannot import name 'helper' from partially initialized module 'a'</small></div>
+          </div>
+          <p class="step-cap">Python even says "partially initialized module" in modern error messages — the diagnosis is in the traceback. The cure is structural: move the shared thing into a third module both can import, or (the pragmatic patch) move one import inside the function that uses it, deferring it until call time, when both modules are finished.</p>
+        </div>
+      </div>
+
+      <p>You do not need to master circular imports today — just recognise the smell. Two modules reaching for each other usually means one concept is living in two files, and the tidy fix is a third file both depend on. The <a href="ch012-why-so-many-files.html">next chapter</a> is about exactly that kind of layout decision.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any file in any serious Python repository — an agent framework, a data pipeline, a web service — and the first screen is an import block in the three-group convention you can now read: stdlib, third-party, own code. A line like <code>from langchain.agents import create_agent</code> is a street address into the installed <code>langchain</code> package in site-packages. Empty <code>__init__.py</code> files dot every folder tree on purpose. In CI logs and merge requests, <code>ModuleNotFoundError: No module named 'x'</code> almost always means "the pipeline's environment never installed x" — an environment problem, not a code problem — and when a reviewer comments "this will be a circular import", they mean two files reaching for each other's names before either has finished running. All of it is the clerk: the route, the trolley, the one-time read.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Your file says <code>from pathlib import Path</code>. How much of <code>pathlib</code> actually runs?</p>
+          <div class="q-opts">
+            <button data-opt="a">Only the code that defines <code>Path</code></button>
+            <button data-opt="b">None of it — the name is looked up lazily when first used</button>
+            <button data-opt="c">All of it, top to bottom — only the name binding differs from <code>import pathlib</code></button>
+          </div>
+          <p class="q-explain">Every import form does the same work: find the module, run its file once in full, cache it. <code>from ... import ...</code> only changes which names are copied into your file's namespace afterwards — the photocopied chapter, not a lighter fetch.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Twelve files in your project all say <code>import json</code>. How many times is the <code>json</code> module's code executed?</p>
+          <div class="q-opts">
+            <button data-opt="a">Twelve times — once per file</button>
+            <button data-opt="b">Once — every later import is a cache hit in <code>sys.modules</code> and returns the same shared object</button>
+            <button data-opt="c">Zero — the standard library is pre-compiled into the interpreter</button>
+          </div>
+          <p class="q-explain">The first import runs the file and puts the finished module on the trolley (<code>sys.modules</code>). The other eleven imports find it there and simply bind a name to the same object. That is why <code>cs is colorsys</code> printed <code>True</code> in the runner.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. In the import <code>from agents.memory.store import save</code>, what is <code>agents.memory.store</code>, physically, on disk?</p>
+          <div class="q-opts">
+            <button data-opt="a">Folder <code>agents</code>, subfolder <code>memory</code>, file <code>store.py</code></button>
+            <button data-opt="b">A single file named <code>agents.memory.store.py</code></button>
+            <button data-opt="c">A database of registered module names maintained by pip</button>
+          </div>
+          <p class="q-explain">Dots in an import are folder separators: packages are folders, modules are files. Reading dotted imports as file paths is how you navigate an unfamiliar repository.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Inside <code>agents/researcher.py</code>, what does the dot in <code>from .tools import web_search</code> mean?</p>
+          <div class="q-opts">
+            <button data-opt="a">Import from the standard library first</button>
+            <button data-opt="b">Import from the project's root folder</button>
+            <button data-opt="c">Import from this file's own package — <code>agents/tools.py</code></button>
+          </div>
+          <p class="q-explain">A leading dot is a relative import: "in my folder". Two dots mean the parent folder. It only works when the file is being treated as part of a package — run the file directly as a script and this line raises an ImportError about a missing parent package.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. <code>a.py</code> imports <code>b</code>, and <code>b.py</code> starts with <code>from a import helper</code> — which crashes with "cannot import name 'helper' from partially initialized module". Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">Python forbids two modules from importing each other under any circumstances</button>
+            <button data-opt="b"><code>a</code> was cached before it finished running, so when <code>b</code> asked for it, <code>helper</code> had not been defined yet</button>
+            <button data-opt="c">The <code>sys.path</code> route was searched in the wrong order</button>
+          </div>
+          <p class="q-explain">Modules go into <code>sys.modules</code> the moment they start running, not when they finish. <code>b</code> received a genuine cache hit — on a half-finished module whose lower lines (including <code>def helper</code>) had not executed yet. The fix is structural: a shared third module, or deferring the import into a function.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Import is three moves: <strong>find</strong> the module (walk <code>sys.path</code>), <strong>run</strong> its file once top-to-bottom, and <strong>bind</strong> a name in your file — an assignment in disguise.</li>
+          <li>A module is a <code>.py</code> file; a package is a folder of them; dotted import paths are folder paths. <code>__init__.py</code> marks the folder as a package and runs first when it is imported — empty is normal.</li>
+          <li><code>from x import y</code> and <code>import x as y</code> do exactly as much work as <code>import x</code> — they only change which labels land in your namespace.</li>
+          <li><code>sys.modules</code> caches every imported module for the life of the process: the code runs once, everyone shares one object, and only a restart truly re-imports.</li>
+          <li>Absolute imports (<code>from agents.tools import ...</code>) are the readable default; relative imports (<code>from .tools import ...</code>) work only inside packages and break when a file is run directly as a script.</li>
+          <li>Circular imports fail because a module is cached <em>before</em> it finishes running — "partially initialized module" in a traceback is that exact story, and the cure is restructuring, not retrying.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

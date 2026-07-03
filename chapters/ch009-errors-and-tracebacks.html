@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Errors, exceptions, and tracebacks — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch009">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act I · The Language</div>
+        <h1>Errors, exceptions, and tracebacks</h1>
+        <p class="ch-tagline">A traceback is not a wall of blame. It is a well-organised incident report — and once you learn to read it from the bottom up, errors stop being scary and become the fastest map to the fix.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 9 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Friday night, a packed restaurant. A customer orders the paneer makhani. The waiter carries the order to the pass; the head chef hands it to the curry station; the curry cook reaches into the fridge for cream — and the tub is empty. Work on that order stops dead. But nobody runs around shouting. The kitchen has a ritual: the cook fills in an incident slip. Bottom line first: <em>"FRIDGE EMPTY: no cream."</em> Above it, the chain of hands the order passed through — curry station, head chef, waiter, table 12.</p>
+        <p>The manager who picks up this slip has a trick: she reads it from the <strong>bottom</strong>. The last line says <em>what</em> went wrong; the entry above it says <em>where</em>. Everything else is just the delivery route. Python writes exactly this slip every time something breaks. It is called a <strong>traceback</strong>, and by the end of this chapter you will read a forty-line one the way that manager reads her slip: calmly, bottom-up, straight to the point.</p>
+      </section>
+
+      <h2>Two kinds of going wrong</h2>
+      <p>Before any syntax, one distinction that will serve you for the rest of your career: a <strong>bug</strong> is not the same as a <strong>handled error</strong>.</p>
+      <p>An empty cream tub is not a scandal. Fridges run empty; customers mistype their email; a model replies with slightly broken JSON. These are <em>expected</em> failures — things a well-run kitchen has a plan for. Handling them is just another kind of control flow, a sibling of the <a href="ch006-control-flow.html">if/else decisions</a> you already know: <em>if this goes wrong, do that instead</em>.</p>
+      <p>A bug is different. A bug is the recipe itself being wrong — the code asked for something that can never work. You do not want a plan for bugs. You want them to fail <em>loudly</em>, with a full incident report, so you can fix the recipe. A program that hides its bugs is more dangerous than one that crashes, because it keeps serving wrong food with a smile.</p>
+      <p>Python's mechanism for both is the same. When something cannot continue, Python <dfn>raises</dfn> an <dfn>exception</dfn> — it stops normal execution on the spot and sends an error object shooting back up through the chain of function calls, looking for someone with a plan. If some code catches it, that was a handled error: the program carries on. If nothing catches it, the program stops and Python prints the incident slip — the <dfn>traceback</dfn>, a listing of every function call the error travelled through. Remember from <a href="ch007-functions.html">the functions chapter</a> that functions call functions, building a stack of "who is waiting on whom"? A traceback is that stack, printed at the moment of the crash.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The Zen of Python — the design philosophy you met in <a href="ch001-why-python-looks-like-that.html">chapter 1</a> — has a line for this: <em>"Errors should never pass silently. Unless explicitly silenced."</em> Loud by default, quiet only on purpose. Hold that thought; it is the moral of this whole chapter.</p></div>
+
+      <h2>Every error carries a type</h2>
+      <p>Python does not throw one generic "error". Each exception has a <em>type</em> — a name that tells you the category of failure before you read another word. Seasoned readers get most of their diagnosis from this one word. Flip these cards until each name conjures a picture:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">ValueError</span><span class="flip-back">Right type of thing, impossible value. int("hello") — a string is fine, but not THAT string.</span></button>
+        <button class="flip" type="button"><span class="flip-front">TypeError</span><span class="flip-back">Wrong type of thing entirely. "2" + 2 — Python refuses to guess whether you meant "22" or 4.</span></button>
+        <button class="flip" type="button"><span class="flip-front">KeyError</span><span class="flip-back">A dictionary was asked for a key it does not have. The single most common crash in config-driven and agent code.</span></button>
+        <button class="flip" type="button"><span class="flip-front">IndexError</span><span class="flip-back">A list was asked for position 5 when it only has 3 items. Often means "the data was emptier than I assumed".</span></button>
+        <button class="flip" type="button"><span class="flip-front">AttributeError</span><span class="flip-back">An object was asked for something it does not carry. "'NoneType' object has no attribute..." usually means a None sneaked in where real data was expected.</span></button>
+        <button class="flip" type="button"><span class="flip-front">NameError</span><span class="flip-back">A name that was never assigned. Nine times out of ten: a typo.</span></button>
+        <button class="flip" type="button"><span class="flip-front">FileNotFoundError</span><span class="flip-back">The path does not exist. Check spelling, check which folder the program actually ran from.</span></button>
+        <button class="flip" type="button"><span class="flip-front">JSONDecodeError</span><span class="flip-back">Text that was supposed to be JSON, was not. The classic failure when parsing a model's reply.</span></button>
+      </div>
+
+      <p>Two things worth knowing. First, the name comes from <em>where the failure happens</em>, not from your intent — asking a dictionary (<a href="ch004-collections.html">chapter 4</a>) for a missing key is always a <code>KeyError</code>, whether it holds settings, prices, or tool registrations. Second, the types form families: <code>JSONDecodeError</code> is a specialised kind of <code>ValueError</code>, so a net that catches <code>ValueError</code> catches it too. Wider nets catch more; in a moment you will see why the widest nets are a trap.</p>
+
+      <h2>try / except / else / finally: the four rooms</h2>
+      <p>The handling machinery is one statement with four rooms, and you will meet all four in real code. <code>try</code> holds the risky work. <code>except</code> is the plan for a specific failure. <code>else</code> runs only if nothing failed. <code>finally</code> runs no matter what — the cleanup room. Read the annotated version first, clicking each line; then run and break the live copy below it.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">settings.py — a parser with a plan B</div>
+        <div class="wl-line"><code>import json</code>
+          <div class="wl-note">The standard-library JSON tools from <a href="ch005-yaml-and-json.html">chapter 5</a>. <code>json.loads</code> raises <code>JSONDecodeError</code> when the text is not valid JSON — which is exactly the failure we are about to plan for.</div></div>
+        <div class="wl-line"><code>DEFAULTS = {"model": "small", "retries": 2}</code>
+          <div class="wl-note">The fallback. A handled error needs somewhere sensible to land — here, a known-good set of defaults.</div></div>
+        <div class="wl-line"><code>def load_settings(text):</code></div>
+        <div class="wl-line"><code>    try:</code>
+          <div class="wl-note">"The next lines might fail, and I have a plan." Keep this room small, so you always know exactly which line the plan is for.</div></div>
+        <div class="wl-line"><code>        settings = json.loads(text)</code>
+          <div class="wl-note">The one risky line. If <code>text</code> is valid JSON, we fall through to <code>else</code>. If not, execution jumps — mid-statement — to the matching <code>except</code>.</div></div>
+        <div class="wl-line"><code>    except json.JSONDecodeError as err:</code>
+          <div class="wl-note">The plan, and only for THIS failure type. <code>as err</code> names the error object so we can read its message. A different exception — say a <code>TypeError</code> — sails straight past, uncaught. Deliberate: that would be a bug, and bugs should crash.</div></div>
+        <div class="wl-line"><code>        print(f"Bad settings ({err.msg}) - using defaults")</code>
+          <div class="wl-note">Say what happened. Silent fallbacks are how systems drift into serving defaults for six months without anyone noticing.</div></div>
+        <div class="wl-line"><code>        settings = dict(DEFAULTS)</code>
+          <div class="wl-note">Land on the fallback. A copy, not the original — so later edits cannot quietly rewrite the shared defaults (the aliasing lesson from <a href="ch002-names-and-objects.html">chapter 2</a>).</div></div>
+        <div class="wl-line"><code>    else:</code>
+          <div class="wl-note">The rarely-seen room: runs only when the <code>try</code> succeeded. Why not put this inside <code>try</code>? Because the plan should cover the risky line only, not your victory lap.</div></div>
+        <div class="wl-line"><code>        print("Settings parsed cleanly")</code></div>
+        <div class="wl-line"><code>    finally:</code>
+          <div class="wl-note">Runs in every timeline — success, handled failure, even an uncaught exception on its way out. This is where files get closed and connections released, whatever happened above.</div></div>
+        <div class="wl-line"><code>        print("Settings step finished")</code></div>
+        <div class="wl-line"><code>    return settings</code></div>
+      </div>
+
+      <div class="pyrun" data-title="The four rooms — run it, then break it">
+<textarea class="py-src" spellcheck="false">
+import json
+
+DEFAULTS = {"model": "small", "retries": 2}
+
+def load_settings(text):
+    try:
+        settings = json.loads(text)
+    except json.JSONDecodeError as err:
+        print(f"Bad settings ({err.msg}) - using defaults")
+        settings = dict(DEFAULTS)
+    else:
+        print("Settings parsed cleanly")
+    finally:
+        print("Settings step finished")
+    return settings
+
+print(load_settings('{"model": "large"}'))
+print()
+print(load_settings("model: large"))   # YAML-ish, not JSON -- watch plan B fire
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it three ways. One: pass <code>load_settings(42)</code> and watch a <code>TypeError</code> blow straight past the except — the net only catches what it names. Two: change the except line to <code>except ValueError as err:</code> — it still catches bad JSON, because <code>JSONDecodeError</code> belongs to the <code>ValueError</code> family. Three: delete the <code>finally</code> block and see the goodbye message vanish from both runs.</p></div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The widest net of all is a bare <code>except:</code> — it catches <em>everything</em>, including the typo-induced <code>NameError</code> that was trying to report a bug. Its evil twin, <code>except: pass</code>, catches everything and says nothing. Reviewers call this "swallowing errors"; it turns a ten-minute fix into a three-day mystery. Name the exception you expect; let everything else crash loudly.</p></div>
+
+      <h2>raise: sounding the alarm yourself</h2>
+      <p>Everything so far reacts to Python raising exceptions. You can also raise your own — and good code does, early and specifically, the moment it detects a situation it cannot honour:</p>
+
+      <div class="code-title">guardrails.py</div>
+      <pre><code class="language-python">def set_retries(n):
+    if n &lt; 0:
+        raise ValueError(f"retries must be 0 or more, got {n}")
+    return {"retries": n}</code></pre>
+
+      <p>That <code>raise</code> statement creates an exception and fires it up the call chain, exactly as if Python had raised it. Why crash on purpose? Because a negative retry count accepted quietly here becomes a bizarre infinite-loop bug three files away tonight. Raising at the door — naming the culprit value — moves the crash to where the mistake actually is. There is also the bare form, used inside an except block:</p>
+
+      <div class="code-title">relay.py — look, log, pass it on</div>
+      <pre><code class="language-python">try:
+    price = rates[symbol]
+except KeyError:
+    log_incident("rate lookup failed")
+    raise    # re-raise the SAME exception, original traceback intact</code></pre>
+
+      <p>A bare <code>raise</code> says: I wanted to witness this failure, not handle it. The exception continues upward as if never caught — the honest middle ground between swallowing an error and ignoring it.</p>
+
+      <h2>Reading a traceback, calmly</h2>
+      <p>Now the superpower this chapter promised. Here is the whole method: <strong>a traceback reads bottom-up</strong>. Python even tells you so in its first line — <em>"most recent call last"</em> means the freshest, most useful information is printed at the end. Step through a real one, exactly as your eyes should travel:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Jump to the bottom">
+          <h3>1. Freeze — then jump to the last line</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Traceback (most recent call last):</div>
+              <div class="d-box dim">briefing.py, line 31, in &lt;module&gt;<small>main()</small></div>
+              <div class="d-box dim">briefing.py, line 27, in main<small>report = build_report(today)</small></div>
+              <div class="d-box dim">report.py, line 14, in build_report<small>price = fetch_rate(row)</small></div>
+              <div class="d-box dim">report.py, line 8, in fetch_rate<small>return RATES[symbol]</small></div>
+              <div class="d-box hot">KeyError: 'SENSEX'<small>start reading HERE</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Your eye wants to start at the top, like any other text. Resist. The header is a promise: the most recent call — the scene of the failure — is printed last. Go straight to the bottom line.</p>
+        </div>
+        <div class="step" data-title="Name the failure">
+          <h3>2. Read the name and the message</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Traceback (most recent call last):</div>
+              <div class="d-box dim">briefing.py, line 31, in &lt;module&gt;<small>main()</small></div>
+              <div class="d-box dim">briefing.py, line 27, in main<small>report = build_report(today)</small></div>
+              <div class="d-box dim">report.py, line 14, in build_report<small>price = fetch_rate(row)</small></div>
+              <div class="d-box dim">report.py, line 8, in fetch_rate<small>return RATES[symbol]</small></div>
+              <div class="d-box hot">KeyError: 'SENSEX'<small>type + message = the diagnosis</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Type first: KeyError — a dictionary was asked for a key it does not hold. Message second: the missing key was 'SENSEX'. Two seconds in, you know WHAT went wrong — half the diagnosis, before reading a single frame.</p>
+        </div>
+        <div class="step" data-title="Scene of the crash">
+          <h3>3. One line up: the scene of the crash</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Traceback (most recent call last):</div>
+              <div class="d-box dim">briefing.py, line 31, in &lt;module&gt;<small>main()</small></div>
+              <div class="d-box dim">briefing.py, line 27, in main<small>report = build_report(today)</small></div>
+              <div class="d-box dim">report.py, line 14, in build_report<small>price = fetch_rate(row)</small></div>
+              <div class="d-box hot">report.py, line 8, in fetch_rate<small>return RATES[symbol]</small></div>
+              <div class="d-box">KeyError: 'SENSEX'</div>
+            </div>
+          </div>
+          <p class="step-cap">The deepest frame — directly above the error — gives you WHERE: file, line, function, and the source line that blew up. That is the curry cook at the empty fridge.</p>
+        </div>
+        <div class="step" data-title="Climb the chain">
+          <h3>4. Climb the chain of custody</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Traceback (most recent call last):</div>
+              <div class="d-box dim">briefing.py, line 31, in &lt;module&gt;<small>main()</small></div>
+              <div class="d-box hot">briefing.py, line 27, in main<small>and who asked for the report?</small></div>
+              <div class="d-box hot">report.py, line 14, in build_report<small>who asked for the rate?</small></div>
+              <div class="d-box">report.py, line 8, in fetch_rate<small>return RATES[symbol]</small></div>
+              <div class="d-box">KeyError: 'SENSEX'</div>
+            </div>
+          </div>
+          <p class="step-cap">Each frame above answers one question: "and who asked for THAT?" This is the call stack from the functions chapter, photographed at the instant of the crash. Climb only as far as you need.</p>
+        </div>
+        <div class="step" data-title="The top is the front door">
+          <h3>5. The top is just the front door</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Traceback (most recent call last):</div>
+              <div class="d-box hot">briefing.py, line 31, in &lt;module&gt;<small>where the program began</small></div>
+              <div class="d-box dim">briefing.py, line 27, in main</div>
+              <div class="d-box dim">report.py, line 14, in build_report</div>
+              <div class="d-box dim">report.py, line 8, in fetch_rate</div>
+              <div class="d-box dim">KeyError: 'SENSEX'</div>
+            </div>
+          </div>
+          <p class="step-cap">The topmost frame is only where execution started — the waiter taking the order. Untrained readers find tracebacks exhausting because they read them upside down.</p>
+        </div>
+        <div class="step" data-title="The verdict">
+          <h3>6. The verdict — and a twist</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Traceback (most recent call last):</div>
+              <div class="d-box dim">briefing.py, line 31, in &lt;module&gt;</div>
+              <div class="d-box dim">briefing.py, line 27, in main</div>
+              <div class="d-box good">report.py, line 14, in build_report<small>the fix probably lives here</small></div>
+              <div class="d-box good">report.py, line 8, in fetch_rate<small>where it crashed</small></div>
+              <div class="d-box good">KeyError: 'SENSEX'<small>what went wrong</small></div>
+            </div>
+          </div>
+          <p class="step-cap">What: KeyError 'SENSEX'. Where: fetch_rate, report.py line 8. Why: RATES never loaded that symbol. The twist — the crash line is innocent; the mistake is upstream, where the symbol list was built. Crash frame and fix frame are often neighbours, not the same line.</p>
+        </div>
+      </div>
+
+      <h2>The forty-line monster</h2>
+      <p>Real production tracebacks are longer, because real code calls libraries and libraries call each other. Here is a mid-sized one from an agent script — your code at the top, standard-library JSON machinery below it (paths and line numbers illustrative). Production tracebacks with a framework in the middle stretch past forty lines, but the shape is identical:</p>
+
+      <div class="code-title">terminal — the agent just died</div>
+      <pre><code class="language-python">Traceback (most recent call last):
+  File "/home/you/agents/briefing/agent.py", line 52, in &lt;module&gt;
+    main()
+  File "/home/you/agents/briefing/agent.py", line 48, in main
+    answer = run_agent("summarise this week's invoices")
+  File "/home/you/agents/briefing/agent.py", line 33, in run_agent
+    action = parse_action(reply)
+  File "/home/you/agents/briefing/agent.py", line 21, in parse_action
+    data = json.loads(text)
+  File "/usr/local/lib/python3.12/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+  File "/usr/local/lib/python3.12/json/decoder.py", line 338, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+  File "/usr/local/lib/python3.12/json/decoder.py", line 356, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)</code></pre>
+
+      <p>Long tracebacks add exactly one new skill: telling your frames from library frames. Look at the file paths. Anything under <code>/usr/local/lib/</code>, <code>site-packages/</code>, or a virtual-environment folder belongs to a library; frames pointing into your own folders are yours. Library frames are almost never the problem — <code>json/decoder.py</code> is battle-tested by millions of programs. The question a long traceback answers is: <em>which of MY lines handed the library something it could not digest?</em></p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>The three-move method, for any length. Move one: the last line — <code>JSONDecodeError: Expecting value ... (char 0)</code>, the text did not even start like JSON. Move two: scan upward for the deepest frame in a file you own — <code>agent.py, line 21, in parse_action</code>. That is where to look: the model's reply was not JSON. Move three — only if needed — climb further to see how execution got there. Most sessions never need move three.</p></div>
+
+      <h2>Crash one yourself</h2>
+      <p>Reading about tracebacks is like reading about swimming. This program is three functions deep and contains one landmine. Run it, let it crash — the red output is a genuine Python traceback. Practise: last line first, then the deepest frame in "your" code.</p>
+
+      <div class="pyrun" data-title="Crash it on purpose — then read bottom-up">
+<textarea class="py-src" spellcheck="false">
+RATES = {"NIFTY": 25400.0, "BANKNIFTY": 57200.0}
+
+def fetch_rate(symbol):
+    return RATES[symbol]          # the line that will blow up
+
+def build_report(symbols):
+    lines = []
+    for s in symbols:
+        lines.append(f"{s}: {fetch_rate(s)}")
+    return "\n".join(lines)
+
+def main():
+    print(build_report(["NIFTY", "SENSEX"]))   # SENSEX was never loaded
+
+main()
+</textarea>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Your traceback starts with a frame or two of this page's own plumbing — files you never wrote. Real life is the same: crashes inside a harness arrive wrapped in the harness's frames. Skip anything that is not your file. Now fix it two ways: add <code>"SENSEX": 84200.0</code> to the dictionary, or give <code>fetch_rate</code> a plan B that returns <code>0.0</code> with a warning. The second fix trades a loud crash for a quiet wrong number — sometimes the crash was the better behaviour.</p></div>
+
+      <h2>Chained tracebacks: two reports stapled together</h2>
+      <p>Sometimes a traceback contains <em>two</em> reports glued by one sentence. Do not panic — it is the same skill twice. The deliberate case: code catches a low-level error and re-raises it as something more meaningful, using <code>raise ... from ...</code>:</p>
+
+      <div class="code-title">rates.py — translating an error upward</div>
+      <pre><code class="language-python">RATES = {"NIFTY": 25400.0}
+
+def fetch_rate(symbol):
+    try:
+        return RATES[symbol]
+    except KeyError as err:
+        raise RuntimeError(f"{symbol!r} is not in today's feed") from err
+
+fetch_rate("SENSEX")</code></pre>
+
+      <p>Run mentally, that produces:</p>
+
+      <div class="code-title">terminal — a chained traceback</div>
+      <pre><code class="language-python">Traceback (most recent call last):
+  File "rates.py", line 5, in fetch_rate
+    return RATES[symbol]
+KeyError: 'SENSEX'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "rates.py", line 9, in &lt;module&gt;
+    fetch_rate("SENSEX")
+  File "rates.py", line 7, in fetch_rate
+    raise RuntimeError(f"{symbol!r} is not in today's feed") from err
+RuntimeError: 'SENSEX' is not in today's feed</code></pre>
+
+      <p>Reading order for any chained traceback: the <strong>bottom chunk</strong> is what finally surfaced — read its last line first, as always. The <strong>top chunk</strong> is the original cause, preserved so you do not lose the trail. The glue sentence tells you how they relate. <em>"The above exception was the direct cause"</em> means someone chose to translate the error, as here. Its cousin — <em>"During handling of the above exception, another exception occurred"</em> — means something clumsier: an <code>except</code> block crashed <em>while rescuing</em>. That version usually reveals two bugs for the price of one: the original failure, plus a plan B that was never tested. Either way the method survives: last line of the whole thing first, then upward chunk by chunk.</p>
+
+      <h2>Errors in agent land</h2>
+      <p>Now connect this to the systems you operate every day. A production agent loop wraps exception handling around two precise places, and the choice of what to catch — and what to let crash — <em>is</em> the design.</p>
+      <p>First: parsing the model's reply. Models sometimes return chatty, slightly broken output; that is an expected error, so the loop catches it and asks the model to try again. Second: running a tool. Tools fail constantly, and a crashed agent helps nobody, so harnesses catch the tool's exception and feed the error message back to the model <em>as the observation</em>. The model reads its own failure and self-corrects — that is why your agent logs show a tool error followed by the model apologising and adjusting. Run the whole pattern; the "model" here is a scripted <code>fake_llm()</code> stand-in, sloppy on its first attempt exactly like the real thing on a bad day:</p>
+
+      <div class="pyrun" data-title="An agent that survives bad JSON and failing tools">
+<textarea class="py-src" spellcheck="false">
+import json
+
+# ---- scripted stand-in for a real model -------------------
+def fake_llm(history):
+    last = history[-1]
+    if "not valid JSON" in last:
+        return '{"tool": "define", "term": "token"}'      # the retry: clean
+    if last.startswith("OBSERVATION"):
+        return '{"tool": "finish", "term": "a token is a chunk of text"}'
+    # first attempt: chatty and malformed, like real models on a bad day
+    return 'Sure! Calling: {"tool": "define", "term": "token"'
+
+GLOSSARY = {"token": "a small chunk of text a model reads or writes"}
+
+def define(term):
+    return GLOSSARY[term]         # KeyError for unknown terms -- on purpose
+
+def run_agent(task, max_turns=4):
+    history = [f"TASK: {task}"]
+    for turn in range(1, max_turns + 1):
+        reply = fake_llm(history)
+        print(f"turn {turn} | model: {reply}")
+        try:
+            action = json.loads(reply)        # EXPECTED failure: handle it
+        except json.JSONDecodeError:
+            history.append("ERROR: not valid JSON. Send only JSON.")
+            print("       | handled: told the model to try again")
+            continue
+        if action["tool"] == "finish":
+            return action["term"]
+        try:
+            result = define(action["term"])   # tool errors become observations
+        except KeyError as err:
+            result = f"define() failed: unknown term {err}"
+        history.append(f"OBSERVATION: {result}")
+        print(f"       | OBSERVATION: {result}")
+    return "gave up: hit max_turns"
+
+print()
+print("FINAL:", run_agent("Explain what a token is"))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Two experiments. Change <code>"term": "token"</code> in the retry line to <code>"term": "vector"</code> — the tool now fails, but the agent survives, because the <code>KeyError</code> becomes an observation the model can react to. Then delete the <code>try/except</code> around <code>define(...)</code> and run again: the same failure now kills the whole agent with a traceback. Same error, two designs — that difference is the entire art of production error handling.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this chapter everywhere. When an agent run dies, the last screenful of the log is a traceback — the bottom-up method works on it unchanged; find the deepest frame that belongs to the team's own code rather than the framework's. In merge requests, reviewers write "this except is too broad", "don't swallow that", or "raise early with a better message" — you can now hear exactly what they mean. Framework retry options and tool-error hooks are industrialised versions of the catch-and-feed-back pattern you just ran. And when a colleague says "it failed with a KeyError on 'symbol'", notice they handed you the type, the message, and half the diagnosis in one sentence — traceback fluency is a shared language.</p></div>
+
+      <h2>Check yourself</h2>
+      <section class="quiz">
+        <h2>Five quick checks</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. A 40-line traceback fills your screen. Where do you look first?</p>
+          <div class="q-opts">
+            <button data-opt="a">The top line — it happened first, so it must be the cause</button>
+            <button data-opt="b">The middle — that is usually where the real work happens</button>
+            <button data-opt="c">The last line — the exception type and message</button>
+          </div>
+          <p class="q-explain">"Most recent call last" is Python's promise that what actually went wrong is printed at the bottom. Type and message first, then the deepest frame in your own code, then climb only if needed.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">2. The last line says <code>KeyError: 'symbol'</code>. Before reading any frames, what do you already know?</p>
+          <div class="q-opts">
+            <button data-opt="a">A dictionary was asked for a key called 'symbol' that it does not contain</button>
+            <button data-opt="b">A variable named symbol was never defined</button>
+            <button data-opt="c">A file named symbol could not be found</button>
+          </div>
+          <p class="q-explain">The exception type carries the category: KeyError is always a failed dictionary lookup. A missing variable would be a NameError; a missing file would be a FileNotFoundError. One word, half the diagnosis.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">3. When does a <code>finally</code> block run?</p>
+          <div class="q-opts">
+            <button data-opt="a">Only when an exception was raised</button>
+            <button data-opt="b">Only when no exception was raised</button>
+            <button data-opt="c">Always — success, handled failure, or an exception still on its way out</button>
+          </div>
+          <p class="q-explain">finally is the cleanup room: it runs in every timeline, which is exactly why files get closed and connections released there. else is the room that runs only on success.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. A traceback contains: "During handling of the above exception, another exception occurred". What happened?</p>
+          <div class="q-opts">
+            <button data-opt="a">The same error fired twice in a row</button>
+            <button data-opt="b">An except block crashed while handling the first error — the top report is the original cause, the bottom is what finally surfaced</button>
+            <button data-opt="c">Python could not decide which exception type to use</button>
+          </div>
+          <p class="q-explain">Two reports, stapled together in time order. The rescue attempt itself failed — often revealing an untested plan B. Read the whole thing bottom-up by chunk: last line first, then the earlier report for the root cause.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Inside an agent loop, a tool raises <code>FileNotFoundError</code>. What does a well-built harness typically do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Let the whole agent crash — errors should never pass silently</button>
+            <button data-opt="b">Catch it and feed the error text back to the model as the observation, so it can adjust</button>
+            <button data-opt="c">Catch it with a bare except and continue as if nothing happened</button>
+          </div>
+          <p class="q-explain">Tool failures are expected errors, so they become information the model can react to. Crashing is reserved for genuine bugs; swallowing silently is the one option that is always wrong.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A traceback is an incident report, printed "most recent call last" — so read it bottom-up: exception type and message, then the deepest frame, then climb only if you must.</li>
+          <li>The exception type is half the diagnosis: KeyError means a failed dictionary lookup, TypeError a wrong kind of thing, JSONDecodeError text that was not JSON — one word tells you the category before you read a single frame.</li>
+          <li>try/except/else/finally are four rooms: risky work, the plan for a named failure, the success-only path, and cleanup that runs in every timeline.</li>
+          <li>Catch narrowly and loudly; <code>raise</code> early, naming the bad value. Bare <code>except: pass</code> hides the report you will desperately need later.</li>
+          <li>In long tracebacks, find the deepest frame in a file you own — library frames are plumbing, and the real mistake often sits one or two frames upstream of the crash line.</li>
+          <li>Chained tracebacks are two reports glued by one sentence: "direct cause" means a deliberate translation with <code>raise ... from</code>; "during handling" means the rescue itself crashed.</li>
+          <li>Handled errors are control flow, bugs deserve loud crashes — and in agent systems, tool exceptions get recycled into observations so the model can read its own failure and self-correct.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why so many files? — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch012">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act II · The Engineering Layer</div>
+        <h1>Why so many files?</h1>
+        <p class="ch-tagline">One script was fine last week. Today the repo you opened has forty files and eleven folders. Here is the map — why engineers split code up, how the pieces link back together, and the five-minute routine that makes any strange repo navigable.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 12 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You step off a night train in a city you have never visited, and you need milk, bread, and a toothbrush. You walk into a supermarket you have never seen — and ninety seconds later you are holding all three. Nobody gave you a tour. You simply knew: produce near the entrance, dairy along the back wall, toiletries in a middle aisle, checkout by the door. Every supermarket on Earth follows roughly the same layout, so a total stranger can navigate any of them.</p>
+        <p>Now picture the other shop — the tiny one from your childhood where everything lived in one glorious heap behind the counter, and only the owner knew that the batteries were under the biscuit tins. Brilliant while it was small. Unworkable the day the owner hired a second person.</p>
+        <p>A Python repository with forty files is the supermarket. A single do-everything script is the heap behind the counter. This chapter teaches you the aisle layout — so that any repo, from any team, becomes a place you can walk into cold and find things fast.</p>
+      </section>
+
+      <h2>You already know the physics</h2>
+      <p>Quick recap of <a href="ch011-imports-and-modules.html">the previous chapter</a>, because this one is built directly on top of it. Every <code>.py</code> file is a <dfn>module</dfn> — a bag of names that Python fills by running the file top to bottom, exactly once. The <code>import</code> statement finds that file, runs it, caches the result in <code>sys.modules</code>, and binds a name in your namespace so you can reach inside. Import the same module ten times and it still only runs once, because the cache answers first. That is the entire physics of this chapter.</p>
+      <p>What was missing from that picture is the <em>town planning</em>: if every file can import every other file, how do real teams decide what goes where? Why does a production repo have a <code>src</code> folder, a <code>tests</code> folder, a <code>pyproject.toml</code>, three config files and a README, when the whole thing could technically be one long script? The answer is not about what Python demands — Python barely cares. It is about what humans and their tools need. Layout is a message from the authors to you.</p>
+
+      <h2>The anatomy of a real project</h2>
+      <p>Here is a small but completely realistic project — an email-drafting agent called <em>agentmail</em>. Read the tree slowly; the rest of the chapter keeps returning to it.</p>
+
+      <div class="code-title">the agentmail repository, from the root</div>
+      <pre><code class="language-bash">agentmail/                  # the repo root
+  README.md                 # the welcome mat: what this is, how to run it
+  pyproject.toml            # the signboard: name, dependencies, commands
+  .gitignore                # files git must never track
+  config/
+    settings.yaml           # knobs and settings — data, not code
+  src/
+    agentmail/              # THE package: name matches the project
+      __init__.py           # marks this folder as importable
+      cli.py                # entry point: reads the command line
+      agent.py              # the core loop
+      tools.py              # functions the agent may call
+      config.py             # loads settings.yaml into Python
+  tests/
+    test_agent.py           # proves agent.py behaves
+    test_tools.py           # proves tools.py behaves</code></pre>
+
+      <p>Four zones, four jobs. The <strong>root</strong> holds paperwork: the README that explains the project to humans, and <code>pyproject.toml</code> that explains it to tools. The <strong><code>src/</code> folder</strong> holds exactly one thing — the <dfn>package</dfn>, meaning a folder of modules that Python treats as one importable unit. The <strong><code>tests/</code> folder</strong> holds code whose only job is to check the package's behaviour. And <strong><code>config/</code></strong> holds settings as data — <a href="ch005-yaml-and-json.html">YAML, dicts in costume</a> — kept away from logic so an operator can change a knob without touching code.</p>
+      <p>Two details in that tree earn their strange looks. First, the file <code>__init__.py</code>: an often-empty file whose <em>presence</em> is the signal. It tells Python "this folder is a package — importing <code>agentmail</code> is allowed, and start here". When it does contain code, that code runs on the first import of the package, so teams use it to publish the package's public face. Second, the doubled name <code>src/agentmail/</code>: the outer <code>src</code> is a fence, not a package. It exists so that when you run tests, Python cannot accidentally import the loose files sitting in your working directory instead of the properly installed package — a classic source of "it works on my machine". You will see this <dfn>src layout</dfn> — code fenced one level down inside <code>src/</code> — in most modern Python repos, and now you know it is deliberate, not decoration.</p>
+      <p>Now the signboard itself. <code>pyproject.toml</code> is the single most information-dense file in any modern Python repo — click through the lines that matter:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">pyproject.toml — the project's signboard</div>
+        <div class="wl-line"><code>[project]</code>
+          <div class="wl-note">A TOML section header — like a heading in a form. Everything under it describes the project itself. TOML is another dicts-in-costume format, a cousin of the YAML you met in <a href="ch005-yaml-and-json.html">chapter 5</a>.</div></div>
+        <div class="wl-line"><code>name = "agentmail"</code>
+          <div class="wl-note">The project's official name. Convention: the package folder under <code>src/</code> carries the same name. When the two match, you always know where the real code lives.</div></div>
+        <div class="wl-line"><code>version = "0.4.2"</code></div>
+        <div class="wl-line"><code>requires-python = "&gt;=3.11"</code>
+          <div class="wl-note">The minimum Python this project promises to work on. If your environment is older, installers refuse early instead of failing weirdly later.</div></div>
+        <div class="wl-line"><code>dependencies = [</code>
+          <div class="wl-note">The shopping list: every outside library this project needs. Installers read this list and fetch each one. When a reviewer asks "why did we add a dependency?", this is the diff line they are staring at.</div></div>
+        <div class="wl-line"><code>    "httpx&gt;=0.27",</code></div>
+        <div class="wl-line"><code>    "pydantic&gt;=2.7",</code></div>
+        <div class="wl-line"><code>]</code></div>
+        <div class="wl-line"><code>[project.scripts]</code>
+          <div class="wl-note">The treasure map. This section creates real terminal commands when the project is installed.</div></div>
+        <div class="wl-line"><code>agentmail = "agentmail.cli:main"</code>
+          <div class="wl-note">Read it right to left: in the package <code>agentmail</code>, in the module <code>cli</code>, there is a function <code>main</code> — and typing <code>agentmail</code> in a terminal calls it. One line answers the biggest question about any repo: <em>where does this program start?</em></div></div>
+        <div class="wl-line"><code>[build-system]</code>
+          <div class="wl-note">Plumbing for packaging tools — how to turn this folder into an installable artifact. You can safely skim past it while reading; <a href="ch020-environments-and-packaging.html">chapter 20</a> unpacks it properly.</div></div>
+        <div class="wl-line"><code>requires = ["hatchling"]</code></div>
+        <div class="wl-line"><code>build-backend = "hatchling.build"</code></div>
+      </div>
+
+      <h2>How the files hold hands</h2>
+      <p>A folder of files is just a filing cabinet. What turns it into a <em>program</em> is the import lines at the top of each file: <code>cli.py</code> imports from <code>agent.py</code>, which imports from <code>tools.py</code> and <code>config.py</code>. Those lines are load-bearing — they are the corridors between the aisles, and together they form a one-way chain: files deep in the chain know nothing about the files above them. <code>tools.py</code> has no idea <code>cli.py</code> exists. That one-way flow is what lets you change the command-line handling without ever worrying about breaking a tool.</p>
+      <p>You can watch the whole mechanism run right here. The sandbox below holds a three-file mini-project — each string is the <em>content</em> of one file — and a tiny <code>load()</code> helper that plays the role of Python's import system, exactly as <a href="ch011-imports-and-modules.html">chapter 11</a> described it: make a module object, register it in <code>sys.modules</code>, run the file's code into it. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A three-file project in one sandbox — run me">
+<textarea class="py-src" spellcheck="false">
+# Three "files". Each string below is the content of one .py file.
+import sys, types
+
+FILES = {
+    "pricing": '''
+RATE = 0.18   # GST
+
+def tax(amount):
+    return round(amount * RATE, 2)
+''',
+
+    "invoice": '''
+from pricing import tax    # invoice.py reaches into pricing.py
+
+def total(amount):
+    return amount + tax(amount)
+
+def line(client, amount):
+    return f"{client}: {amount} + tax = {total(amount)}"
+''',
+
+    "cli": '''
+from invoice import line   # cli.py reaches into invoice.py
+
+def main():
+    print(line("Sharma Traders", 1500))
+    print(line("Verma Stores", 4000))
+''',
+}
+
+def load(name):
+    """Play the role of Python's import system for one 'file'."""
+    module = types.ModuleType(name)
+    sys.modules[name] = module      # register in the cache (ch11!)
+    exec(FILES[name], module.__dict__)  # run the file, once
+    return module
+
+# Load in dependency order, deepest file first:
+for name in ["pricing", "invoice", "cli"]:
+    load(name)
+    print(f"loaded {name}.py")
+
+print()
+sys.modules["cli"].main()
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it on purpose. Reorder the loading list to <code>["cli", "invoice", "pricing"]</code> and run again — you get a <code>ModuleNotFoundError</code>, the very same error you met in <a href="ch009-errors-and-tracebacks.html">the tracebacks chapter</a>, because <code>cli</code> asked for <code>invoice</code> before it existed. Then change <code>RATE</code> to <code>0.05</code> in <em>one</em> file and watch every invoice line change — that is the point of splitting: one fact lives in one place.</p></div>
+
+      <p>Notice what the demo proves: the three files never mention each other's <em>contents</em>, only each other's <em>names</em>. Change how <code>tax()</code> works internally and neither <code>invoice</code> nor <code>cli</code> needs to know. That boundary — "you may know my name and my functions, never my insides" — is the entire art of splitting code well, and it is the same idea you will meet again next chapter as <a href="ch013-classes-and-oop.html">objects with a job</a>.</p>
+
+      <h2>The front door: where does it start?</h2>
+      <p>A supermarket has many aisles but one entrance. A project with forty files also has one — the <dfn>entry point</dfn>, the function that runs first when a human or a scheduler starts the program. Everything else is only ever reached from there, import by import. Repos advertise their front door in up to three standard ways, and you have already seen the first:</p>
+      <p><strong>One — the console script.</strong> The <code>[project.scripts]</code> line in <code>pyproject.toml</code> turns <code>agentmail.cli:main</code> into a terminal command. This is how installed tools work: when you type a command like <code>pytest</code> or <code>uvicorn</code>, you are calling exactly such a line.</p>
+      <p><strong>Two — the runnable package.</strong> If a package contains a file named <code>__main__.py</code>, then <code>python -m agentmail</code> runs that file. The <code>-m</code> flag means "run this <em>module or package</em> as a program". The file is usually two lines:</p>
+
+      <div class="code-title">src/agentmail/__main__.py</div>
+      <pre><code class="language-python">from agentmail.cli import main
+
+main()</code></pre>
+
+      <p><strong>Three — the dual-use module.</strong> At the bottom of many files you will find the most famous idiom in Python:</p>
+
+      <div class="code-title">src/agentmail/cli.py — the last three lines</div>
+      <pre><code class="language-python">def main():
+    ...
+
+if __name__ == "__main__":   # True only when run directly
+    main()</code></pre>
+
+      <p>Recall from <a href="ch011-imports-and-modules.html">chapter 11</a>: every module has a <code>__name__</code>. When a file is <em>imported</em>, its <code>__name__</code> is its module name, so the guard is false and nothing extra runs. When the same file is <em>run directly</em> — <code>python cli.py</code> — Python names it <code>"__main__"</code>, the guard is true, and <code>main()</code> fires. One file, two personalities: a quiet library when imported, a program when executed. When you skim a strange repo, searching for these three signatures — <code>project.scripts</code>, <code>__main__.py</code>, and the <code>__name__</code> guard — finds the front door in seconds.</p>
+
+      <h2>Why engineers actually split code</h2>
+      <p>None of this is for the computer's benefit. Python would happily run agentmail as one 2,000-line file, at the same speed. Teams split code for three human reasons, and each one will sound familiar from operating production systems.</p>
+      <p><strong>Cohesion.</strong> <dfn>Cohesion</dfn> means each file has one job it does completely — pricing logic lives in the pricing file, and nowhere else. High cohesion is why the supermarket works: when everything about dairy is in the dairy aisle, you never have to search the whole shop. The test is brutal and simple: can you summarise the file in one sentence without the word "and"? <em>"Loads settings from YAML"</em> — good. <em>"Loads settings and sends emails and formats dates"</em> — that file is three files in a trench coat.</p>
+      <p><strong>Testability.</strong> A small file with one job can be tested in isolation. <code>tests/test_tools.py</code> can import <code>tools.py</code> alone, feed it crafted inputs, and check outputs — no email account, no live model, no command line needed. This is why the <code>tests/</code> folder so often mirrors the package structure file for file: each test file is the proof, and the worked example, for exactly one module. In the one-giant-script world there is nothing to import in isolation, so there is nothing to test in isolation.</p>
+      <p><strong>Review size.</strong> Code changes ship through merge requests, and a reviewer's attention is the scarcest resource in a team. When code is split well, a bug fix touches one small file and its test — a diff a reviewer can genuinely hold in their head. When everything lives in one file, every change collides with every other change: bigger diffs, more merge conflicts, slower reviews, and a git history (<a href="ch021-just-enough-git.html">chapter 21</a>) where the answer to "who changed this and why?" is always "everyone, constantly".</p>
+
+      <div class="tbl"><table>
+        <tr><th>Everyday task</th><th>One 2,000-line script</th><th>Well-split project</th></tr>
+        <tr><td>Find the pricing logic</td><td>Scroll and pray</td><td>Open <code>pricing.py</code></td></tr>
+        <tr><td>Test the tax rule</td><td>Run the whole program</td><td>Run one small test file</td></tr>
+        <tr><td>Review a bug fix</td><td>Diff buried in a huge file</td><td>One file, one test, done</td></tr>
+        <tr><td>Two people edit at once</td><td>Guaranteed merge conflict</td><td>Different files, no collision</td></tr>
+        <tr><td>Change a config knob</td><td>Edit source code</td><td>Edit <code>settings.yaml</code></td></tr>
+      </table></div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Splitting has a failure mode too: too <em>many</em> tiny files, each three lines long, so that reading any behaviour means a scavenger hunt across a dozen tabs. Good engineers split along job boundaries, not line counts. If you constantly need four files open to follow one thought, the project is over-split — a real critique you will see in code reviews.</p></div>
+
+      <h2>Your first five minutes in a strange repo</h2>
+      <p>Time to put it together. You have just been handed an unfamiliar repository — a client's agent, an open-source framework, anything. Here is the exact walk, the same one experienced engineers do on instinct. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Read the signboards">
+          <h3>1. Start at the root — read, don't open code</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">README.md<small>what is this, how do I run it</small></div>
+              <div class="d-box hot">pyproject.toml<small>name, dependencies, commands</small></div>
+              <div class="d-box dim">src/</div>
+              <div class="d-box dim">tests/</div>
+              <div class="d-box dim">config/</div>
+            </div>
+          </div>
+          <p class="step-cap">Resist the urge to click into code. The root paperwork answers "what is this and what does it depend on?" faster than any source file. Two minutes here saves twenty later.</p>
+        </div>
+        <div class="step" data-title="Find the front door">
+          <h3>2. Find the entry point in pyproject.toml</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">README.md</div>
+              <div class="d-box hot">pyproject.toml<small>agentmail = "agentmail.cli:main"</small></div>
+              <div class="d-box dim">src/</div>
+              <div class="d-box dim">tests/</div>
+            </div>
+          </div>
+          <p class="step-cap">The scripts section names the exact package, module, and function where execution begins. No scripts section? Look for a __main__.py, or a __name__ guard in a likely file.</p>
+        </div>
+        <div class="step" data-title="Locate the package">
+          <h3>3. Walk to the package that matches the name</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">pyproject.toml</div>
+              <div class="d-box hot">src/agentmail/<small>the real code — name matches the project</small></div>
+              <div class="d-box dim">tests/</div>
+              <div class="d-box dim">config/</div>
+            </div>
+          </div>
+          <p class="step-cap">Everything outside this folder is scaffolding — useful, but not the program. The doubled src/agentmail/ pattern tells you this team uses the standard fenced layout.</p>
+        </div>
+        <div class="step" data-title="Enter and follow imports">
+          <h3>4. Open the entry module, then follow its imports</h3>
+          <div class="diagram">
+            <div class="d-box hot">cli.py<small>main() lives here</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">agent.py<small>imported by cli</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">tools.py<small>imported by agent</small></div>
+          </div>
+          <p class="step-cap">Read in execution order, not alphabetical order. The import lines at the top of each file are your corridor map: they tell you which file to open next, and which files this one can never affect.</p>
+        </div>
+        <div class="step" data-title="Let the tests narrate">
+          <h3>5. Use tests/ as worked examples</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">src/agentmail/agent.py</div>
+              <div class="d-box good">tests/test_agent.py<small>shows agent.py used correctly</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Each test file demonstrates one module being called with realistic inputs and shows what output counts as correct. When prose documentation is thin, the tests are the documentation.</p>
+        </div>
+        <div class="step" data-title="Ignore the rest">
+          <h3>6. Consciously ignore everything else — for now</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box good">src/ + tests/ + pyproject.toml<small>you have the whole picture</small></div>
+              <div class="d-box dim">.github/, lock files, linter configs<small>machinery — visit when needed</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Automation configs, lock files, and CI pipelines matter, but not on day one. Knowing what you are allowed to skip is half of navigating well.</p>
+        </div>
+      </div>
+
+      <h2>The words on the door</h2>
+      <p>Six terms from this chapter will come up in every repo and every code review from here on. Flip until each back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">module</span><span class="flip-back">One .py file — a bag of names Python fills by running the file once. The unit of importing.</span></button>
+        <button class="flip" type="button"><span class="flip-front">package</span><span class="flip-back">A folder of modules that Python treats as one importable unit, marked by an __init__.py file.</span></button>
+        <button class="flip" type="button"><span class="flip-front">__init__.py</span><span class="flip-back">The often-empty file whose presence says "this folder is a package". If it has code, that code runs on first import — teams use it to publish the package's public face.</span></button>
+        <button class="flip" type="button"><span class="flip-front">src layout</span><span class="flip-back">Keeping the package one level down inside src/ so tests import the installed package, never loose local files. A fence, not a package.</span></button>
+        <button class="flip" type="button"><span class="flip-front">entry point</span><span class="flip-back">The function that runs first — advertised via [project.scripts], a __main__.py, or an if __name__ == "__main__" guard.</span></button>
+        <button class="flip" type="button"><span class="flip-front">cohesion</span><span class="flip-back">Each file has one job it does completely. Test: describe the file in one sentence without saying "and".</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any serious Python repository and this map holds. LangChain's repo carries a <code>pyproject.toml</code> per package with the code fenced below it; the MCP Python SDK keeps its package under <code>src/mcp/</code> with a mirroring <code>tests/</code> tree. In merge requests, seasoned reviewers read the <em>file paths first</em> — a diff touching only <code>tools/search.py</code> and its test is a Tuesday; a diff touching <code>cli.py</code>, <code>agent.py</code>, and <code>pyproject.toml</code> at once means the blast radius spans the whole program, so buckle up. And when an AI coding agent explores a repo for you, watch its tool calls: it reads the README and <code>pyproject.toml</code>, finds the entry point, follows imports — the exact six-step walk you just learned. Now you can audit whether it walked the aisles properly.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What conventionally marks a folder as an importable Python package?</p>
+          <div class="q-opts">
+            <button data-opt="a">Being named src</button>
+            <button data-opt="b">Containing an __init__.py file</button>
+            <button data-opt="c">Being listed in the README</button>
+          </div>
+          <p class="q-explain">The presence of __init__.py is the classic signal — and any code inside it runs on the package's first import. (Modern Python can also treat marker-less folders as "namespace packages", but well-run repos keep the explicit file.)</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. You type <code>python -m agentmail</code> in a terminal. Which file runs?</p>
+          <div class="q-opts">
+            <button data-opt="a">src/agentmail/__init__.py only</button>
+            <button data-opt="b">src/agentmail/__main__.py</button>
+            <button data-opt="c">Whichever file is first alphabetically</button>
+          </div>
+          <p class="q-explain">The -m flag runs a package as a program, and a package's program is its __main__.py. (The __init__.py also runs first, as part of importing the package — but __main__.py is the show.)</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Fastest way to find where an unfamiliar project starts executing?</p>
+          <div class="q-opts">
+            <button data-opt="a">Read [project.scripts] in pyproject.toml</button>
+            <button data-opt="b">Search every file for the word "start"</button>
+            <button data-opt="c">Open the largest file in the repo</button>
+          </div>
+          <p class="q-explain">A line like agentmail = "agentmail.cli:main" names the exact package, module, and function where execution begins. No scripts section? Then check for a __main__.py or a __name__ guard.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Why do engineers split code into many files?</p>
+          <div class="q-opts">
+            <button data-opt="a">Python runs many small files faster than one big one</button>
+            <button data-opt="b">Git cannot track files over a thousand lines</button>
+            <button data-opt="c">Cohesion, isolated testing, and diffs a reviewer can hold in their head</button>
+          </div>
+          <p class="q-explain">The interpreter is indifferent — splitting is for humans and their tools. One job per file means you can find it, test it alone, and review changes to it without wading through everything else.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. In the sandbox, cli.py said <code>from invoice import line</code>. What actually happened?</p>
+          <div class="q-opts">
+            <button data-opt="a">Python copied the text of invoice.py into cli.py</button>
+            <button data-opt="b">Python found the already-loaded invoice module in the cache and bound the name line</button>
+            <button data-opt="c">invoice.py re-runs from the top every time line() is called</button>
+          </div>
+          <p class="q-explain">Imports link to a module object, loaded once and cached in sys.modules — chapter 11's core lesson. That is why reordering the load list broke things: cli asked the cache for invoice before it existed.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A repo's layout is a message to humans, not a demand from Python — root paperwork, package under <code>src/</code>, mirror-image <code>tests/</code>, settings as data in <code>config/</code>.</li>
+          <li><code>pyproject.toml</code> is the signboard: the project's name, its dependency shopping list, and — in <code>[project.scripts]</code> — the exact function where execution starts.</li>
+          <li>Import lines are the corridors that turn a folder of files into one program; they flow one way, so deep files never depend on the files above them.</li>
+          <li>Three signatures mark a front door: a console script in <code>pyproject.toml</code>, a <code>__main__.py</code> for <code>python -m</code>, and the <code>if __name__ == "__main__"</code> guard for dual-use files.</li>
+          <li>Engineers split code for cohesion (one job per file), testability (test each piece alone), and review size (diffs a human can hold in their head) — never for speed.</li>
+          <li>Navigating a strange repo is a routine, not a talent: README and <code>pyproject.toml</code>, find the package, enter at the entry point, follow imports, let tests narrate, ignore the rest.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

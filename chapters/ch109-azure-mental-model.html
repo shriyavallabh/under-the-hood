@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The cloud, from zero: Azure's mental model — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch109">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XIII · The Deployment Platform</div>
+        <h1>The cloud, from zero: Azure's mental model</h1>
+        <p class="ch-tagline">Azure is not five hundred confusing products. It is one office building with a lease, floors, rooms, and badge access — and once you can see the building, every screen, every command, and every incident channel message snaps into focus.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 110 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A large bank signs the lease on a brand-new office tower. One lease, one monthly bill, one legal owner. The facilities head walks you through it on day one. The tower is divided into floors, and each floor belongs to one project: the payments team has the fourth floor, the fraud-models team the fifth. Each floor holds rooms — a server room, a records room, a workshop — and a room is where actual equipment lives and actual work happens. Badges control everything: a fourth-floor badge opens every door on four and none on five.</p>
+        <p>When a team needs a new room fitted out, there are two ways to ask. Walk down to the lobby and point at options on the concierge's glossy touchscreen, or phone the facilities desk and read out a precise work order. Either way, the same crew does the same fitting. One more thing, says the facilities head: the tower stands in this particular city because the regulator insists the bank's customer records never leave the country. The view had nothing to do with it.</p>
+      </section>
+
+      <h2>Why you are buying a building at all</h2>
+      <p>Hold that tower in your head, because it is the whole chapter. Back in <a href="ch092-always-on-platforms.html">the always-on platforms chapter</a> you saw the problem: an agent that must answer at 3 a.m. cannot live on somebody's laptop, because laptops sleep, reboot, and go home in a bag. It needs a permanent address — a machine that is always on, watched, and replaceable. The cloud is where you rent that address, and <dfn>Azure</dfn> is Microsoft's cloud: a global estate of data centres from which you lease exactly as much computing, storage, and networking as you need, by the hour.</p>
+      <p>The rest of this act builds up to your agent running in a Kubernetes pod on Azure. But Kubernetes screens and commands are hopeless to read until you know where anything <em>is</em> in Azure. So this chapter does one job: it gives you the map. Three levels of hierarchy, one decision about geography, two doors into the system, one idea about how Azure takes instructions, and one idea about who is allowed in. That is the entire mental model.</p>
+
+      <h2>One lease, many floors, numbered rooms</h2>
+      <p>Everything you ever touch in Azure lives at one of three levels, and they nest exactly like the tower.</p>
+      <p>At the top is the <dfn>subscription</dfn> — the lease. It is the billing and accountability boundary: every rupee of cloud spend rolls up to exactly one subscription, and access, quotas, and invoices are all scoped by it. A real bank holds many subscriptions — one for production, one for development, often one per business line — the way a large company leases several buildings. When something surprising appears on a bill, the first question is always "which subscription?"</p>
+      <p>Inside a subscription are <dfn>resource groups</dfn> — the floors. A resource group is a named folder for things that belong to one project and share one fate: they are deployed together, managed together, and — this is the important part — deleted together. Our bank's agent platform might have <code>agents-uat-rg</code> for the test environment and <code>agents-prod-rg</code> for production, each holding everything that environment needs and nothing else.</p>
+      <p>Inside a resource group are <dfn>resources</dfn> — the rooms, where equipment actually lives. A resource is any single thing Azure runs or keeps for you: a virtual machine, a database, a container registry, a Kubernetes cluster, a key vault. Every resource sits in exactly one resource group, and every resource group sits in exactly one subscription. No exceptions, no sharing, no ambiguity.</p>
+      <p>Azure spells this hierarchy out, literally, in every resource's ID — a postal address that reads building, floor, room:</p>
+
+      <div class="code-title">the full address of one Kubernetes cluster</div>
+      <pre><code class="language-bash">/subscriptions/9f8a1c2e-.../resourceGroups/agents-prod-rg/providers/Microsoft.ContainerService/managedClusters/agents-aks</code></pre>
+
+      <p>Read it right to left: a cluster named <code>agents-aks</code>, in the room category "managed clusters", on the floor <code>agents-prod-rg</code>, under one specific lease. Every error message, audit log, and permission rule in Azure ultimately points at an address shaped like this. (One level above subscriptions sits the <dfn>tenant</dfn> — the bank's directory of identities, the company itself that signs all the leases. You will see its name on login screens and rarely think about it otherwise.)</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Because a resource group's contents share one fate, deleting a resource group deletes <em>everything inside it</em> — clusters, databases, secrets, the lot — after a single confirmation prompt. It is the most consequential click in the portal. This is also its superpower: when an experiment ends, one delete removes every trace, with no orphaned resources quietly billing you for months.</p></div>
+
+      <h2>The vocabulary you need</h2>
+      <p>Six terms carry every Azure conversation you will ever sit in. Flip each card until the back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">subscription</span><span class="flip-back">The lease. The billing and access boundary that everything else lives inside. Bills, quotas, and audits are all per-subscription.</span></button>
+        <button class="flip" type="button"><span class="flip-front">resource group</span><span class="flip-back">A floor: a named folder for resources that are created, managed, and deleted together. One project or environment per group.</span></button>
+        <button class="flip" type="button"><span class="flip-front">resource</span><span class="flip-back">A room: one concrete thing Azure runs or stores for you — a VM, database, cluster, vault. Lives in exactly one resource group.</span></button>
+        <button class="flip" type="button"><span class="flip-front">region</span><span class="flip-back">The city your building stands in — a cluster of Microsoft data centres in one geography. Chosen for law and latency, not looks.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Azure Resource Manager</span><span class="flip-back">The facilities desk. The single control layer that receives every create/change/delete request, whichever door it came through.</span></button>
+        <button class="flip" type="button"><span class="flip-front">RBAC</span><span class="flip-back">Badge access: a role (Reader, Contributor, Owner) granted to an identity at a scope — subscription, group, or resource — flowing downward.</span></button>
+      </div>
+
+      <h2>Regions: choosing the city your building stands in</h2>
+      <p>A <dfn>region</dfn> is a cluster of Microsoft data centres in one geographic area — Central India, West Europe, East US, and dozens more. Every resource you create gets placed in a region, and the choice is rarely aesthetic. Three forces pick it for you.</p>
+      <p>First, <dfn>data residency</dfn> — the legal requirement that certain data physically stays within a jurisdiction. Our bank's regulator requires customer financial records to remain in the country; that single sentence eliminates most of the map before anyone discusses features. You met this class of constraint in <a href="ch094-bank-grade-requirements.html">the bank-grade requirements chapter</a> — region choice is where it stops being a policy document and becomes a dropdown selection. Second, latency: light is fast but not free, and an API served from a data centre near your users answers noticeably quicker than one an ocean away. Third, availability and price: not every Azure service exists in every region, and identical machines cost different amounts in different cities.</p>
+      <p>One honest wrinkle: a resource group also has a region — but that only says where its <em>bookkeeping</em> lives. A group in Central India can technically contain a database in West Europe. Sane teams keep a group's resources in the group's own region anyway, because mixed-region groups are how "the data never leaves the country" quietly becomes untrue.</p>
+
+      <h2>Two doors into the same rooms</h2>
+      <p>There are two everyday ways to work with Azure, and the single most useful thing you can learn today is that they are <em>the same thing</em>.</p>
+      <p>The <dfn>Azure portal</dfn> is the website — the concierge's touchscreen. You browse floors, click into rooms, fill in forms, and watch dashboards. It is unbeatable for looking around, checking a bill, or investigating an incident. The <dfn>az CLI</dfn> (pronounced "ay-zee") is the command-line tool — the phone line to the facilities desk. You type precise work orders like <code>az group create</code>, and because commands are text, they can be saved in files, code-reviewed, and replayed identically a hundred times. That is why automation, CI pipelines, and agents use the CLI: a portal click leaves no artifact to review or repeat, while a script checked into <a href="ch021-just-enough-git.html">git</a> is a permanent, auditable recipe.</p>
+      <p>Both doors deliver requests to the same back office: <dfn>Azure Resource Manager</dfn>, the control layer that owns every create, change, and delete. Make a resource group in the portal and <code>az group list</code> shows it immediately; make one from the terminal and it appears in the portal on refresh. There is no "portal Azure" and "CLI Azure". There is one building, and two doors.</p>
+      <p>Here is the portal's create-a-resource-group flow, screen by screen. Step through it — this is exactly what you will see, minus the corporate blue:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Portal home">
+          <h3>1. The portal home screen</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Azure portal<small>Search resources, services, and docs</small></div>
+              <div class="d-box dim">Create a resource</div>
+              <div class="d-box hot">Resource groups</div>
+              <div class="d-box dim">All resources</div>
+              <div class="d-box dim">Subscriptions</div>
+            </div>
+          </div>
+          <p class="step-cap">The home screen is a lobby directory: a big search bar on top, then tiles for the places people visit most. Nearly every journey starts by typing into that search bar or clicking a tile. We click <strong>Resource groups</strong>.</p>
+        </div>
+        <div class="step" data-title="Resource groups list">
+          <h3>2. The Resource groups screen — the floor directory</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">+ Create<small>toolbar button</small></div>
+              <div class="d-box">agents-prod-rg<small>Central India</small></div>
+              <div class="d-box">data-uat-rg<small>Central India</small></div>
+              <div class="d-box dim">mlops-sandbox-rg<small>West Europe</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Every row is a floor in the building: name on the left, region alongside. This list is scoped to the subscriptions you can see — colleagues with different badges see a different list. We click <strong>+ Create</strong> in the toolbar.</p>
+        </div>
+        <div class="step" data-title="The Basics form">
+          <h3>3. The create form — three decisions, no more</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Subscription<small>bank-nonprod</small></div>
+              <div class="d-box hot">Resource group<small>agents-uat-rg</small></div>
+              <div class="d-box">Region<small>Central India</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The form asks for exactly the hierarchy you just learned: which lease (subscription), what to call the new floor (name), and which city (region). Notice there is nothing else — a resource group is pure organisation, so there is nothing to size or configure.</p>
+        </div>
+        <div class="step" data-title="Review + create">
+          <h3>4. Review + create</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box good">Validation passed</div>
+              <div class="d-box hot">Create<small>submit button</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The portal first asks Resource Manager to validate the request — is the name free, do you have permission, does the region exist — then shows this green banner. Clicking <strong>Create</strong> sends the very same API call the CLI would send.</p>
+        </div>
+        <div class="step" data-title="The empty floor">
+          <h3>5. Your new, empty floor</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box good">agents-uat-rg<small>Central India · bank-nonprod</small></div>
+              <div class="d-box dim">No resources to display<small>waiting for its first room</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Done — usually in about two seconds. An empty resource group costs nothing; it is a label, not a machine. In the next chapters this floor fills up with a container registry and a Kubernetes cluster.</p>
+        </div>
+      </div>
+
+      <h2>The same job from the keyboard</h2>
+      <p>Now the second door. Same building, same floor, but this time as work orders you could paste into a script. First, prove who you are:</p>
+
+      <div class="code-title">terminal — sign in once</div>
+      <pre><code class="language-bash">az login</code></pre>
+
+      <p>Line by line — well, token by token: <code>az</code> is the program itself, the Azure CLI installed on your machine, and <code>login</code> is its sign-in command. Running it pops open a browser window where you authenticate with your organisation account (on a browserless server it prints a code to type in on another device instead). When the browser dance finishes, the CLI caches your credentials in a hidden folder under your home directory — much like the config-and-environment machinery you met in <a href="ch019-logging-config-env.html">the config chapter</a> — so you stay signed in across terminal sessions.</p>
+      <p>Since a bank employee usually has badges for several leases, check which subscription you are pointed at, and switch if needed:</p>
+
+      <div class="code-title">terminal — pick the right lease</div>
+      <pre><code class="language-bash">az account show --output table
+az account set --subscription "bank-nonprod"</code></pre>
+
+      <p>The first line: <code>az</code> again, then <code>account</code> — the noun, meaning subscription context — then <code>show</code>, the verb, and <code>--output table</code>, a formatting flag that swaps the CLI's default JSON for a human-friendly table. The second line: same noun, verb <code>set</code>, and <code>--subscription</code> naming the lease to make current. Every <code>az</code> command from now on acts inside <code>bank-nonprod</code> until you switch again. Creating a resource in the wrong subscription is the classic day-one mistake, which is why careful runbooks always start with these two lines.</p>
+      <p>Now build the floor:</p>
+
+      <div class="code-title">terminal — create the resource group</div>
+      <pre><code class="language-bash">az group create --name agents-uat-rg --location centralindia</code></pre>
+
+      <p>Token by token once more: <code>az</code> the tool; <code>group</code> the noun — resource group; <code>create</code> the verb; <code>--name agents-uat-rg</code> what to call it; <code>--location centralindia</code> the region, written in the CLI's compact style — lowercase, no spaces — where the portal showed "Central India". Those five tokens carry exactly the three decisions the portal form asked for (the subscription is implied by <code>az account set</code>). Azure answers in JSON:</p>
+
+      <div class="code-title">the reply from Resource Manager</div>
+      <pre><code class="language-json">{
+  "id": "/subscriptions/9f8a1c2e-.../resourceGroups/agents-uat-rg",
+  "location": "centralindia",
+  "name": "agents-uat-rg",
+  "properties": {
+    "provisioningState": "Succeeded"
+  }
+}</code></pre>
+
+      <p>You already know how to read all of it: the <code>id</code> is the postal address showing lease and floor, and <code>"provisioningState": "Succeeded"</code> is the receipt. Verify the floor exists — and notice it also now shows in the portal, because two doors, one building:</p>
+
+      <div class="code-title">terminal — list the floors</div>
+      <pre><code class="language-bash">az group list --output table</code></pre>
+
+      <p>The grammar you just used — <code>az &lt;noun&gt; &lt;verb&gt; --flags</code> — is the whole CLI. In the coming chapters you will run <code>az acr create</code> (a container registry), <code>az aks create</code> (a Kubernetes cluster), and <code>az aks get-credentials</code> (wire up your terminal to that cluster), and you will find you can already read every one of them at a glance.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Teams live and die by naming conventions. A name like <code>agents-uat-rg</code> tells a stranger the project (agents), the environment (uat), and the kind of thing it is (a resource group) before they click anything. Pick a pattern early and never deviate — six months later, at 2 a.m., the person grepping the audit log will thank you.</p></div>
+
+      <h2>Say the building you want: the declarative idea</h2>
+      <p>Everything above was <em>imperative</em>: do this, then this, one work order at a time. Resource Manager also accepts something better — a <dfn>template</dfn>: a single file, in JSON (which you have read fluently since <a href="ch005-yaml-and-json.html">the YAML and JSON chapter</a>) or Azure's friendlier Bicep language, that describes the entire desired building — every floor, every room, every setting — and hands the whole drawing to Azure with "make reality match this". Resource Manager compares the drawing to what already exists, works out the differences, and creates, updates, or skips accordingly; hand it the same file twice and the second run changes nothing, because reality already matches. This is <dfn>declarative</dfn> infrastructure — you state the <em>what</em> and the platform derives the <em>how</em> — and it is the single most important idea to carry out of this chapter, because Kubernetes, two chapters from now, runs on exactly the same contract.</p>
+      <p>You can feel the idea in twenty lines of Python. This little reconciler is a toy version of what Resource Manager does with every template:</p>
+
+      <div class="pyrun" data-title="declarative reconciliation — the cloud's inner habit">
+<textarea class="py-src" spellcheck="false">
+# The drawing you hand over: the building you WANT.
+desired = {
+    "agents-uat-rg":  ["container-registry", "key-vault"],
+    "agents-prod-rg": ["container-registry", "key-vault", "monitor"],
+}
+
+# What actually exists right now.
+current = {
+    "agents-uat-rg": ["container-registry"],
+}
+
+def reconcile(desired, current):
+    """Compare want vs have, emit only the missing steps."""
+    steps = []
+    for rg, rooms in desired.items():
+        if rg not in current:
+            steps.append(f"create resource group {rg}")
+        have = set(current.get(rg, []))
+        for room in rooms:
+            if room not in have:
+                steps.append(f"  create {room} in {rg}")
+    return steps
+
+print("First run — reality is behind the drawing:")
+for step in reconcile(desired, current):
+    print(" ", step)
+
+print()
+print("Second run — reality already matches the drawing:")
+steps = reconcile(desired, desired)
+print("  steps needed:", len(steps), "(nothing to do — that's idempotence)")
+</textarea>
+      </div>
+
+      <p>Try it: add a <code>"database"</code> room to the prod group in <code>desired</code> and run again — the reconciler emits exactly one new step and touches nothing else. That surgical, repeatable, no-drama behaviour is why platform teams describe infrastructure in files rather than clicks.</p>
+
+      <h2>Badges at every door: RBAC in one paragraph</h2>
+      <p><dfn>RBAC</dfn> — role-based access control — is the tower's badge system, and one paragraph genuinely covers it. A <em>role</em> is a bundle of permissions: Reader may look at everything but change nothing, Contributor may create and modify resources, Owner may do all that <em>and</em> hand out badges to others. You grant a role to an <em>identity</em> — a person, a team, or a running program such as your agent — at a <em>scope</em>: the whole subscription, one resource group, or a single resource. Permission flows downward, never up: a Contributor badge on <code>agents-uat-rg</code> opens every room on that floor, but not the lobby and not the fifth floor. So when a teammate messages "the portal says I don't have authorization", the diagnosis is always the same shape — wrong role, wrong identity, or wrong scope — and the fix is a badge granted at the narrowest scope that unblocks them, because in a bank, nobody gets a master key for convenience.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This chapter's vocabulary is the working language of every cloud team. Incident channels open with "which subscription is that in?" and "what's the resource group?" before anyone discusses the bug. CI pipeline files are full of <code>--resource-group</code> and <code>--subscription</code> flags — you can now read them cold. Merge requests titled "move the vault to the prod RG" or "grant the deploy identity Contributor on agents-prod-rg" are hierarchy and RBAC moves you can picture as floors and badges. And when a proposal says "we must deploy in-region for residency", you know that is a legal constraint wearing a dropdown's clothes.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Which containment order is correct, outermost first?</p>
+          <div class="q-opts">
+            <button data-opt="a">resource group &gt; subscription &gt; resource</button>
+            <button data-opt="b">subscription &gt; resource group &gt; resource</button>
+            <button data-opt="c">region &gt; subscription &gt; resource group</button>
+          </div>
+          <p class="q-explain">The lease holds the floors, the floors hold the rooms: subscription (billing boundary) contains resource groups (project folders) which contain resources (actual things). The resource ID path spells it out: /subscriptions/.../resourceGroups/.../providers/...</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. You delete the resource group <code>agents-uat-rg</code>, which contains a container registry and a key vault. What happens to them?</p>
+          <div class="q-opts">
+            <button data-opt="a">They are moved to a default resource group</button>
+            <button data-opt="b">They keep running but disappear from the portal</button>
+            <button data-opt="c">They are deleted along with the group</button>
+          </div>
+          <p class="q-explain">A resource group's contents share one fate — demolish the floor and every room goes with it. That is exactly why groups should contain things that live and die together, and why that delete prompt deserves a slow, careful read.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. A colleague creates a resource group in the portal. Will <code>az group list</code> in your terminal show it?</p>
+          <div class="q-opts">
+            <button data-opt="a">Yes — portal and CLI are two doors into the same Resource Manager</button>
+            <button data-opt="b">No — portal resources are only visible in the portal</button>
+            <button data-opt="c">Only after you re-run <code>az login</code></button>
+          </div>
+          <p class="q-explain">Both the portal and the az CLI send requests to Azure Resource Manager, the single control layer. There is one building; the concierge screen and the facilities phone line just take orders for it. (Assuming, of course, your badge lets you see that subscription.)</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Why does the bank deploy its agent platform in an in-country region rather than the cheapest region worldwide?</p>
+          <div class="q-opts">
+            <button data-opt="a">In-country regions always have newer hardware</button>
+            <button data-opt="b">Data-residency regulation requires customer data to stay in the country, and nearby regions cut latency</button>
+            <button data-opt="c">The az CLI only works with regions in your own country</button>
+          </div>
+          <p class="q-explain">Region choice is driven by law first (residency), then physics (latency), then availability and price. For a regulated bank, the residency rule alone eliminates most of the map before anything else is discussed.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. An engineer holds the Reader role scoped to the resource group <code>agents-prod-rg</code>. What can they do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Nothing until they are also granted Reader on each resource inside</button>
+            <button data-opt="b">View and restart resources in that group</button>
+            <button data-opt="c">View everything in that group, change nothing</button>
+          </div>
+          <p class="q-explain">RBAC flows downward from the scope of the grant: Reader on the floor means see-only access to every room on that floor — no extra per-resource grants needed, and no ability to modify anything. Changing or restarting things takes Contributor.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Azure is an office building: the subscription is the lease (billing and access boundary), resource groups are floors (things deployed and deleted together), and resources are the rooms where real equipment lives.</li>
+          <li>Every resource has a postal-address ID — /subscriptions/.../resourceGroups/.../providers/... — and reading it right to left tells you exactly where anything lives.</li>
+          <li>Regions are chosen by law (data residency), physics (latency), and availability — for a regulated bank, residency alone usually decides the city.</li>
+          <li>The portal and the az CLI are two doors into the same rooms: both send requests to Azure Resource Manager. Explore in the portal; automate, review, and repeat with the CLI.</li>
+          <li>The CLI's grammar is always <code>az &lt;noun&gt; &lt;verb&gt; --flags</code> — once you can read <code>az group create --name ... --location ...</code>, you can read the whole tool.</li>
+          <li>The declarative idea — hand over a drawing of the desired building and let the platform reconcile reality to it — is Azure's deepest habit, and Kubernetes runs on exactly the same contract.</li>
+          <li>RBAC is badge access: a role, granted to an identity, at a scope, flowing downward — and "you don't have authorization" always means wrong role, identity, or scope.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

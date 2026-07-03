@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A guided tour of GitLab — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch098">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>A guided tour of GitLab</h1>
+        <p class="ch-tagline">Groups, projects, the sidebar, the home screen — by the end of this chapter you will walk into any GitLab project your team owns and know exactly where everything lives.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 99 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>It is your first Monday at a huge office campus. Reception gives you a badge and a laminated map. The campus has dozens of buildings, one per department, and some buildings contain smaller wings for sub-teams. But here is the thing that makes the place navigable: <em>inside every building, every office follows the same floor plan</em>. Filing room on the left, where all the documents live. A front desk with a register of requests and complaints. A tray of proposals waiting for a manager's sign-off. A workshop humming behind glass, where work is assembled and tested. And a manager's cabin at the back, where the rules of the office are set.</p>
+        <p>By lunch you have visited exactly one office — yet you could now find the filing room in any of the four hundred others, because the layout never changes. GitLab is that campus. Buildings are <strong>groups</strong>, offices are <strong>projects</strong>, and the identical floor plan is the <strong>left sidebar</strong>. Learn one office and you have learned them all.</p>
+      </section>
+
+      <h2>From your laptop to the shared home</h2>
+      <p>Quick recap of where we are. In <a href="ch096-git-fundamentals.html">Git: the time machine</a> you learned that git records snapshots of your work as commits, entirely on your own laptop. In <a href="ch097-branching-strategies.html">Feature branches, release branches</a> you learned that branches are parallel drafts of the same history. And from <a href="ch021-just-enough-git.html">just enough git</a> you know that <code>git push</code> sends commits to a <em>remote</em> — a shared copy the whole team can reach.</p>
+      <p>This chapter answers the obvious next question: <em>where does that shared copy actually live?</em> For most large organisations — and almost every bank — the answer is GitLab. Run this on any work laptop and you will see the connection:</p>
+
+      <div class="code-title">terminal — the remote is just a GitLab address</div>
+      <pre><code class="language-bash">$ git remote -v
+origin  https://gitlab.yourbank.internal/data-science/agent-platform/fraud-triage-agent.git (fetch)
+origin  https://gitlab.yourbank.internal/data-science/agent-platform/fraud-triage-agent.git (push)</code></pre>
+
+      <p>Every <code>git push</code> you will ever run at work ends its journey inside a GitLab project. The rest of this chapter is a tour of what surrounds that landing spot.</p>
+
+      <h2>Why GitLab, and not GitHub?</h2>
+      <p>You have almost certainly seen GitHub — the public square of open source, home of LangChain, LangGraph and every framework this course has touched. GitLab is the same species of tool: a website wrapped around git remotes, with reviews, issue tracking and automation attached. So why do enterprises overwhelmingly run GitLab instead? Three reasons.</p>
+      <p><strong>First, self-hosting.</strong> GitLab is software a company can install on its <em>own</em> servers, behind its own firewall. Your employer's GitLab lives at an internal address — something like <code>gitlab.yourbank.internal</code> — and the source code never leaves the building. For a regulated business, "our code never touches someone else's cloud" is not a preference, it is a compliance requirement. A company-run copy of GitLab is called an <dfn>instance</dfn> — one installation of the software, wholly owned and administered by the company.</p>
+      <p><strong>Second, built-in CI.</strong> GitLab shipped with a native automation engine — pipelines — from its early days. Push code, and the same application that stores it can automatically test, lint, build and deploy it, no add-on required. You will spend two whole chapters on this (<a href="ch101-gitlab-pipelines.html">Pipelines: .gitlab-ci.yml decoded</a>), because pipelines are where your tests and agent evals actually run.</p>
+      <p><strong>Third, one application for everything.</strong> Code, review, issues, milestones, CI, container registry — one login, one sidebar, one place for auditors to look. Enterprises like fewer moving parts.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Everything you learn here transfers. GitHub and GitLab agree on about ninety percent of concepts and differ mostly in vocabulary — the famous one being that GitHub says <em>pull request (PR)</em> where GitLab says <em>merge request (MR)</em>. Same object, different name on the door. If a colleague says "raise an MR", they mean exactly what a GitHub tutorial calls opening a PR.</p></div>
+
+      <h2>Groups and projects: reading the campus map</h2>
+      <p>GitLab organises everything into a hierarchy of exactly two kinds of thing. A <dfn>group</dfn> is a folder that holds projects and other groups — the building on our campus, usually named after a department. A group inside a group is a <dfn>subgroup</dfn> — a wing of the building. And a <dfn>project</dfn> is the office itself: <em>one</em> git repository plus everything that orbits it — issues, merge requests, pipelines, settings. When people casually say "the repo", in GitLab terms they nearly always mean the whole project.</p>
+      <p>The beautiful part: the hierarchy is spelled out in every URL you visit, readable like a postal address. Click through the lines below — the address of a single merge request, dissected:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">anatomy of a GitLab URL — click each segment</div>
+        <div class="wl-line"><code>https://gitlab.yourbank.internal</code>
+          <div class="wl-note">The instance — your company's own installation of GitLab. On the public internet this would be <code>gitlab.com</code>; at work it is an internal hostname reachable only from the office network or VPN.</div></div>
+        <div class="wl-line"><code>/data-science</code>
+          <div class="wl-note">The top-level group. The building. Every project the department owns lives under this path, and permissions granted here flow down to everything inside.</div></div>
+        <div class="wl-line"><code>/agent-platform</code>
+          <div class="wl-note">A subgroup — a wing of the building for one team. Groups nest several levels deep; big organisations mirror their org chart this way.</div></div>
+        <div class="wl-line"><code>/fraud-triage-agent</code>
+          <div class="wl-note">The project. One git repository plus its issues, merge requests, pipelines and settings. This is the level your <code>git remote</code> points at.</div></div>
+        <div class="wl-line"><code>/-/</code>
+          <div class="wl-note">A quiet separator. Everything before it names <em>where</em> you are; everything after it names <em>which feature page</em> you are viewing. It exists so a project named, say, <code>issues</code> can never collide with the issues feature.</div></div>
+        <div class="wl-line"><code>merge_requests/42</code>
+          <div class="wl-note">The feature page: merge request number 42. Swap this segment for <code>issues/7</code> or <code>pipelines</code> and you are in a different room of the same office.</div></div>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>This means you can navigate GitLab by editing the address bar, the way power users do. Lost deep inside a pipeline log? Delete everything after the project name and press Enter — you are back at the project's front door.</p></div>
+
+      <h2>The left sidebar: one map for every project</h2>
+      <p>Open any project and the left edge of the screen shows the sidebar — the identical floor plan from our story. On a current GitLab it is grouped into labelled sections (the navigation was redesigned in 2023; an older self-hosted instance may show the same entries as a flat list, but the words are the same). You will use five of these sections daily and can politely ignore the rest for now. Step through the map:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The whole map">
+          <h3>1. The floor plan, at a glance</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">fraud-triage-agent<small>project name — click to go home</small></div>
+              <div class="d-box dim">Manage<small>members, labels, activity</small></div>
+              <div class="d-box dim">Plan<small>issues, milestones, wiki</small></div>
+              <div class="d-box dim">Code<small>merge requests, repository, branches</small></div>
+              <div class="d-box dim">Build<small>pipelines, jobs</small></div>
+              <div class="d-box dim">Settings<small>rules of the office</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The project sidebar. Six labelled sections, always in this order, in every project on the instance. The project name at the top is always a one-click route back to the home screen.</p>
+        </div>
+        <div class="step" data-title="Plan — issues">
+          <h3>2. Plan: the request register</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">fraud-triage-agent</div>
+              <div class="d-box dim">Manage</div>
+              <div class="d-box hot">Plan<small>Issues · Boards · Milestones</small></div>
+              <div class="d-box dim">Code</div>
+              <div class="d-box dim">Build</div>
+              <div class="d-box dim">Settings</div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Issue list<small>bugs, ideas, tasks — each one numbered and discussable</small></div>
+          </div>
+          <p class="step-cap">Plan holds the work that is <em>talked about</em>: issues (the register of bugs, requests and tasks), boards that arrange them in columns, milestones that bundle them toward a date. No code here — this is the front desk.</p>
+        </div>
+        <div class="step" data-title="Code — files and MRs">
+          <h3>3. Code: the filing room, and the proposal tray</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">fraud-triage-agent</div>
+              <div class="d-box dim">Manage</div>
+              <div class="d-box dim">Plan</div>
+              <div class="d-box hot">Code<small>Merge requests · Repository · Branches · Commits</small></div>
+              <div class="d-box dim">Build</div>
+              <div class="d-box dim">Settings</div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">Merge requests<small>changes awaiting review</small></div>
+              <div class="d-box">Repository<small>browse every file and branch</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Code is where the git material lives: the repository browser, branches, commit history — and, first in the list, <strong>Merge requests</strong>: the tray of proposed changes awaiting review. You will open this entry more than any other.</p>
+        </div>
+        <div class="step" data-title="Build — pipelines">
+          <h3>4. Build: the workshop behind glass</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">fraud-triage-agent</div>
+              <div class="d-box dim">Manage</div>
+              <div class="d-box dim">Plan</div>
+              <div class="d-box dim">Code</div>
+              <div class="d-box hot">Build<small>Pipelines · Jobs</small></div>
+              <div class="d-box dim">Settings</div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box good">Pipeline #8841 — passed<small>branch: feat/retry-budget</small></div>
+              <div class="d-box">Pipeline #8840 — failed<small>branch: main</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Build lists every pipeline the project has run, each with a status: passed, failed, or running. Click one to see its jobs and their logs. This is where "did my change break the tests?" gets its answer.</p>
+        </div>
+        <div class="step" data-title="Settings">
+          <h3>5. Settings: the manager's cabin</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">fraud-triage-agent</div>
+              <div class="d-box dim">Manage</div>
+              <div class="d-box dim">Plan</div>
+              <div class="d-box dim">Code</div>
+              <div class="d-box dim">Build</div>
+              <div class="d-box hot">Settings<small>General · Repository · Merge requests · CI/CD</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Rules<small>protected branches, approval rules, CI variables</small></div>
+          </div>
+          <p class="step-cap">Settings holds the rules: which branches are protected from direct pushes, how many approvals an MR needs, which secret variables pipelines may use. Maintainer territory — you will read it far more often than change it.</p>
+        </div>
+        <div class="step" data-title="The rest">
+          <h3>6. The sections you can ignore (for now)</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Plan · Code · Build · Settings<small>your daily four</small></div>
+              <div class="d-box dim">Secure · Deploy · Operate · Monitor · Analyze<small>security scans, releases, environments, charts</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The remaining sections cover security scanning, package registries, deployments and analytics. Real and useful — and none of them are needed to ship your first merge request. Explore later; nothing in there bites a reader.</p>
+        </div>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Your company's instance may hide entries an administrator has switched off, and version differences move the odd item around. Do not panic if a screenshot from a blog post does not match your screen pixel-for-pixel — the section names and the URL patterns are the stable part, and they are what this chapter teaches.</p></div>
+
+      <h2>The project home screen, decoded</h2>
+      <p>Click any project's name and you land on its home screen. It looks busy the first time; it is actually only five horizontal bands, always in the same order. Step through them:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Title row">
+          <h3>1. The nameplate</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">fraud-triage-agent &nbsp;Private<small>star 12 · fork 4</small></div>
+              <div class="d-box dim">main + branch switcher · Find file · Code<small>action row</small></div>
+              <div class="d-box dim">last commit line</div>
+              <div class="d-box dim">file list</div>
+              <div class="d-box dim">README, rendered</div>
+            </div>
+          </div>
+          <p class="step-cap">The nameplate: project name, a visibility badge (Private, Internal or Public — who on the instance can see it), and star/fork counts. Stars are bookmarks; a fork is a personal copy of the whole project.</p>
+        </div>
+        <div class="step" data-title="Action row">
+          <h3>2. The branch switcher and the Code button</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">nameplate</div>
+              <div class="d-box hot">main<small>branch switcher — pick which draft of history you are viewing</small></div>
+              <div class="d-box dim">last commit line</div>
+              <div class="d-box dim">file list</div>
+              <div class="d-box dim">README, rendered</div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Code<small>copy the clone URL from here</small></div>
+          </div>
+          <p class="step-cap">Everything below this row shows ONE branch at a time — the switcher starts on the default branch, usually <code>main</code>. Flip it to a feature branch and the file list silently becomes that branch's version, a direct echo of <a href="ch097-branching-strategies.html">the branching chapter</a>. The Code button hands you the <code>git clone</code> URL.</p>
+        </div>
+        <div class="step" data-title="Last commit">
+          <h3>3. The freshness line, with a verdict</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">nameplate</div>
+              <div class="d-box dim">action row</div>
+              <div class="d-box hot">"tune retry budget" · 2 hours ago<small>most recent commit on this branch</small></div>
+              <div class="d-box dim">file list</div>
+              <div class="d-box dim">README, rendered</div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">passed<small>pipeline status of that commit</small></div>
+          </div>
+          <p class="step-cap">One line shows the latest commit's message and age — and, crucially, a status icon: the verdict of the pipeline that ran on that exact commit. Green means the newest snapshot passed its automated checks. The single fastest health-read of any project.</p>
+        </div>
+        <div class="step" data-title="File list">
+          <h3>4. The filing cabinet</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">nameplate · action row · commit line</div>
+              <div class="d-box hot">agents/<small>"add triage prompt v3" · 2 hours ago</small></div>
+              <div class="d-box hot">evals/<small>"expand regression set" · 3 days ago</small></div>
+              <div class="d-box hot">.gitlab-ci.yml<small>"cache pip" · 1 week ago</small></div>
+              <div class="d-box hot">README.md<small>"fix setup steps" · 3 weeks ago</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The top-level files and folders — and next to each, the message and age of the <em>last commit that touched it</em>. You can smell a codebase from this table alone: which parts are alive, which have not moved in a year. Note <code>.gitlab-ci.yml</code>: that one file defines the pipeline, and it gets its own chapter soon.</p>
+        </div>
+        <div class="step" data-title="README">
+          <h3>5. The welcome mat</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">nameplate · action row · commit line · files</div>
+              <div class="d-box hot">README.md, rendered<small>what this project is, how to set it up, who to ask</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Below the files, GitLab renders <code>README.md</code> as a formatted page — the project introducing itself. When you join a new team, reading three READMEs teaches you more than a week of meetings.</p>
+        </div>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Press <code>?</code> anywhere in GitLab to see the full keyboard-shortcut list. Even learning just two — <code>g</code> then <code>m</code> jumps to a project's merge requests, <code>g</code> then <code>p</code> to its pipelines — makes you look like you have worked there for years.</p></div>
+
+      <h2>Where is MY stuff? The three counters</h2>
+      <p>Everything so far was about one project. But on a workday morning your first question is personal: <em>what needs me?</em> GitLab answers it at the very top of the sidebar, next to your avatar, with three small counters — assigned issues, merge requests, and the To-Do List. Step through the morning routine:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The counters">
+          <h3>1. Three numbers by your avatar</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">Your avatar<small>issues 1 · merge requests 5 · to-dos 3</small></div>
+              <div class="d-box dim">Search or go to...<small>jump to any project or group</small></div>
+              <div class="d-box dim">Project sidebar<small>Plan · Code · Build ...</small></div>
+            </div>
+          </div>
+          <p class="step-cap">These counters are instance-wide — they total your work across every project you belong to, and they read the same wherever you are standing on the campus.</p>
+        </div>
+        <div class="step" data-title="Your merge requests">
+          <h3>2. The merge-request counter, split two ways</h3>
+          <div class="diagram">
+            <div class="d-box dim">MR counter<small>5</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">Assigned to you (3)<small>your own changes in flight</small></div>
+              <div class="d-box hot">Review requests (2)<small>colleagues waiting on YOUR review</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The merge-request counter splits in two: MRs assigned to you (your own work to carry to the finish) versus review requests (someone waiting on your eyes). The second list blocks other people — clear it first. The full page lives at <code>/dashboard/merge_requests</code>.</p>
+        </div>
+        <div class="step" data-title="To-Do List">
+          <h3>3. The To-Do List: your GitLab inbox</h3>
+          <div class="diagram">
+            <div class="d-box dim">to-dos<small>3</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">A teammate mentioned you on issue #218</div>
+              <div class="d-box hot">Review requested on MR !42</div>
+              <div class="d-box hot">Pipeline for your MR failed</div>
+            </div>
+          </div>
+          <p class="step-cap">Anything that pings you — an @-mention, a review request, a failed pipeline on your branch — lands here and stays until you act on it or mark it done. Treat it like an inbox and aim for zero; it is how you never drop a thread.</p>
+        </div>
+        <div class="step" data-title="Your pipelines">
+          <h3>4. Did my change pass?</h3>
+          <div class="diagram">
+            <div class="d-box">Your MR page<small>the change you pushed</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Pipeline: passed<small>shown right inside the MR</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Build &gt; Pipelines<small>the full history, if you need it</small></div>
+          </div>
+          <p class="step-cap">The fastest route to your pipeline is not the Build section — it is your own merge request, which shows the latest pipeline for your branch right in its header. Dig into Build &gt; Pipelines only for history or other people's runs. Convention note: issues are written <code>#218</code>, merge requests <code>!42</code> — the exclamation mark always means an MR.</p>
+        </div>
+      </div>
+
+      <h2>The words on the doors</h2>
+      <p>GitLab has its own dialect, and using it correctly is half of sounding fluent in your first week. Flip each card until the vocabulary feels natural:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">merge request (MR)</span><span class="flip-back">A request to merge one branch into another, wrapped in a review conversation. Exactly what GitHub calls a pull request. Written as !42.</span></button>
+        <button class="flip" type="button"><span class="flip-front">pipeline</span><span class="flip-back">The automated checklist that runs when code is pushed — tests, linting, builds — made of individual jobs. Defined by the project's .gitlab-ci.yml file.</span></button>
+        <button class="flip" type="button"><span class="flip-front">runner</span><span class="flip-back">A machine (often a container or VM) that actually executes pipeline jobs. GitLab decides WHAT to run; runners are the muscle that runs it — inside the company network for self-hosted instances.</span></button>
+        <button class="flip" type="button"><span class="flip-front">milestone</span><span class="flip-back">A dated bucket of issues and MRs — a sprint or a release target. Progress bars show how much of the bucket is done as the date approaches.</span></button>
+        <button class="flip" type="button"><span class="flip-front">issue</span><span class="flip-back">A numbered, discussable unit of work: a bug report, a task, an idea. Written as #218. Lives under Plan; contains conversation, not code.</span></button>
+        <button class="flip" type="button"><span class="flip-front">group</span><span class="flip-back">A folder holding projects and other groups (subgroups), usually mirroring a department or team. Permissions granted on a group flow down to everything inside it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">instance</span><span class="flip-back">One installation of GitLab. gitlab.com is an instance run by GitLab the company; your employer's internal GitLab is an instance they run themselves.</span></button>
+        <button class="flip" type="button"><span class="flip-front">protected branch</span><span class="flip-back">A branch (usually main) that nobody may push to directly — changes arrive only through reviewed merge requests. Configured in Settings; the reason the MR workflow exists.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Listen for this dialect in your team's chat. "Can you look at !87?" means review my merge request. "It's tracked in #431" means the discussion lives on that issue. "The runner queue is backed up" explains why pipelines sit in <em>pending</em> before running. "It's slated for the March milestone" tells you when work is due. And when someone posts a bare GitLab URL, you can now read it before clicking: instance, group, subgroup, project, <code>/-/</code>, feature page. The moment you reply "approved !87, pipeline's green" without pausing to translate, you have stopped being a visitor.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A colleague says "raise an MR when you're ready". What are they asking for?</p>
+          <div class="q-opts">
+            <button data-opt="a">An incident report about a production failure</button>
+            <button data-opt="b">A merge request — a reviewed proposal to merge your branch, what GitHub calls a pull request</button>
+            <button data-opt="c">A meeting request with the maintainers</button>
+          </div>
+          <p class="q-explain">MR = merge request, GitLab's name for GitHub's pull request. Same object: your branch, proposed for merging, wrapped in a review conversation. It is written as !42, while issues are written as #42.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Why do banks and other regulated companies run their own GitLab instance instead of using a cloud service?</p>
+          <div class="q-opts">
+            <button data-opt="a">Self-hosted GitLab is faster than any cloud service</button>
+            <button data-opt="b">GitHub cannot do code review</button>
+            <button data-opt="c">Self-hosting keeps source code and CI entirely inside the company's own network, which compliance demands</button>
+          </div>
+          <p class="q-explain">The decisive feature is self-hosting: the instance runs on company servers behind the company firewall, so code never leaves the building. Built-in CI and the single-application design sweeten the deal, but the compliance story is what closes it.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. You want to see the open bugs and task discussions for a project. Which sidebar section do you open?</p>
+          <div class="q-opts">
+            <button data-opt="a">Plan — issues, boards and milestones live there</button>
+            <button data-opt="b">Build — that is where work is tracked</button>
+            <button data-opt="c">Settings — issues are a configuration item</button>
+          </div>
+          <p class="q-explain">Plan is the front desk: issues, issue boards, milestones. Code holds the repository and merge requests; Build holds pipelines and jobs; Settings holds the rules. Same map in every project.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. A pipeline has been sitting in "pending" for ten minutes. Which piece of the machinery is the bottleneck?</p>
+          <div class="q-opts">
+            <button data-opt="a">The milestone — it has not reached its due date yet</button>
+            <button data-opt="b">A runner — no machine is free to execute the pipeline's jobs yet</button>
+            <button data-opt="c">The merge request — it has not been approved yet</button>
+          </div>
+          <p class="q-explain">GitLab schedules jobs, but runners — the actual machines — execute them. When every runner is busy, jobs queue up as pending. "The runner queue is backed up" is a sentence you will hear, and now understand.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. What is the relationship between a group and a project?</p>
+          <div class="q-opts">
+            <button data-opt="a">A group is a single repository; a project is a folder of groups</button>
+            <button data-opt="b">They are two names for the same thing</button>
+            <button data-opt="c">A group is a folder holding projects and subgroups; a project is one repository plus its issues, MRs and pipelines</button>
+          </div>
+          <p class="q-explain">Groups are the buildings, projects are the offices. The hierarchy is visible in every URL: instance, then group and subgroups, then the project, then /-/ and the feature page.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>GitLab is the shared home your <code>git push</code> lands in — a website wrapped around remotes, plus reviews, issues and automation. Enterprises choose it because it can be self-hosted inside their own network and ships with built-in CI.</li>
+          <li>The hierarchy is groups (folders, often nested as subgroups) containing projects (one repository plus its issues, merge requests, pipelines and settings) — and every URL spells the whole path out, with <code>/-/</code> separating the place from the feature page.</li>
+          <li>The left sidebar is the same in every project: Plan for issues and milestones, Code for the repository and merge requests, Build for pipelines and jobs, Settings for the rules. Learn it once, use it everywhere.</li>
+          <li>The project home screen is five bands — nameplate, branch switcher, last-commit line with its pipeline verdict, file list, README — and the little green or red pipeline icon is the fastest health-read of any project.</li>
+          <li>Your personal work lives in the counters by your avatar: assigned issues, merge requests (split into "assigned to you" and "review requests"), and the To-Do List — GitLab's inbox. Clear review requests first; they block other people.</li>
+          <li>Speak the dialect: MR not PR, <code>!42</code> for merge requests, <code>#218</code> for issues, runners execute pipeline jobs, milestones bundle work toward a date.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

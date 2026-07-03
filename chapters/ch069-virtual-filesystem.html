@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The virtual file system — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch069">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VIII · Deep Agents</div>
+        <h1>The virtual file system</h1>
+        <p class="ch-tagline">Deep agents survive hours-long runs by writing findings to files and reading back only what they need — and a pluggable backend decides whether those "files" live in agent state, on real disk, in Postgres, or in all three at once.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 70 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Detective Ambika runs the busiest desk in the station, and her corkboard holds exactly twenty index cards. Not twenty-one — that is the rule. Every case she works produces crates of material: bank statements, call logs, witness transcripts. None of it goes on the board. Instead, each crate gets a label and slides through the evidence-room counter, and a single index card goes up in its place: <em>"Bank records — box /cases/mehta/bank"</em>. Weeks later, when the whole case turns on one withdrawal, she asks the counter for that one box, copies a single line onto a card, and sends the box straight back.</p>
+        <p>Here is the part she never thinks about. The clerk behind the counter reads labels, not contents. Crates labelled <em>/memories/</em> go to the permanent vault across the courtyard — they survive transfers, retirements, even the station changing buildings. Crates labelled <em>/workspace/</em> go onto the station's own shelves, where any officer can pull them. Everything else sits on a trolley that is emptied the day the case closes. Same counter, same labels, three different fates — and when two labels could both apply, the more specific one always wins.</p>
+        <p>Her corkboard is a context window. The counter is a virtual file system. The clerk's sorting rule is this chapter.</p>
+      </section>
+
+      <h2>A desk, not a warehouse</h2>
+      <p>First, place yourself in Act VIII. In <a href="ch067-create-deep-agent-anatomy.html">the anatomy chapter</a> you opened <code>create_deep_agent</code> and found the same <a href="ch045-react-loop-by-hand.html">ReAct loop you built by hand</a> wearing four upgrades: a planning tool, a file system, subagents, and a serious system prompt. <a href="ch068-planning-and-todos.html">The previous chapter</a> gave the agent a to-do list, so a long run cannot lose the plot. This chapter gives it a filing cabinet, so a long run cannot drown in its own research. <a href="ch070-subagents.html">The next one</a> gives it colleagues.</p>
+      <p>Why does a long-running agent need files at all? Because of the sting you felt in chapter 45: the conversation history is re-sent to the model on <em>every single turn</em>. When a tool returns something huge — a scraped documentation site, a 300-row query result, three market-research reports — that text lands in the history and is then carried, and paid for, on every turn that follows. You read it once; you pay for it forever. Over a twenty-minute run that is annoying. Over the hours-long runs this Act is about, it is fatal: the context fills, the model starts forgetting the plan, and <a href="ch071-the-token-bill.html">the token bill</a> climbs like a taxi meter in traffic.</p>
+      <p><a href="ch047-memory-and-context.html">Chapter 47</a> named this the context problem. Deep agents answer it with a move called <dfn>context offload</dfn> — moving bulky information out of the message history into external storage that the agent can reach through tools. The discipline is exactly the detective's: <strong>write findings to a file, keep only a one-line stub in context, and read back only the slice you need, only when you need it.</strong> Watch one full cycle:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Big result arrives">
+          <h3>1. A tool returns something enormous</h3>
+          <div class="diagram">
+            <div class="d-box hot">Tool<small>returns a 60,000-token research dump</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Context<small>about to swallow all of it</small></div>
+          </div>
+          <p class="step-cap">A web scrape, a log pull, a long report. If this lands in the history raw, every future turn re-sends it to the model — and re-bills you for it.</p>
+        </div>
+        <div class="step" data-title="Agent files it">
+          <h3>2. The agent writes it to a file instead</h3>
+          <div class="diagram">
+            <div class="d-box">Tool</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">write_file<small>"/research/pricing.md"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Backend<small>stores the bytes</small></div>
+          </div>
+          <p class="step-cap">The model calls <code>write_file</code> — one of the built-in file tools — and the full text goes onto the shelf. What returns to the history is a receipt, not the cargo.</p>
+        </div>
+        <div class="step" data-title="Desk stays clear">
+          <h3>3. Context keeps only a stub</h3>
+          <div class="diagram">
+            <div class="d-box good">Context<small>"Saved 60k tokens to /research/pricing.md"</small></div>
+            <div class="d-box dim">Backend<small>holds the full report</small></div>
+          </div>
+          <p class="step-cap">The history now carries a one-line pointer. Ten turns later the agent still knows the file exists, because a stub is cheap enough to carry forever.</p>
+        </div>
+        <div class="step" data-title="A detail is needed">
+          <h3>4. Much later, one detail matters</h3>
+          <div class="diagram">
+            <div class="d-box">Context<small>"what was the enterprise tier price?"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">read_file<small>"/research/pricing.md"</small></div>
+          </div>
+          <p class="step-cap">The agent asks the counter for the box back. It can read the whole file or just a part — the point is that it chooses <em>when</em> to pay for the content.</p>
+        </div>
+        <div class="step" data-title="Only the slice returns">
+          <h3>5. Read back only what is needed</h3>
+          <div class="diagram">
+            <div class="d-box">Backend</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Context<small>gets the relevant section, answers the question</small></div>
+          </div>
+          <p class="step-cap">The full report was carried for exactly as many turns as it was useful: roughly one at write time and one at read time. Everything in between travelled light.</p>
+        </div>
+      </div>
+
+      <p>The savings are not subtle. The numbers below are round and illustrative, but the shape is exactly what you will see in real token bills:</p>
+
+      <div data-bars data-title="Tokens carried across a 20-turn research run" data-unit="tokens (illustrative)"
+           data-note="The hoarder re-sends three full reports on every turn; the filer carries three stubs and reads one report back once.">
+        <div class="bar" data-label="Hoarder: keep every result in context" data-value="95000"></div>
+        <div class="bar" data-label="Filer: stubs in context, one read-back" data-value="9000"></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Files buy a second, quieter superpower: <strong>safety under trimming</strong>. Context-management middleware that summarises or evicts old messages (Act X territory) can compact the history aggressively when the real content is safe on the shelf. A summary can lose detail; a file never does.</p></div>
+
+      <h2>The trick: these files may never touch a disk</h2>
+      <p>Now the part that surprises people. When a deep agent calls <code>write_file("/notes/plan.md", ...)</code>, there is — by default — <em>no file called plan.md anywhere on any disk</em>. A <dfn>virtual file system</dfn> is an interface that looks and behaves like files and folders — paths, listings, reads, writes — while the actual bytes live wherever a storage layer chooses to put them. The agent sees four tools:</p>
+      <ul>
+        <li><code>ls</code> — list what is on the shelf</li>
+        <li><code>read_file</code> — bring a file's content into context</li>
+        <li><code>write_file</code> — create or overwrite a file</li>
+        <li><code>edit_file</code> — make a targeted change without rewriting the whole file</li>
+      </ul>
+      <p>Behind those four tools sits a <dfn>backend</dfn> — the component that maps file operations onto an actual storage location. The tools are the evidence-room counter; the backend is whatever is behind the wall. This split is a pattern you already know from <a href="ch015-inheritance-and-composition.html">composition</a>: program against an interface, swap the implementation freely. The agent's prompt, tools, and habits never change; where the bytes live is a one-line configuration decision. That indirection is the whole reason the word "virtual" is in the chapter title.</p>
+      <p>Six terms carry the rest of this chapter. Flip each card until the definitions feel obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">context offload</span><span class="flip-back">Moving big information out of the message history into storage the agent reaches through tools — write a file, keep a stub, read back on demand.</span></button>
+        <button class="flip" type="button"><span class="flip-front">virtual file system</span><span class="flip-back">File-shaped tools (ls, read_file, write_file, edit_file) over storage that may not be a disk at all. The paths are real to the agent; the disk is optional.</span></button>
+        <button class="flip" type="button"><span class="flip-front">backend</span><span class="flip-back">The pluggable layer that decides where file bytes actually live: agent state, real disk, or a database-backed store.</span></button>
+        <button class="flip" type="button"><span class="flip-front">thread</span><span class="flip-back">One conversation, identified by a thread_id. State-backed files live and die with their thread — a new conversation starts with an empty shelf.</span></button>
+        <button class="flip" type="button"><span class="flip-front">store</span><span class="flip-back">LangGraph's long-term key-value storage, independent of any one thread. In-memory while developing; Postgres or Redis in production.</span></button>
+        <button class="flip" type="button"><span class="flip-front">longest-prefix routing</span><span class="flip-back">CompositeBackend's rule for picking a backend: compare the path against every route prefix, and the longest match wins.</span></button>
+      </div>
+
+      <h2>Watch offloading pay for itself</h2>
+      <p>Time to touch it. The runnable below builds the smallest honest virtual file system — a Python dict from <a href="ch004-collections.html">chapter 4</a> wearing a trench coat — and runs the same research task twice: once as a <em>hoarder</em> that keeps every result in context, once as a <em>filer</em> that offloads. The "web search" is a scripted fake, as always in this course, so everything runs in your browser. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="Hoarder vs filer — measure the desk">
+<textarea class="py-src" spellcheck="false">
+# ---- The virtual file system: one honest dict ---------------
+FILES = {}
+
+def write_file(path, content):
+    FILES[path] = content
+    return f"Wrote {len(content):,} chars to {path}"
+
+def read_file(path):
+    return FILES.get(path, f"ERROR: no such file: {path}")
+
+# ---- A research tool that returns BIG results (simulated) ---
+def web_search(query):
+    return f"FULL REPORT ON {query.upper()}. " + "Detailed finding. " * 60
+
+QUERIES = ["monsoon rainfall", "reservoir levels", "crop demand"]
+LATER_TURNS = 10   # how long the agent keeps working afterwards
+
+def carried_cost(history, turns):
+    # ch45's lesson: the WHOLE history is re-sent every turn
+    return sum(len(m) for m in history) * turns
+
+# ---- Run 1: the hoarder — every report stays in context -----
+history = ["TASK: advise on water release for the season"]
+for q in QUERIES:
+    history.append("OBSERVATION: " + web_search(q))
+hoarder = carried_cost(history, LATER_TURNS)
+
+# ---- Run 2: the filer — offload, keep a receipt --------------
+history = ["TASK: advise on water release for the season"]
+for q in QUERIES:
+    report = web_search(q)
+    path = "/research/" + q.split()[0] + ".md"
+    receipt = write_file(path, report)         # cargo to the shelf
+    history.append("OBSERVATION: " + receipt)  # receipt on the desk
+
+# much later, ONE detail matters: read that file back, once
+detail = read_file("/research/monsoon.md")
+history.append("OBSERVATION (excerpt): " + detail[:80])
+filer = carried_cost(history, LATER_TURNS)
+
+print("On the shelf:")
+for p in sorted(FILES):
+    print(f"   {p}  ({len(FILES[p]):,} chars)")
+print()
+print(f"Chars re-sent over the next {LATER_TURNS} turns:")
+print(f"   hoarder: {hoarder:,}")
+print(f"   filer:   {filer:,}")
+print()
+print(f"The filer's desk is about {round(hoarder / filer)}x lighter,")
+print("and nothing was lost - every report is still readable.")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Experiment: add three more queries to <code>QUERIES</code> and run again — the hoarder's number balloons while the filer's barely moves. Then raise <code>LATER_TURNS</code> to 50 and watch the gap widen further. That widening gap <em>is</em> the reason deep agents can run for hours: cost per turn stays roughly flat while accumulated knowledge grows without limit.</p></div>
+
+      <h2>Four places the shelf can live</h2>
+      <p>Now the second half of the promise: the backends. The deepagents library ships four, and choosing between them is really answering one question — <em>how long should these files outlive the conversation?</em></p>
+
+      <div class="tbl"><table>
+        <tr><th>Backend</th><th>Where the bytes live</th><th>How long they last</th><th>Reach for it when</th></tr>
+        <tr><td><code>StateBackend</code> (default)</td><td>Inside the agent's graph state, right next to the messages</td><td>The thread — persisted per-thread if a checkpointer is attached</td><td>Scratch work, drafts, research notes for this run</td></tr>
+        <tr><td><code>FilesystemBackend</code></td><td>Real files on real disk, under a <code>root_dir</code> you choose</td><td>Until something deletes them; writes are permanent</td><td>Local dev tools and CI jobs that must touch an actual project</td></tr>
+        <tr><td><code>StoreBackend</code></td><td>A LangGraph store — in-memory for dev, Postgres or Redis in production</td><td>Across threads, sessions, and restarts</td><td>Durable memory: preferences, accumulated knowledge</td></tr>
+        <tr><td><code>CompositeBackend</code></td><td>Wherever each route says — it delegates by path prefix</td><td>Mixed, folder by folder</td><td>One namespace, different guarantees per folder</td></tr>
+      </table></div>
+
+      <p><strong>StateBackend</strong> is what you get if you configure nothing. Files are stored inside the agent's state — the same state object that carries the message history through the graph. That has a consequence worth saying twice: state-backed files have exactly the lifetime of the thread. If you wired up a checkpointer in <a href="ch061-checkpointing.html">the checkpointing chapter</a>, the files survive restarts <em>for that thread</em>, because they ride inside the checkpoints. But start a fresh conversation tomorrow — a new <code>thread_id</code> — and <code>ls</code> returns an empty shelf. For scratch work, that is not a bug; it is tidiness. The trolley gets emptied when the case closes.</p>
+      <p><strong>FilesystemBackend</strong> swaps the trolley for your actual disk. Now <code>write_file("/workspace/report.md", ...)</code> creates a genuine file a human can open, a CI job can commit, another program can consume. This is the backend that turns a deep agent into a document-producing or code-writing colleague. It is also the only backend on this list that can hurt you, which earns it a callout of its own:</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p><code>FilesystemBackend</code> hands the model real read/write access to a machine's disk, and its safety switch is <strong>off by default</strong>. With <code>virtual_mode=False</code> (the default), setting a <code>root_dir</code> gives <em>no sandboxing at all</em> — paths containing <code>..</code>, <code>~</code>, or absolute paths can walk straight out of the root and read whatever the process can read: <code>.env</code> files, SSH keys, other tenants' data. Set <code>virtual_mode=True</code> to jail every path under <code>root_dir</code>. Even jailed, remember two things: disk writes are permanent and no checkpointer will undo them, and anything the agent reads enters its context and can travel anywhere the agent can send text. The sensible rule: real disk is fine for a local CLI or a CI job working on one project, and a poor fit for a multi-tenant web service. For risky writes, you can also demand human sign-off with the interrupt machinery from <a href="ch062-human-in-the-loop.html">the human-in-the-loop chapter</a>.</p></div>
+
+      <p><strong>StoreBackend</strong> points the file tools at a LangGraph <em>store</em> — the long-term key-value storage that lives outside any single thread. Pass an <code>InMemoryStore</code> while developing; in production you construct a Postgres- or Redis-backed store (shipped in the same <code>langgraph-checkpoint-*</code> family of packages you met for checkpointers), and the agent's files become rows in a real database: durable across restarts, shared across conversations, backed up by whatever backs up your database. This is the backend that makes an agent <em>remember you next week</em> — an idea Act X develops fully as <a href="ch083-long-term-memory.html">long-term memory</a>.</p>
+      <p><strong>CompositeBackend</strong> is the clerk behind the counter. It holds a default backend plus a routing table mapping path prefixes to other backends, and forwards every file operation using <dfn>longest-prefix routing</dfn> — the path is compared against every route, and the longest matching prefix wins. The classic configuration gives the agent one seamless namespace with three different fates, exactly like the records room in the story:</p>
+      <ul>
+        <li><code>/memories/...</code> routes to a <code>StoreBackend</code> — survives forever, across sessions</li>
+        <li><code>/workspace/...</code> routes to a <code>FilesystemBackend</code> — real deliverables on real disk</li>
+        <li>everything else falls through to the default <code>StateBackend</code> — scratch that vanishes with the thread</li>
+      </ul>
+      <p>The agent does not know or care. It writes to paths; the router sorts out the physics.</p>
+
+      <h2>The real configuration, line by line</h2>
+      <p>Here is what all of this looks like in production deepagents code. Click through the annotated lines — every one of them is a decision you now understand:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">memory_agent.py — one namespace, three fates</div>
+        <div class="wl-line"><code>from deepagents import create_deep_agent</code>
+          <div class="wl-note">The same factory you met in <a href="ch067-create-deep-agent-anatomy.html">chapter 67</a>. Planning tool, file tools, and subagents come built in; today we are configuring where the file tools point.</div></div>
+        <div class="wl-line"><code>from deepagents.backends import (</code>
+          <div class="wl-note">All four backends live in one module. You will usually import two or three and compose them.</div></div>
+        <div class="wl-line"><code>    CompositeBackend, StateBackend, StoreBackend, FilesystemBackend,</code></div>
+        <div class="wl-line"><code>)</code></div>
+        <div class="wl-line"><code>from langgraph.store.memory import InMemoryStore</code>
+          <div class="wl-note">The development-grade store. In production you construct a Postgres- or Redis-backed store here instead — and nothing else in the file changes. That painless swap is the whole point of programming against an interface.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>agent = create_deep_agent(</code></div>
+        <div class="wl-line"><code>    model="anthropic:claude-sonnet-4-6",</code>
+          <div class="wl-note">Any chat model string works here — the file system does not care which brain sits above it.</div></div>
+        <div class="wl-line"><code>    store=InMemoryStore(),</code>
+          <div class="wl-note">The store is handed to the agent, and any <code>StoreBackend</code> in the routing table reads and writes through it. One store can serve many agents.</div></div>
+        <div class="wl-line"><code>    backend=CompositeBackend(</code>
+          <div class="wl-note">The clerk. From here down we are writing the sorting rule behind the counter.</div></div>
+        <div class="wl-line"><code>        default=StateBackend(),</code>
+          <div class="wl-note">Anything that matches no route lands here: in-state, thread-scoped, gone when the conversation is. Scratch-by-default is the safe choice.</div></div>
+        <div class="wl-line"><code>        routes={</code>
+          <div class="wl-note">A plain dict of path-prefix to backend. The router picks the <em>longest</em> matching prefix, so more specific folders can override general ones.</div></div>
+        <div class="wl-line"><code>            "/memories/": StoreBackend(</code>
+          <div class="wl-note">The headline route. Any file under <code>/memories/</code> goes to the durable store and is still there next session, next week, next server restart. This is how a deep agent grows long-term memory without any new machinery — just a folder with better physics.</div></div>
+        <div class="wl-line"><code>                namespace=lambda rt: ("memories",)),</code>
+          <div class="wl-note">A <code>namespace</code> names the shelf inside the store these files sit on. Here it is one fixed shelf; in a multi-user product the lambda receives the runtime and returns something like the user's identity — giving every user a private <code>/memories/</code> for free.</div></div>
+        <div class="wl-line"><code>            "/workspace/": FilesystemBackend(</code>
+          <div class="wl-note">Real disk for real deliverables — and only under this prefix. Keeping disk access behind one named folder means agent scratch never litters your project, and project files never leak into agent state.</div></div>
+        <div class="wl-line"><code>                root_dir="/home/app/project", virtual_mode=True),</code>
+          <div class="wl-note">The two safety-critical arguments. <code>root_dir</code> picks the jail; <code>virtual_mode=True</code> actually locks the door. Leave it False — the default — and the jail is decorative.</div></div>
+        <div class="wl-line"><code>        },</code></div>
+        <div class="wl-line"><code>    ),</code></div>
+        <div class="wl-line"><code>    system_prompt=(</code>
+          <div class="wl-note">Backends give files their physics; the system prompt gives the agent its filing habits. Without this paragraph the model has durable storage and no reason to use it.</div></div>
+        <div class="wl-line"><code>        "Read /memories/instructions.txt at the start of each session. "</code>
+          <div class="wl-note">The read half of the memory loop: every new conversation begins by pulling accumulated knowledge off the fireproof shelf.</div></div>
+        <div class="wl-line"><code>        "Keep working notes under /notes/. When you learn a durable "</code></div>
+        <div class="wl-line"><code>        "preference or fact, save it under /memories/."</code>
+          <div class="wl-note">The write half: the model is told which learnings deserve the vault. A path convention plus a routing table equals a memory policy you can read in ten seconds.</div></div>
+        <div class="wl-line"><code>    ),</code></div>
+        <div class="wl-line"><code>)</code></div>
+      </div>
+
+      <h2>Longest prefix wins — prove it to yourself</h2>
+      <p>The routing rule deserves one careful minute, because it is the kind of thing that decides code reviews. Suppose the routes are <code>/memories/</code> and <code>/memories/archive/</code>. A write to <code>/memories/archive/2025.md</code> matches <em>both</em> prefixes — so which backend gets it? The longest match: <code>/memories/archive/</code>. Specific beats general, exactly like postal sorting: a parcel addressed to a flat inside a building goes by the flat number, not just the building's name.</p>
+      <p>The runnable below implements CompositeBackend's routing core in a dozen lines, then performs the one experiment that makes lifetimes visceral: it ends the session, wipes the state backend, and checks which files survived. Run it, then try the challenge underneath.</p>
+
+      <div class="pyrun" data-title="CompositeBackend in miniature — routing, then a restart">
+<textarea class="py-src" spellcheck="false">
+# ---- Three tiny backends: each is just a named dict ---------
+class DictBackend:
+    def __init__(self, name):
+        self.name, self.files = name, {}
+    def write(self, path, content):
+        self.files[path] = content
+    def read(self, path):
+        return self.files.get(path, "ERROR: not found")
+
+state = DictBackend("StateBackend (this thread only)")
+disk  = DictBackend("FilesystemBackend (real disk)")
+store = DictBackend("StoreBackend (durable database)")
+
+# ---- The router: this IS CompositeBackend's core idea -------
+ROUTES  = {"/memories/": store, "/workspace/": disk}
+DEFAULT = state
+
+def pick_backend(path):
+    matches = [p for p in ROUTES if path.startswith(p)]
+    if not matches:
+        return DEFAULT
+    return ROUTES[max(matches, key=len)]   # longest prefix wins
+
+def write_file(path, content):
+    backend = pick_backend(path)
+    backend.write(path, content)
+    print(f"write {path:30} routed to {backend.name}")
+
+# ---- The agent works: three writes, three destinations ------
+write_file("/scratch/draft.md", "half-finished summary")
+write_file("/workspace/report.md", "final report v1")
+write_file("/memories/preferences.txt", "user prefers plain English")
+
+# ---- Session ends: thread state is thrown away ---------------
+print()
+print("-- session restart: state backend wiped, new thread --")
+print()
+state.files.clear()
+
+for path in ["/scratch/draft.md", "/workspace/report.md",
+             "/memories/preferences.txt"]:
+    print(f"read {path:30} gives: {pick_backend(path).read(path)}")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Challenge: add a route <code>"/memories/archive/": disk</code> to <code>ROUTES</code>, write to <code>/memories/archive/2025.md</code>, and confirm it lands on disk, not in the store — the longer prefix must win. Then break it: change <code>max(matches, key=len)</code> to <code>matches[0]</code> and watch routing become order-dependent and wrong. That one-line difference is why the rule is stated as <em>longest</em> prefix, not <em>first</em> prefix.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any deep-agents codebase and find the <code>create_deep_agent(...)</code> call: the <code>backend=</code> argument is the memory architecture in ten lines — read the routes dict and you know what survives a restart before you have read anything else. System prompts that say "save preferences to /memories/user_preferences.txt" are the write half of that same design. You have also been <em>operating</em> this pattern all along: Claude Code writing notes to its memory files and reading them back at session start is offload-and-route with a real disk behind the counter. And in merge requests, comments like "move agent memory from state to the Postgres store" or "that root_dir is not jailed — set virtual_mode" are precisely the two decisions this chapter taught you to make.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A tool just returned a 40,000-token report. Why should the agent write it to a file rather than keep it in the conversation?</p>
+          <div class="q-opts">
+            <button data-opt="a">Files compress text, so it becomes smaller</button>
+            <button data-opt="b">History is re-sent every turn — a stub costs almost nothing per turn, and the full text can be read back only when needed</button>
+            <button data-opt="c">Models cannot process documents longer than a few thousand tokens</button>
+          </div>
+          <p class="q-explain">The whole history travels to the model on every turn, so a big result kept in context is paid for again and again. Offloading swaps that recurring cost for a one-line receipt plus an on-demand read-back.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Your agent uses the default StateBackend and writes <code>/notes/plan.md</code> today. Tomorrow the same user starts a brand-new conversation thread. What does <code>ls</code> show?</p>
+          <div class="q-opts">
+            <button data-opt="a">The file — backends always persist files</button>
+            <button data-opt="b">The file, but only if the machine was not restarted</button>
+            <button data-opt="c">An empty shelf — state-backed files live inside the thread's state, and a new thread starts fresh</button>
+          </div>
+          <p class="q-explain">StateBackend stores files in the agent's graph state, so their lifetime is the thread's lifetime. A checkpointer preserves them per thread, but a new thread_id means new state — and an empty listing.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. You want the agent to remember user preferences across sessions and server restarts. Which setup does that?</p>
+          <div class="q-opts">
+            <button data-opt="a">FilesystemBackend with virtual_mode=True for everything</button>
+            <button data-opt="b">CompositeBackend routing <code>/memories/</code> to a StoreBackend over a durable store, with StateBackend as the default</button>
+            <button data-opt="c">A bigger context window, so old conversations fit in</button>
+          </div>
+          <p class="q-explain">The canonical pattern: scratch stays thread-scoped in state, while the /memories/ prefix routes to a store that Postgres or Redis makes durable. Disk works on one machine, but a database-backed store survives redeploys and scales across servers.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Routes are <code>{"/memories/": store, "/memories/archive/": disk}</code>. The agent writes <code>/memories/archive/2025.md</code>. Where does it land?</p>
+          <div class="q-opts">
+            <button data-opt="a">The store — <code>/memories/</code> is listed first in the dict</button>
+            <button data-opt="b">The default backend — two matches is an ambiguity error</button>
+            <button data-opt="c">The disk — both prefixes match, and the longest matching prefix wins</button>
+          </div>
+          <p class="q-explain">CompositeBackend resolves overlaps by longest-prefix routing: the most specific route takes the file. Dict order and route count are irrelevant.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. A teammate configures <code>FilesystemBackend(root_dir="/srv/app/data")</code> and calls it sandboxed. What is true?</p>
+          <div class="q-opts">
+            <button data-opt="a">They are right — root_dir confines the agent to that directory</button>
+            <button data-opt="b">virtual_mode defaults to False, so root_dir alone gives no sandboxing — paths with <code>..</code>, <code>~</code>, or absolute paths can escape</button>
+            <button data-opt="c">It is safe as long as a checkpointer is attached, since writes can be rolled back</button>
+          </div>
+          <p class="q-explain">Without virtual_mode=True the root is decorative: the agent can traverse out and read anything the process can read. And no checkpointer undoes a disk write — file modifications are permanent. This is the one-line review comment worth making every time.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Files are the deep agent's answer to a finite context: write findings out, keep a one-line stub in the history, and read back only the slice you need, when you need it.</li>
+          <li>The four file tools — <code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code> — are an interface; a pluggable backend decides where the bytes actually live. That indirection is what makes the file system "virtual".</li>
+          <li>StateBackend (the default) keeps files inside the agent's state: thread-scoped, checkpointer-persisted per thread, gone in a new conversation — perfect for scratch.</li>
+          <li>FilesystemBackend touches real disk: essential for real deliverables, dangerous by default. <code>virtual_mode=True</code> jails paths under <code>root_dir</code>; without it, root_dir provides no protection — and disk writes are always irreversible.</li>
+          <li>StoreBackend puts files in a LangGraph store — in-memory for development, Postgres or Redis in production — so they survive restarts and are shared across threads.</li>
+          <li>CompositeBackend routes each path by longest matching prefix, so one namespace can mix guarantees: <code>/memories/</code> lasts forever, <code>/workspace/</code> hits disk, everything else evaporates with the thread.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

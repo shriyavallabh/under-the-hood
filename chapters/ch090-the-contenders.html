@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The contenders — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch090">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XI · The Landscape</div>
+        <h1>The contenders</h1>
+        <p class="ch-tagline">Six serious agent frameworks, one fair hearing each — what it actually is, where it shines, where it bites — and a method for choosing one without joining a religion.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 91 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You are fitting out a restaurant kitchen, and six respected contractors come to bid. The first insists on full blueprints before a single pipe is laid — if the site loses power mid-job, his crew resumes from the exact marked step. The second is the in-house crew of a single big supplier: astonishingly fast, provided you buy that supplier's fittings, warranty, and finance plan. The third is the very crew that built the most famous kitchen in the city — they arrive with their own van, their own tools, and their own strict site rules. The fourth is a giant conglomerate with compliance folders, insurance certificates, and a liaison for your facilities department. The fifth is a staffing agency that assembles a named team — a head builder, a plumber, an electrician, each with a role card. The sixth is a lone master craftsman with a small toolbag who improvises brilliantly.</p>
+        <p>Every one of them can build you a kitchen. Asking "which contractor is best?" is meaningless. Asking "which is best for <em>this</em> site, <em>this</em> budget, <em>this</em> team?" — that has an answer. This chapter introduces the six, fairly, and teaches you how to run the bid.</p>
+      </section>
+
+      <h2>Six names, one atom</h2>
+      <p>First, a deep breath. Back in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> you built the atom of every agent yourself: a model, a set of tools, and a loop that alternates thinking and acting until the task is done. In <a href="ch081-what-is-a-harness.html">the harness chapter</a> you saw what production wraps around that atom — context engineering, memory, skills, <a href="ch085-durability.html">durability</a>, <a href="ch086-sandboxing.html">sandboxing</a>, <a href="ch087-guardrails.html">guardrails</a>, <a href="ch088-observability.html">observability</a>, and, in the last chapter, <a href="ch089-watchdogs-self-healing.html">watchdogs</a>. Every contender in this chapter contains that same fifty-line heartbeat. Not one of them is magic.</p>
+      <p>What they differ in is <em>everything around the loop</em>: how much production armour ships in the box, how the control flow is expressed, which model provider the framework quietly pulls you toward, and whose problems it was designed to solve. So before the profiles, load the vocabulary you will use to compare them. Flip each card:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">orchestration framework</span><span class="flip-back">A library for wiring models, tools, and steps into a controlled flow. You write the application; it supplies the plumbing. LangGraph and Microsoft Agent Framework live here.</span></button>
+        <button class="flip" type="button"><span class="flip-front">harness</span><span class="flip-back">The full production wrapper around the loop — tools, permissions, memory, compaction, guardrails — shipped ready to run. Claude Agent SDK is a harness in a box.</span></button>
+        <button class="flip" type="button"><span class="flip-front">model gravity</span><span class="flip-back">How strongly a framework pulls you toward one provider's models and platform. Every vendor SDK has some; the honest question is how much it costs to resist.</span></button>
+        <button class="flip" type="button"><span class="flip-front">durability</span><span class="flip-back">A run can stop — crash, restart, week-long approval wait — and resume from a saved checkpoint instead of starting over. The backbone of long-running workflows.</span></button>
+        <button class="flip" type="button"><span class="flip-front">handoff</span><span class="flip-back">One agent passes the whole conversation to a specialist agent, which takes over. The signature move of the OpenAI Agents SDK.</span></button>
+        <button class="flip" type="button"><span class="flip-front">batteries-included</span><span class="flip-back">Ships opinionated defaults so day one just works. The hidden price: you inherit the opinions, and swimming against them is expensive.</span></button>
+      </div>
+
+      <p>One rule for what follows: every framework here demos beautifully in twenty lines. Judge them on week three, not day one — debugging at 2 a.m., upgrade churn, the workflow that must pause four days for a signature. Each profile therefore ends with its honest weakness, because a comparison with no weaknesses is an advertisement.</p>
+
+      <h2>LangGraph — the blueprint firm</h2>
+      <p><strong>What it is.</strong> LangGraph, from the LangChain team, is durable graph orchestration. Instead of one implicit loop, you draw the control flow explicitly — remember <a href="ch057-why-graphs.html">why graphs</a>? — as nodes (steps) and edges (routes) over a shared, typed state. The shape you already know from <a href="ch058-stategraph-anatomy.html">the StateGraph chapter</a>:</p>
+
+      <div class="code-title">the LangGraph shape</div>
+      <pre><code class="language-python">from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import InMemorySaver
+
+builder = StateGraph(TriageState)          # TriageState: your typed state
+builder.add_node("classify", classify)
+builder.add_node("resolve", resolve)
+builder.add_edge(START, "classify")
+builder.add_conditional_edges("classify", route_next)
+graph = builder.compile(checkpointer=InMemorySaver())</code></pre>
+
+      <p>That <code>checkpointer</code> argument is the firm's whole philosophy: every step is saved, so a run can crash, pause on an <code>interrupt()</code> for <a href="ch062-human-in-the-loop.html">human approval</a>, and resume days later with <code>Command(resume=...)</code> — exactly the <a href="ch061-checkpointing.html">checkpointing</a> machinery you have already studied. Swap <code>InMemorySaver</code> for a Postgres or Redis checkpointer and durability becomes a database row, not a hope.</p>
+      <p><strong>Sweet spot.</strong> Long-running, auditable, resumable workflows where you need to own the control flow: loan processing with approval gates, multi-day research pipelines, anything a regulator might ask you to replay. It is model-agnostic, and the surrounding tooling (LangSmith tracing, LangGraph Studio, a managed deployment platform) is mature.</p>
+      <p><strong>Honest weakness.</strong> Ceremony. For a simple tool-calling assistant, defining state schemas, nodes, and edges is scaffolding you did not need — which is why LangChain's own <a href="ch054-create-agent.html"><code>create_agent</code></a> exists as the quick path on top. The ecosystem has also churned across versions, so tutorials age fast. You will run a full scorecard on it in <a href="ch093-is-langgraph-right.html">chapter 93</a>.</p>
+
+      <h2>OpenAI Agents SDK and AgentKit — the supplier's fast-track crew</h2>
+      <p><strong>What it is.</strong> The OpenAI Agents SDK is a deliberately light Python (and TypeScript) library — the production successor to OpenAI's earlier Swarm experiment. Its atoms are <code>Agent</code> (instructions + tools), <code>Runner</code> (the loop), <dfn>guardrails</dfn> — validation checks that run alongside the agent — and its signature idea, the <dfn>handoff</dfn>: an agent transferring the whole conversation to a specialist.</p>
+
+      <div class="code-title">the Agents SDK shape</div>
+      <pre><code class="language-python">from agents import Agent, Runner
+
+triage = Agent(
+    name="Triage",
+    instructions="Route the customer to the right specialist.",
+    handoffs=[billing_agent, refunds_agent],
+)
+result = Runner.run_sync(triage, "I was charged twice this month.")
+print(result.final_output)</code></pre>
+
+      <p>Around the SDK sits <dfn>AgentKit</dfn>, OpenAI's platform layer: Agent Builder (a visual drag-and-drop canvas for agent workflows), ChatKit (an embeddable chat UI), a connector registry, and built-in evals. Together they are the fastest route from idea to deployed agent <em>if</em> you live in the OpenAI ecosystem — tracing is on by default and shows up in the OpenAI dashboard with zero setup.</p>
+      <p><strong>Sweet spot.</strong> Teams already committed to OpenAI models who want multi-agent products shipped this quarter. The handoff pattern maps beautifully onto customer-service-style routing, and the SDK stays small enough to read in an afternoon.</p>
+      <p><strong>Honest weakness.</strong> Model gravity. Other providers are usable (via its LiteLLM integration), but the polish, the tracing dashboard, and all of AgentKit point homeward to OpenAI's platform. Durability is also thinner than LangGraph's — long-running resumable workflows typically mean bolting on an external engine rather than a built-in checkpointer.</p>
+
+      <h2>Claude Agent SDK — the famous kitchen's crew, for hire</h2>
+      <p><strong>What it is.</strong> The engine inside Claude Code — the best-known agent harness in the world, dissected fully in <a href="ch091-claude-code-dissected.html">the next chapter</a> — packaged as a Python and TypeScript library. It was renamed from "Claude Code SDK" in late 2025 precisely because people were building far more than coding agents with it. Where the other contenders give you parts, this one gives you the whole assembled machine: the tool loop, file and shell tools, the permission system, hooks, subagents, MCP client support (<a href="ch074-why-mcp-exists.html">chapter 74</a>), <a href="ch084-agent-skills.html">skills</a>, and automatic context compaction.</p>
+
+      <div class="code-title">the Claude Agent SDK shape</div>
+      <pre><code class="language-python">import asyncio
+from claude_agent_sdk import query, ClaudeAgentOptions
+
+async def main():
+    options = ClaudeAgentOptions(
+        allowed_tools=["Read", "Grep", "Bash"],
+        permission_mode="acceptEdits",
+    )
+    async for message in query(prompt="Find and fix the failing test.",
+                               options=options):
+        print(message)
+
+asyncio.run(main())</code></pre>
+
+      <p>Notice what you did <em>not</em> write: no loop, no tool registry, no permission checks. They ship in the box, pre-hardened by millions of Claude Code sessions. You met this build-vs-buy tension before in <a href="ch072-deep-agents-vs-claude-code.html">deep agents versus Claude Code</a>.</p>
+      <p><strong>Sweet spot.</strong> Agents that live on a real computer — reading files, running commands, working a repository or an operations runbook. If your job is "a production-grade autonomous worker by Friday, with permissions and guardrails I do not have to invent", this is the shortest honest path.</p>
+      <p><strong>Honest weakness.</strong> The strongest model gravity on the list — it is Anthropic's harness for Anthropic's models — and the most opinionated. You inherit its worldview: its tools, its permission model, its context management. When those opinions fit, they are a gift; when they do not, you are renovating someone else's famous kitchen.</p>
+
+      <h2>Microsoft Agent Framework — the conglomerate</h2>
+      <p><strong>What it is.</strong> Microsoft's open-source framework for agents and multi-agent workflows in both Python and .NET, announced in late 2025 as the convergence of two older projects: AutoGen (the research-grade multi-agent library) and Semantic Kernel (the enterprise SDK). One thing to fix in your mental map right now: if a tutorial teaches AutoGen as the current thing, it is stale — AutoGen's orchestration ideas and Semantic Kernel's enterprise plumbing now live on <em>inside</em> Agent Framework, which is where Microsoft's investment goes.</p>
+
+      <div class="code-title">the Agent Framework shape (Python)</div>
+      <pre><code class="language-python">from agent_framework import ChatAgent
+from agent_framework.openai import OpenAIChatClient
+
+agent = ChatAgent(
+    chat_client=OpenAIChatClient(model_id="gpt-4o"),
+    name="expense-checker",
+    instructions="Check expense claims against policy.",
+    tools=check_policy,          # a plain Python function
+)
+# inside async code (ch39: async/await)
+response = await agent.run("Is a 4,000 rupee team dinner claimable?")
+print(response.text)</code></pre>
+
+      <p>Two layers matter: <code>ChatAgent</code> for single agents, and typed, graph-based <em>workflows</em> (with checkpointing support) for orchestrating several — a philosophy closer to LangGraph than to CrewAI. It speaks the open standards you know: MCP for tools, <a href="ch080-a2a-protocol.html">A2A</a> for agent-to-agent calls, OpenTelemetry for tracing, and it plugs natively into Azure AI Foundry for hosted deployment.</p>
+      <p><strong>Sweet spot.</strong> Enterprise estates — especially .NET shops and Azure-centric organisations — that need identity, telemetry, and compliance to be first-class citizens rather than afterthoughts. It is the only contender treating .NET as an equal partner to Python.</p>
+      <p><strong>Honest weakness.</strong> Youth and gravity. It is the newest major entrant, so patterns and docs are still settling, and Microsoft's naming history (Semantic Kernel, AutoGen, now this) makes teams reasonably wary of churn. And while it runs anywhere, the whole experience quietly points toward Azure.</p>
+
+      <h2>CrewAI — the staffing agency</h2>
+      <p><strong>What it is.</strong> A standalone Python framework (independent of LangChain) whose core metaphor is an org chart: you declare agents with a <em>role</em>, a <em>goal</em>, and a <em>backstory</em>, give them tasks, and assemble them into a Crew that collaborates on the work.</p>
+
+      <div class="code-title">the CrewAI shape</div>
+      <pre><code class="language-python">from crewai import Agent, Task, Crew
+
+researcher = Agent(
+    role="Market researcher",
+    goal="Find out what rival cafes charge",
+    backstory="A meticulous, sceptical analyst.",
+)
+report = Task(
+    description="Compare pricing across rival cafe menus.",
+    expected_output="A one-page summary with a table.",
+    agent=researcher,
+)
+crew = Crew(agents=[researcher], tasks=[report])
+print(crew.kickoff())</code></pre>
+
+      <p>Read that aloud and it almost is not code — which is exactly the appeal. For deterministic control, CrewAI added <em>Flows</em>: event-driven, step-by-step orchestration with persistable state, its answer to the criticism that autonomous crews are hard to steer.</p>
+      <p><strong>Sweet spot.</strong> Fast, readable multi-agent prototypes — content pipelines, research-and-summarise chains, back-office assistants — built by teams who think in roles and responsibilities rather than graphs. The community is large and the gallery of examples enormous.</p>
+      <p><strong>Honest weakness.</strong> The abstraction leaks under pressure. Role and backstory strings become hidden prompt engineering, and when you need precise control over exactly what enters the context on turn four (<a href="ch071-the-token-bill.html">the token bill</a> taught you why you will), the friendly metaphor can start fighting you. Demos scale to production less smoothly than they demo.</p>
+
+      <h2>smolagents — the master craftsman</h2>
+      <p><strong>What it is.</strong> Hugging Face's minimal agent library — the core agent logic is around a thousand lines you can genuinely read in one sitting. Its distinctive idea is the <dfn>CodeAgent</dfn>: instead of emitting JSON tool calls, the model writes its actions as short Python snippets, which are executed in a sandbox. One snippet can call three tools, loop, and combine results — often fewer round-trips than classic <a href="ch035-tool-calling.html">tool calling</a> (a plain <code>ToolCallingAgent</code> is there when you want the classic style).</p>
+
+      <div class="code-title">the smolagents shape</div>
+      <pre><code class="language-python">from smolagents import CodeAgent, InferenceClientModel, WebSearchTool
+
+agent = CodeAgent(
+    tools=[WebSearchTool()],
+    model=InferenceClientModel(),   # any provider or open model
+)
+agent.run("Which of these two laptops is lighter, and by how much?")</code></pre>
+
+      <p><strong>Sweet spot.</strong> Research, experimentation, and teams committed to open models. It is the most model-agnostic contender by design — Hugging Face hub models, local models, or any API — and the most hackable: when you need to bend the agent's behaviour, you read the source and change it, because you <em>can</em>.</p>
+      <p><strong>Honest weakness.</strong> Minimalism is the product. Durable state, enterprise observability, permissions, guardrails — largely yours to build. And letting a model execute the code it just wrote makes sandboxing non-negotiable, not optional: the library integrates Docker, E2B, and similar isolated executors, and <a href="ch086-sandboxing.html">the sandboxing chapter</a> is your briefing on why you must use them.</p>
+
+      <h2>The scorecard, side by side</h2>
+      <p>Here is the whole field on one table. Read it as a set of judgment calls to argue with — that argument is precisely the act's method.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Contender</th><th>Steward</th><th>Core abstraction</th><th>Model gravity</th><th>Durability story</th><th>Sharpest edge</th><th>Roughest edge</th></tr>
+        <tr><td>LangGraph</td><td>LangChain team</td><td>State graph + checkpointer</td><td>Low — any provider</td><td>Best in class: checkpoints, resume, replay</td><td>Long-running, auditable workflows</td><td>Ceremony; version churn</td></tr>
+        <tr><td>OpenAI Agents SDK + AgentKit</td><td>OpenAI</td><td>Agent + Runner + handoffs</td><td>High — pulls to OpenAI platform</td><td>Sessions; heavy lifting via integrations</td><td>Speed to product in the OpenAI stack</td><td>Ecosystem lock-in pull</td></tr>
+        <tr><td>Claude Agent SDK</td><td>Anthropic</td><td>Claude Code's harness as a library</td><td>High — pulls to Claude</td><td>Session resume; compaction built in</td><td>Production harness with batteries: permissions, hooks, subagents</td><td>Opinionated; Claude-first</td></tr>
+        <tr><td>Microsoft Agent Framework</td><td>Microsoft</td><td>ChatAgent + typed workflows</td><td>Medium — runs anywhere, points to Azure</td><td>Workflow checkpointing</td><td>Enterprise fit: .NET + Python, telemetry, standards</td><td>Young; naming-churn history</td></tr>
+        <tr><td>CrewAI</td><td>CrewAI (startup)</td><td>Role-based Crews + Flows</td><td>Low — any provider</td><td>Flow state persistence (lighter than LangGraph)</td><td>Readable multi-agent prototypes, fast</td><td>Abstractions leak under precise control</td></tr>
+        <tr><td>smolagents</td><td>Hugging Face</td><td>CodeAgent — actions as Python code</td><td>Lowest — open models first-class</td><td>Minimal — yours to build</td><td>Hackable, tiny, auditable core</td><td>DIY batteries; sandbox mandatory</td></tr>
+      </table></div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Beware the benchmark screenshot. Framework comparisons circulating online are usually demo-day impressions: twenty lines, happy path, one model. None of that predicts week three — debugging a stuck run, upgrading past a breaking release, or explaining to an auditor what the agent did on the 14th. Weight your scorecard toward week-three qualities.</p></div>
+
+      <p>Now make the scorecard yours. The program below weights six criteria and ranks the field. The scores are illustrative one-to-five judgment calls, not benchmarks — the value is in editing <code>WEIGHTS</code> to match <em>your</em> organisation and watching the ranking flip. Press Run, then try: durability to 5 for a bank, hackability to 5 for a research lab, enterprise fit to 0 for a two-person startup.</p>
+
+      <div class="pyrun" data-title="The honest scorecard — edit the weights, re-run">
+<textarea class="py-src" spellcheck="false">
+# 1 = weak, 5 = strong. Scores are illustrative judgment
+# calls, not benchmarks -- argue with them. That is the point.
+
+WEIGHTS = {
+    "durable workflows":   3,   # resumable runs, approval gates
+    "speed to first demo": 2,
+    "multi-agent teams":   2,
+    "model flexibility":   3,   # swap providers freely
+    "enterprise fit":      2,   # audit, telemetry, cloud story
+    "hackability":         1,   # can you read and bend the source
+}
+
+#          criteria order matches WEIGHTS above
+SCORES = {
+    "LangGraph":            [5, 2, 4, 5, 4, 3],
+    "OpenAI Agents SDK":    [2, 5, 4, 3, 3, 3],
+    "Claude Agent SDK":     [3, 4, 4, 2, 3, 2],
+    "MS Agent Framework":   [4, 3, 4, 4, 5, 2],
+    "CrewAI":               [3, 5, 5, 4, 3, 3],
+    "smolagents":           [1, 4, 2, 5, 1, 5],
+}
+
+def total(scores):
+    return sum(w * s for w, s in zip(WEIGHTS.values(), scores))
+
+ranked = sorted(SCORES.items(), key=lambda kv: -total(kv[1]))
+best = total(ranked[0][1])
+
+print("Weighted scorecard for YOUR org:")
+print()
+for name, scores in ranked:
+    t = total(scores)
+    bar = "#" * round(20 * t / best)
+    print(f"{name:20s} {t:4d}  {bar}")
+
+top_two = [name for name, _ in ranked[:2]]
+print()
+print("Shortlist:", " and ".join(top_two))
+print("Next: build the SAME one-week spike in both,")
+print("then decide with evidence, not vibes.")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Notice what the exercise really teaches: the ranking is <em>supposed</em> to be unstable. If a colleague's weights produce a different winner, neither of you is wrong — you are describing different organisations. The scorecard turns "which framework is best?" arguments into "what do we actually need?" conversations, which are winnable.</p></div>
+
+      <h2>How to shortlist for your org</h2>
+      <p>The scorecard is the middle of a process, not the whole of it. Here is the full method, the one this act keeps refining all the way to <a href="ch093-is-langgraph-right.html">the LangGraph decision chapter</a>:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Hard constraints">
+          <h3>1. Write down the hard constraints</h3>
+          <div class="diagram">
+            <div class="d-box hot">Model contract<small>which provider are you committed to?</small></div>
+            <div class="d-box hot">Cloud<small>where must this run?</small></div>
+            <div class="d-box hot">Language<small>Python? .NET? TypeScript?</small></div>
+            <div class="d-box hot">Compliance<small>audit, data residency</small></div>
+          </div>
+          <p class="step-cap">Constraints are facts, not preferences. A signed model contract, a mandated cloud, a .NET-only engineering team — these are decided before any framework comparison begins, usually by people who will never read a README.</p>
+        </div>
+        <div class="step" data-title="Eliminate">
+          <h3>2. Eliminate — do not rank yet</h3>
+          <div class="diagram">
+            <div class="d-box">LangGraph</div>
+            <div class="d-box dim">OpenAI SDK</div>
+            <div class="d-box dim">Claude SDK</div>
+            <div class="d-box">Agent Framework</div>
+            <div class="d-box">CrewAI</div>
+            <div class="d-box dim">smolagents</div>
+          </div>
+          <p class="step-cap">Apply the constraints as filters. Example: an org with a multi-provider model policy immediately dims the two high-gravity SDKs; a hard requirement for durable approval-gated workflows dims smolagents. Most six-way debates are really two-way debates wearing a costume.</p>
+        </div>
+        <div class="step" data-title="Workload shape">
+          <h3>3. Match the shape of the actual workload</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Durable back-office workflow<small>LangGraph / Agent Framework</small></div>
+              <div class="d-box">Product inside the OpenAI stack<small>Agents SDK + AgentKit</small></div>
+              <div class="d-box hot">Agent working files and terminals<small>Claude Agent SDK</small></div>
+              <div class="d-box">Quick multi-agent pipeline<small>CrewAI</small></div>
+              <div class="d-box">Research on open models<small>smolagents</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Frameworks have home turf. Describe your top workload in one sentence, then check whose sweet-spot paragraph it lands in. The highlighted row is just an example — yours will differ.</p>
+        </div>
+        <div class="step" data-title="Score">
+          <h3>4. Score the survivors, with weights</h3>
+          <div class="diagram">
+            <div class="d-box">Criteria x weights</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Weighted scorecard<small>the program you just ran</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Top two</div>
+          </div>
+          <p class="step-cap">Now — and only now — run the scorecard from above on the survivors. Make every score a claim someone must defend with evidence in the room, not a vibe. Two finalists emerge.</p>
+        </div>
+        <div class="step" data-title="Prototype">
+          <h3>5. Prototype both finalists, decide with evidence</h3>
+          <div class="diagram">
+            <div class="d-box hot">Finalist A<small>one-week spike</small></div>
+            <div class="d-box hot">Finalist B<small>the same spike</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Decision<small>written down, with reasons</small></div>
+          </div>
+          <p class="step-cap">Build the identical thin slice of your real workload in both — same task, same tools, same week. Judge on debuggability, docs honesty, and how it fails, not just whether it works. Write the decision down with its reasons.</p>
+        </div>
+      </div>
+
+      <p>One last calibration: these six are the names you will meet most often in serious production conversations, not a census. Strong niche players exist (Pydantic AI, Google's ADK, a long tail more), and by the time you read this someone has launched another. The method survives the churn even when the shortlist does not — memorise the method, not the names.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You can identify a codebase's contender from one file. Open <code>pyproject.toml</code> or <code>requirements.txt</code> and look for the telltale line: <code>langgraph</code>, <code>openai-agents</code>, <code>claude-agent-sdk</code>, <code>agent-framework</code>, <code>crewai</code>, or <code>smolagents</code>. In meetings, the tells are verbal: "we checkpoint every node" means LangGraph; "the triage agent hands off to billing" means OpenAI's SDK; "we allowed the Bash tool but gated edits" means Claude Agent SDK; "it plugs into our Azure telemetry" means Agent Framework; "the researcher agent passes its task to the writer agent" means CrewAI; "the model writes Python instead of JSON" means smolagents. And when a vendor slide says "we support all frameworks", your first scorecard question is: which one do <em>your</em> engineers actually use?</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Your workflow must pause for a compliance officer's approval and resume three days later, surviving a server restart in between. Which contender treats exactly this as its home turf?</p>
+          <div class="q-opts">
+            <button data-opt="a">smolagents — the CodeAgent can write code to wait</button>
+            <button data-opt="b">OpenAI Agents SDK — handoffs cover approvals</button>
+            <button data-opt="c">LangGraph — checkpointers plus interrupt and resume</button>
+          </div>
+          <p class="q-explain">Durable execution is LangGraph's founding philosophy: every step is checkpointed to a store, <code>interrupt()</code> pauses for the human, and <code>Command(resume=...)</code> picks up from the saved state — restarts included. Microsoft Agent Framework's workflows are the nearest rival on this ground.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. A tutorial from 2024 teaches AutoGen as Microsoft's current agent framework. What is the accurate 2026 picture?</p>
+          <div class="q-opts">
+            <button data-opt="a">AutoGen remains Microsoft's flagship; Agent Framework is a research fork</button>
+            <button data-opt="b">AutoGen and Semantic Kernel converged into Microsoft Agent Framework, which is where current investment goes</button>
+            <button data-opt="c">AutoGen was sold to the Linux Foundation</button>
+          </div>
+          <p class="q-explain">Microsoft Agent Framework, announced in late 2025, is the successor that merges AutoGen's multi-agent orchestration ideas with Semantic Kernel's enterprise plumbing. Teaching AutoGen as current is the stale-tutorial trap this chapter warned you about.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What actually makes smolagents' CodeAgent different from classic tool calling?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model writes its actions as Python snippets that run in a sandbox, so one action can chain several tool calls</button>
+            <button data-opt="b">It compiles the model into Python for faster inference</button>
+            <button data-opt="c">It only works with code-generation tasks</button>
+          </div>
+          <p class="q-explain">Instead of emitting one JSON tool call per turn, the model writes a short program — call two tools, loop, combine — often finishing in fewer round-trips. The price is that executing model-written code makes sandboxing mandatory.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Which is the most accurate one-line description of the Claude Agent SDK?</p>
+          <div class="q-opts">
+            <button data-opt="a">A neutral graph-orchestration library, like LangGraph with different syntax</button>
+            <button data-opt="b">A visual no-code agent builder</button>
+            <button data-opt="c">The production harness behind Claude Code, packaged as a library — loop, tools, permissions, and compaction included</button>
+          </div>
+          <p class="q-explain">It is batteries-included by design: you get the assembled, production-hardened machine that powers Claude Code, not neutral plumbing. That is its greatest strength (day-one armour) and its honest weakness (you inherit its opinions and its Claude gravity).</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Your team asks "which framework is best?" What does this chapter's method say to do first?</p>
+          <div class="q-opts">
+            <button data-opt="a">Check which framework has the most stars and recent benchmarks</button>
+            <button data-opt="b">Write down the hard constraints — model contract, cloud, language, compliance — and eliminate before ranking anything</button>
+            <button data-opt="c">Prototype all six in parallel for a fair fight</button>
+          </div>
+          <p class="q-explain">Constraints are facts that filter the field before any opinion enters. Most six-way debates collapse to two survivors once the model contract, cloud mandate, and team language are on the table — then you weight, score, and prototype only the finalists.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>All six contenders wrap the same ReAct atom you built by hand; they differ in what surrounds the loop — armour, control flow, and model gravity — not in kind.</li>
+          <li>LangGraph owns durable, explicit, resumable workflows; the OpenAI Agents SDK plus AgentKit is the fastest path inside the OpenAI ecosystem; the Claude Agent SDK ships Claude Code's production harness as a library.</li>
+          <li>Microsoft Agent Framework is the AutoGen-plus-Semantic-Kernel successor built for enterprise estates; CrewAI makes multi-agent prototypes read like an org chart; smolagents is the tiny, hackable, open-model-first craftsman whose CodeAgent writes its actions as sandboxed Python.</li>
+          <li>Every framework has model gravity and an honest weakness; a comparison that lists no weaknesses is an advertisement, and demo-day impressions predict nothing about week three.</li>
+          <li>Shortlist by method, not fashion: hard constraints eliminate, workload shape matches, a weighted scorecard ranks, and identical one-week prototypes of the two finalists decide — in writing.</li>
+          <li>The names on this table will churn; the scorecard method survives the churn. Memorise the method.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

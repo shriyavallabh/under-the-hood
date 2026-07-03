@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP architecture — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch075">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IX · MCP and Agent Protocols</div>
+        <h1>MCP architecture</h1>
+        <p class="ch-tagline">Three roles — host, client, server — one wire format underneath, and a strict handshake before any business. By the end of this chapter you can draw exactly who talks to whom, and read the messages as they fly past.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 76 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Picture a country's embassy in a busy foreign capital. The ambassador — a brilliant, overcommitted person — never phones a ministry directly. Instead, for every ministry the embassy deals with (trade, visas, agriculture), it appoints one dedicated attaché, and that attaché handles that one ministry and nothing else. Every attaché is trained in the same diplomatic protocol: every cable carries a number, every numbered cable gets a reply carrying the same number, and unnumbered notes are courtesies that expect no answer at all.</p>
+        <p>And before any business happens — before a single favour is asked — there are formalities. The attaché presents credentials: <em>"Here is who we are, and here is what we are equipped to discuss."</em> The ministry replies in kind: <em>"Understood. Here is what we offer."</em> Only after this exchange does anyone request anything.</p>
+        <p>One more detail. Some ministries sit downstairs in the same building — the attaché walks a memo along the corridor. Others are across an ocean — cables go over the wire. The protocol is identical either way; only the carrying differs. Hold this embassy in your head: it is the entire architecture of MCP, role for role, message for message.</p>
+      </section>
+
+      <h2>Three roles, one strict rule</h2>
+      <p>Quick recall before the new material. In <a href="ch074-why-mcp-exists.html">the previous chapter</a> you watched the industry drown in the M-by-N problem — every agent wired to every tool with bespoke glue, M &#215; N adapters and counting — until one open agreement, the Model Context Protocol, collapsed the mess the way USB-C collapsed the charger shoebox. That chapter was the <em>why</em>. This chapter is the <em>what</em>: when an app talks to an MCP server, what actually happens, in what order, carried by what?</p>
+      <p>MCP names exactly three roles, and the embassy maps onto them one-to-one.</p>
+      <p>The <dfn>host</dfn> is the application you actually use — the embassy itself. Claude Code in your terminal, a desktop chat app, an IDE, your company's agent harness. The host owns the user interface, owns the conversation, calls the LLM, and decides — with your consent — what the model is allowed to touch. The host is where the <a href="ch045-react-loop-by-hand.html">agent loop</a> you built by hand lives.</p>
+      <p>The <dfn>server</dfn> is the tool provider — the ministry. It is a separate program, written by anyone, that exposes capabilities in the standard shape: a git server exposes repository tools, a database server exposes query tools, a browser server exposes navigation tools. The server knows nothing about which app is calling it. That ignorance is the whole point — write it once, and every MCP host on Earth can use it.</p>
+      <p>The <dfn>client</dfn> is the piece people forget, and the piece exam questions love: the dedicated attaché. A client is a connector object <em>inside</em> the host that maintains a session with exactly one server. This is the strict rule of MCP architecture: <strong>one client per server, always</strong>. A host talking to five servers holds five clients, each with its own private, stateful, one-to-one conversation. The host is the diplomat's brain; the clients are its telephone lines.</p>
+
+      <div class="diagram">
+        <div class="d-box hot">Host<small>the app: UI, agent loop, LLM calls</small></div>
+        <span class="d-arrow">&#8594;</span>
+        <div class="d-col">
+          <div class="d-box">Client A<small>connector, 1:1</small></div>
+          <div class="d-box">Client B<small>connector, 1:1</small></div>
+        </div>
+        <span class="d-arrow">&#8594;</span>
+        <div class="d-col">
+          <div class="d-box">Server A<small>git tools</small></div>
+          <div class="d-box">Server B<small>invoice tools</small></div>
+        </div>
+      </div>
+
+      <p>Read it left to right: one host, one client per configured server, one private line each. Add a third server to your config tomorrow and the host quietly creates a third client — nothing else changes. That is exactly how last chapter's M &#215; N wall became M + N.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Everyday speech says "I connected Claude to an MCP server" and never mentions the client — fine, since it is built into the host and invisible in daily use. But in protocol docs, error logs, and SDK code, <em>client</em> always means this per-server connector — never "the customer", never the app as a whole.</p></div>
+
+      <h2>The vocabulary you need</h2>
+      <p>Six terms carry everything that follows. Flip until boring:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">host</span><span class="flip-back">The application the user runs — chat app, IDE, agent harness. Owns the LLM calls, the UI, and the permission decisions. Contains the clients.</span></button>
+        <button class="flip" type="button"><span class="flip-front">client</span><span class="flip-back">A connector inside the host holding a one-to-one session with a single server. Five servers means five clients. Handles the handshake and relays messages.</span></button>
+        <button class="flip" type="button"><span class="flip-front">server</span><span class="flip-back">A separate program exposing tools (and resources and prompts) in the standard MCP shape. Knows nothing about which host is calling.</span></button>
+        <button class="flip" type="button"><span class="flip-front">JSON-RPC</span><span class="flip-back">The message format underneath: JSON objects, each a numbered request, a numbered response, or an unnumbered notification. Old, boring, reliable.</span></button>
+        <button class="flip" type="button"><span class="flip-front">transport</span><span class="flip-back">How the JSON travels: stdio (pipes to a local subprocess) or streamable HTTP (requests to a remote URL). Same messages, different pipe.</span></button>
+        <button class="flip" type="button"><span class="flip-front">capability</span><span class="flip-back">A feature a side declares it supports during the handshake — "I serve tools", "I can do logging". Nothing is assumed; everything is declared.</span></button>
+      </div>
+
+      <h2>The wire underneath: JSON-RPC</h2>
+      <p>Peel back any MCP connection and you find <dfn>JSON-RPC 2.0</dfn> — a tiny, twenty-year-old convention for making requests as JSON text. It defines just three message shapes. A <em>request</em> carries a <code>method</code> name, optional <code>params</code>, and an <code>id</code> number. A <em>response</em> carries the <strong>same</strong> <code>id</code> plus either a <code>result</code> or an <code>error</code> — the id is how replies get matched to questions when several are in flight. And a <em>notification</em> is a request with no <code>id</code> at all: fire-and-forget, no reply expected. That is the numbered-cables rule from the embassy, verbatim.</p>
+      <p>You already speak the payload language — it is plain <a href="ch005-yaml-and-json.html">JSON</a>. Below is a real session transcript, exactly what flows across the pipe, one message per line. Click the annotated lines and read it like a reviewer:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">the wire — one JSON-RPC message per line, client to server and back</div>
+        <div class="wl-line"><code>{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "my-host", "version": "1.0"}}}</code>
+          <div class="wl-note">The opening cable, client to server. Every message carries the <code>"jsonrpc": "2.0"</code> tag; <code>id: 1</code> means "this is a request — match your reply to it". The client states which spec revision it speaks (the version is literally a date), its optional features, and who it is. Nothing may be sent before this.</div></div>
+        <div class="wl-line"><code>{"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": true}}, "serverInfo": {"name": "invoice-server", "version": "0.1"}}}</code>
+          <div class="wl-note">The server answers <em>the same id</em>: agreed version, then — the important part — its capabilities: "I serve tools, and I will notify you if my tool list ever changes." Capability discovery in one line. A server offering resources or prompts would declare them here too.</div></div>
+        <div class="wl-line"><code>{"jsonrpc": "2.0", "method": "notifications/initialized"}</code>
+          <div class="wl-note">Look closely: no <code>id</code>. This is a notification — the fire-and-forget kind. The client is saying "formalities complete, ready for business", and expects no reply. Only after this may normal traffic flow.</div></div>
+        <div class="wl-line"><code>{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}</code>
+          <div class="wl-note">First real request: "show me the menu." The client asks because the handshake said tools exist — it still does not know <em>which</em> tools.</div></div>
+        <div class="wl-line"><code>{"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "get_invoice_total", "description": "Return the total of one invoice.", "inputSchema": {"type": "object", "properties": {"invoice_id": {"type": "string"}}}}]}}</code>
+          <div class="wl-note">The menu arrives: name, description, input schema — the exact three fields you met in <a href="ch046-tools.html">the tools chapter</a>. The host will hand these straight to the LLM as its tool menu. This is the moment a stranger's server becomes the model's capability.</div></div>
+        <div class="wl-line"><code>{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "get_invoice_total", "arguments": {"invoice_id": "INV-042"}}}</code>
+          <div class="wl-note">Later, the model has chosen the tool (via <a href="ch035-tool-calling.html">native tool calling</a>), and the host routes the call to this server's client, which relays it as <code>tools/call</code>. The model never touches the wire — the client speaks for it.</div></div>
+        <div class="wl-line"><code>{"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "1500"}]}}</code>
+          <div class="wl-note">The result comes back wrapped in content blocks, travels up through the client to the host, and lands in the model's context as the observation — closing the same think-act-observe circle you built in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>.</div></div>
+      </div>
+
+      <p>Seven lines of JSON, and you have seen an entire MCP session: handshake, discovery, one tool call. Everything else in the protocol is a variation on these shapes.</p>
+
+      <h2>The handshake: three messages before any business</h2>
+      <p>The transcript above hid a rule worth stating outright. An MCP session always opens with the same three-beat <dfn>initialization handshake</dfn> — a fixed opening sequence both sides must complete before anything else is allowed:</p>
+      <p>First, the client sends <code>initialize</code>: its protocol version, its capabilities, its name. Second, the server responds: the version it agrees to, <em>its</em> capabilities, its name. Third, the client sends the <code>notifications/initialized</code> notification — the "ready" bell. Then, and only then, normal traffic begins.</p>
+      <p>Why so formal? Because <dfn>capability negotiation</dfn> — each side declaring up front which optional features it supports — is what lets the protocol evolve without breaking anyone. A server that only serves tools says so; a client that supports fancy extras says so; both sides then know exactly what they may ask of each other. Neither ever assumes. Newer spec additions (long-running tasks, servers asking the user follow-up questions) slot in the same way: declared as capabilities during this handshake, ignored by parties that do not speak them.</p>
+      <p>Now watch the full lifecycle animate, from app launch to a tool result landing in model context. Step through slowly — the moving highlight is the message in flight:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Boot">
+          <h3>1. The host boots and reads its config</h3>
+          <div class="diagram">
+            <div class="d-box hot">Host<small>reads config: two servers listed</small></div>
+            <div class="d-col">
+              <div class="d-box dim">Client A</div>
+              <div class="d-box dim">Client B</div>
+            </div>
+            <div class="d-col">
+              <div class="d-box dim">Server A<small>local, stdio</small></div>
+              <div class="d-box dim">Server B<small>remote, HTTP</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Two servers in the config, so the host creates two clients — the one-to-one rule in action. Nothing has connected yet; the attachés are appointed but have not left the building.</p>
+        </div>
+        <div class="step" data-title="Connect">
+          <h3>2. Transports come up</h3>
+          <div class="diagram">
+            <div class="d-box">Host</div>
+            <div class="d-col">
+              <div class="d-box hot">Client A<small>launches subprocess, holds its pipes</small></div>
+              <div class="d-box hot">Client B<small>opens HTTP to the server's URL</small></div>
+            </div>
+            <div class="d-col">
+              <div class="d-box">Server A<small>now running locally</small></div>
+              <div class="d-box">Server B<small>already running, elsewhere</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Client A's server is local: the host launches it as a subprocess and holds its stdin/stdout pipes. Client B's server is remote: it will POST to a URL. Different pipes — identical messages about to flow.</p>
+        </div>
+        <div class="step" data-title="initialize">
+          <h3>3. The client presents credentials</h3>
+          <div class="diagram">
+            <div class="d-box dim">Host</div>
+            <div class="d-box hot">Client<small>id:1 initialize — version, capabilities, name</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Server</div>
+          </div>
+          <p class="step-cap">First message on every new session, no exceptions: an <code>initialize</code> request — protocol version, capabilities, identity. (From here we follow one pair; the other line runs the same ritual in parallel.)</p>
+        </div>
+        <div class="step" data-title="Capabilities">
+          <h3>4. The server declares what it offers</h3>
+          <div class="diagram">
+            <div class="d-box dim">Host</div>
+            <div class="d-box">Client</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Server<small>id:1 result — "I serve tools", serverInfo</small></div>
+          </div>
+          <p class="step-cap">The reply carries the same id, the agreed version, and the server's capability declaration: tools? resources? prompts? change notifications? Both sides now know exactly what may be asked. Nothing was assumed.</p>
+        </div>
+        <div class="step" data-title="initialized">
+          <h3>5. The ready bell — a notification</h3>
+          <div class="diagram">
+            <div class="d-box dim">Host</div>
+            <div class="d-box hot">Client<small>notifications/initialized — no id</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Server<small>session open</small></div>
+          </div>
+          <p class="step-cap">The client fires the <code>initialized</code> notification — no id, no reply expected. The handshake is complete and the session is live. Three messages, every time, on every transport.</p>
+        </div>
+        <div class="step" data-title="Discovery">
+          <h3>6. Discovery: fetch the menu, brief the model</h3>
+          <div class="diagram">
+            <div class="d-box hot">Host<small>hands tool menu to the LLM</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Client<small>id:2 tools/list</small></div>
+            <span class="d-arrow">&#8596;</span>
+            <div class="d-box">Server<small>returns names + schemas</small></div>
+          </div>
+          <p class="step-cap">The client asks <code>tools/list</code>; the server returns names, descriptions, and input schemas; the host merges menus from all its clients and presents them to the LLM as available tools. The model never knows which server a tool came from — the host keeps the routing table.</p>
+        </div>
+        <div class="step" data-title="A call in flight">
+          <h3>7. The model asks; the chain delivers</h3>
+          <div class="diagram">
+            <div class="d-box good">Host<small>LLM picked get_invoice_total</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Client<small>id:3 tools/call</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Server<small>runs the real function, returns 1500</small></div>
+          </div>
+          <p class="step-cap">The model requests a tool; the host routes it to the owning client; the client sends <code>tools/call</code>; the server executes real code and returns the result; it travels back up and lands in model context as an observation. The ReAct loop turns — now with the tool living in someone else's process, maybe on someone else's machine.</p>
+        </div>
+      </div>
+
+      <h2>Two transports: same messages, different pipes</h2>
+      <p>Everything above was about <em>what</em> is said. The <dfn>transport</dfn> is <em>how</em> it travels, and MCP standardises two.</p>
+      <p><dfn>stdio</dfn> — standard input/output — is the corridor inside the embassy. The host launches the server as a local subprocess, then writes JSON-RPC messages into the server's stdin and reads replies from its stdout, one message per line. It is beautifully simple: no network, no ports, no certificates, and the server dies when the host does. This is how most personal-machine servers run — the filesystem server, the git server, the little utilities you will build in <a href="ch077-build-an-mcp-server.html">chapter 77</a>.</p>
+      <p><dfn>Streamable HTTP</dfn> is the overseas cable. The server runs as an independent process — in your cloud, or run by a vendor — and exposes a single HTTP endpoint. The client POSTs each JSON-RPC message to it; the server answers with plain JSON, or opens a stream of server-sent events to push several messages back (progress, notifications) over one request. A session id in an HTTP header tells its many clients apart. One server, many hosts — the transport of shared and remote infrastructure.</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>stdio</th><th>Streamable HTTP</th></tr>
+        <tr><td>Server lives</td><td>Subprocess of the host, same machine</td><td>Anywhere with a URL</td></tr>
+        <tr><td>Carried by</td><td>stdin/stdout pipes, one JSON message per line</td><td>HTTP POST to one endpoint; streamed replies when needed</td></tr>
+        <tr><td>Lifetime</td><td>Starts and dies with the host</td><td>Independent — serves many clients at once</td></tr>
+        <tr><td>Auth story</td><td>Inherits your local user; no network exposure</td><td>Real auth needed — tokens, OAuth (chapter 79's territory)</td></tr>
+        <tr><td>Typical use</td><td>Personal tools, filesystem, git, local scripts</td><td>Team-shared servers, vendor-hosted connectors, production</td></tr>
+      </table></div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The classic stdio bug, seen in the wild weekly: a server author adds a friendly <code>print("got a request!")</code> for debugging. But in a stdio server, <strong>stdout is the wire</strong> — that print statement injects non-JSON into the protocol stream and the client chokes with a parse error or hangs. Diagnostics belong on <em>stderr</em>, which stdio transports leave free for logging. If a local MCP server "mysteriously disconnects" the moment it does anything, look for a stray print first.</p></div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Older docs mention a separate "HTTP + SSE" transport with two endpoints. That was the first remote transport; the spec replaced it with streamable HTTP, which does the same job over a single endpoint. You will still meet legacy servers speaking it — treat it as the previous model year, not a third architecture.</p></div>
+
+      <h2>Run the whole session yourself</h2>
+      <p>Time to hold the wire in your hands. Below, a miniature MCP-style server and client live in one file. The transport is simulated — instead of pipes or HTTP, the client calls a function with a JSON string and gets a JSON string back — but the <em>messages</em> are the real protocol shapes: initialize, initialized, tools/list, tools/call, ids matched to replies. Press <strong>Run</strong> and read the transcript top to bottom; it should feel familiar after the walkthrough.</p>
+
+      <div class="pyrun" data-title="An MCP session in miniature — handshake, discovery, tool call">
+<textarea class="py-src" spellcheck="false">
+import json
+
+# ---- The server side: a tool provider ---------------------
+# A real server is a separate process; the transport carries
+# these exact JSON strings across. Here we skip the pipe and
+# call a function -- the messages are what matter.
+
+TOOLS = [{"name": "get_invoice_total",
+          "description": "Return the total of one invoice.",
+          "inputSchema": {"type": "object",
+                          "properties": {"invoice_id": {"type": "string"}},
+                          "required": ["invoice_id"]}}]
+
+INVOICES = {"INV-042": 1500, "INV-043": 8200}
+
+def server_handle(line):
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": "2025-06-18",
+                  "capabilities": {"tools": {}},
+                  "serverInfo": {"name": "invoice-server", "version": "0.1"}}
+    elif method == "notifications/initialized":
+        return None                     # a notification: no reply
+    elif method == "tools/list":
+        result = {"tools": TOOLS}
+    elif method == "tools/call":
+        inv = msg["params"]["arguments"]["invoice_id"]
+        total = INVOICES.get(inv, "unknown invoice")
+        result = {"content": [{"type": "text", "text": str(total)}]}
+    else:
+        return json.dumps({"jsonrpc": "2.0", "id": msg.get("id"),
+                           "error": {"code": -32601,
+                                     "message": "method not found"}})
+    return json.dumps({"jsonrpc": "2.0", "id": msg["id"],
+                       "result": result})
+
+# ---- The client side: one connector, one session ----------
+next_id = 0
+
+def send(method, params=None, notify=False):
+    global next_id
+    msg = {"jsonrpc": "2.0", "method": method}
+    if params is not None:
+        msg["params"] = params
+    if not notify:
+        next_id += 1
+        msg["id"] = next_id
+    line = json.dumps(msg)
+    print("to server  :", line)
+    reply = server_handle(line)
+    if reply is not None:
+        print("from server:", reply)
+        return json.loads(reply).get("result")
+
+# ---- The session, in the mandatory order -------------------
+send("initialize", {"protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "my-host", "version": "1.0"}})
+send("notifications/initialized", notify=True)
+print()
+
+menu = send("tools/list")
+names = [t["name"] for t in menu["tools"]]
+print()
+print("Tool menu the host gives the LLM:", names)
+print()
+
+# The 'model' picks a tool (a real host asks the LLM here).
+answer = send("tools/call", {"name": "get_invoice_total",
+                             "arguments": {"invoice_id": "INV-042"}})
+print()
+print("Observation into model context:", answer["content"][0]["text"])
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now break the protocol on purpose. Move the <code>tools/list</code> call above the handshake and imagine a strict server rejecting it. Ask for <code>"INV-999"</code> and see how the error travels as data, not as a crash. Call a method the server does not know — <code>send("tools/dance")</code> — and read the JSON-RPC error object with its same-id reply. Every one of these is a real log line you will someday recognise instantly.</p></div>
+
+      <h2>Where you will actually touch this</h2>
+      <p>The comforting part: you will almost never write the client, and rarely the raw JSON. The host ships the client built in; your touchpoint is a few lines of configuration naming the servers — and the transport is visible right there in the shape of each entry:</p>
+
+      <div class="code-title">a typical host config — one stdio server, one remote server</div>
+      <pre><code class="language-json">{
+  "mcpServers": {
+    "invoices": {
+      "command": "python",
+      "args": ["invoice_server.py"]
+    },
+    "team-search": {
+      "url": "https://mcp.example.com/mcp"
+    }
+  }
+}</code></pre>
+
+      <p>A <code>command</code> entry means stdio — the host launches that program as a subprocess and speaks down its pipes. A <code>url</code> entry means streamable HTTP — the host POSTs to that endpoint. Behind either line: a client created, a transport connected, a three-message handshake, a <code>tools/list</code>, a menu handed to the model. You now know every step that config quietly triggers.</p>
+      <p>On the server side, SDKs hide the plumbing just as thoroughly. In Python, <code>FastMCP</code> from the official SDK lets you decorate a plain function with <code>@mcp.tool()</code> and run it with <code>mcp.run(transport="stdio")</code> — or flip the same server to streamable HTTP with a different transport string. You will build one end to end in <a href="ch077-build-an-mcp-server.html">chapter 77</a>. On the framework side, <code>langchain-mcp-adapters</code> gives LangChain and LangGraph agents a <code>MultiServerMCPClient</code> that manages a fleet of these one-to-one clients for you — <a href="ch078-mcp-in-langgraph.html">chapter 78</a>.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this architecture as config blocks and log lines. In a repo: a <code>.mcp.json</code> or app settings file whose entries you can now read the transport straight off — <code>command</code>/<code>args</code> is stdio, <code>url</code> is streamable HTTP. In logs: "failed to initialize MCP server" means the handshake never completed (wrong path, crashed subprocess, unreachable URL); "server disconnected unexpectedly" from a local server is very often the stdout-print bug from the Careful box. And in vendor announcements, "we now ship an MCP server" means: their system is a ministry now — your host already has the attaché.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Your host app is configured with three MCP servers. How many MCP clients exist?</p>
+          <div class="q-opts">
+            <button data-opt="a">One — the host is the client</button>
+            <button data-opt="b">Three — a client holds a one-to-one session with exactly one server</button>
+            <button data-opt="c">Zero — servers talk to the LLM directly</button>
+          </div>
+          <p class="q-explain">One client per server is the strict rule. The host creates and owns the clients; each maintains its own private session. The LLM never touches the wire at all — the host relays on its behalf.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. What must happen before a client may send <code>tools/list</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">Nothing — discovery is always the first message</button>
+            <button data-opt="b">The user must approve each tool</button>
+            <button data-opt="c">The initialize exchange plus the initialized notification — the full handshake</button>
+          </div>
+          <p class="q-explain">Every session opens with the same three beats: initialize request, initialize response (capabilities both ways), then the initialized notification. Only then does normal traffic — discovery included — begin.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. The tool server your team needs runs on a cloud VM, shared by twelve people. Which transport, and why?</p>
+          <div class="q-opts">
+            <button data-opt="a">Streamable HTTP — stdio requires the server to be a local subprocess of the host</button>
+            <button data-opt="b">stdio — it is simpler, so it works everywhere</button>
+            <button data-opt="c">Either works equally well for remote servers</button>
+          </div>
+          <p class="q-explain">stdio literally means the host launches the server and holds its stdin/stdout pipes — impossible across machines. Remote or shared means streamable HTTP: an independent server process, one endpoint, many clients told apart by session.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. In the wire transcript, <code>notifications/initialized</code> had no <code>id</code> field. What does that tell you?</p>
+          <div class="q-opts">
+            <button data-opt="a">It is malformed and the server should reject it</button>
+            <button data-opt="b">It is a notification — fire-and-forget, no reply expected or allowed</button>
+            <button data-opt="c">The id is optional on every message</button>
+          </div>
+          <p class="q-explain">JSON-RPC uses the id to match replies to requests. A message without one is a notification: the sender expects nothing back. Requests and responses always carry ids; notifications never do.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A developer adds <code>print("debug!")</code> inside a tool in their stdio MCP server. What happens?</p>
+          <div class="q-opts">
+            <button data-opt="a">Nothing — prints are ignored by the protocol</button>
+            <button data-opt="b">The message appears in the host's chat window</button>
+            <button data-opt="c">It corrupts the connection — stdout is the transport, so non-JSON breaks the stream</button>
+          </div>
+          <p class="q-explain">In a stdio server, stdout carries the protocol itself: one JSON-RPC message per line. A stray print injects garbage mid-stream and the client fails to parse. Diagnostics go to stderr, which the transport leaves free.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>MCP has exactly three roles: the <strong>host</strong> (the app — UI, agent loop, LLM calls), <strong>clients</strong> (connectors inside the host, strictly one per server), and <strong>servers</strong> (independent tool providers that know nothing about who calls them).</li>
+          <li>Underneath, everything is JSON-RPC 2.0: numbered requests matched to same-numbered responses, plus unnumbered fire-and-forget notifications.</li>
+          <li>No business before the handshake — initialize (versions and capabilities exchanged both ways), then the initialized notification. Capabilities are always declared, never assumed; that is how the protocol evolves without breaking anyone.</li>
+          <li>Discovery is just a request: <code>tools/list</code> returns names, descriptions, and schemas, which the host hands to the LLM as its tool menu; <code>tools/call</code> carries the model's choice back down the chain.</li>
+          <li>Two transports carry identical messages: stdio for a local subprocess (JSON per line on stdin/stdout — keep prints off stdout!), streamable HTTP for anything remote or shared (POST to one endpoint, streamed replies when needed).</li>
+          <li>In daily life you touch only config: a <code>command</code> entry means stdio, a <code>url</code> entry means streamable HTTP — and behind either line sits the whole handshake you can now draw from memory.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

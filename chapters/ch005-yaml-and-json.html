@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YAML and JSON: dicts in costume — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch005">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act I · The Language</div>
+        <h1>YAML and JSON: dicts in costume</h1>
+        <p class="ch-tagline">Every config file you have ever squinted at — compose files, CI pipelines, API payloads — is the lists and dicts of the last chapter, written down as text. Once you see the costume, you can never unsee the dict.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 5 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Walk into a busy restaurant and watch one order live two lives. At the till, a printer spits out a receipt: rigid columns, every item in quotes, every price in its slot, commas exactly where the accounting software demands them. One misplaced character and the machine refuses the whole thing. Meanwhile in the kitchen, the very same order goes up on a whiteboard: <em>table 12</em> underlined at the top, the dishes indented beneath it, a dash in front of each one, "extra spicy" scribbled beside the biryani. No quotes, no commas — just neat indentation that any cook can read at a glance.</p>
+        <p>The receipt is for machines talking to machines. The whiteboard is for humans who need to write fast and read faster. But underneath, it is the <em>same order</em> — the same table number, the same list of dishes, the same little notes. That is this entire chapter. JSON is the till receipt. YAML is the kitchen whiteboard. And the order underneath both of them is exactly the dicts and lists you met last chapter.</p>
+      </section>
+
+      <h2>You already know this — that was the point of chapter 4</h2>
+      <p>A quick recap from <a href="ch004-collections.html">the four containers</a>, because this chapter stands entirely on it. Lists hold things in order; dicts label things by name; both nest freely inside each other; and nearly every structure an agent touches — configs, tool arguments, API responses — is dicts and lists nested a few levels deep. That was the punchline of chapter 4: agent plumbing is containers all the way down.</p>
+      <p>Here is the one new idea this chapter adds. Those containers live in a running program's memory, and memory vanishes the moment the program stops. For a structure to survive — saved in a file, sent over a network, committed to a git repo — it has to be written down as plain text. Turning live containers into text is called <dfn>serialisation</dfn> — writing data out in an agreed, machine-readable format. Reading that text back into live containers is called <dfn>parsing</dfn> — the reverse trip. JSON and YAML are simply the two most common agreements about what that text should look like.</p>
+      <p>Watch the same little structure wear all three costumes. First, as Python in memory — pure chapter 4:</p>
+
+      <div class="code-title">In memory — a Python dict</div>
+      <pre><code class="language-python">order = {
+    "table": 12,
+    "dishes": ["dal tadka", "veg biryani"],
+    "extra_spicy": True,
+    "delivered_at": None,
+}</code></pre>
+
+      <p>Now the till receipt. Braces for dicts, square brackets for lists, double quotes on every string — and note the small wardrobe changes: <code>True</code> becomes lowercase <code>true</code>, and <code>None</code> becomes <code>null</code>:</p>
+
+      <div class="code-title">order.json — the same thing in JSON</div>
+      <pre><code class="language-json">{
+  "table": 12,
+  "dishes": ["dal tadka", "veg biryani"],
+  "extra_spicy": true,
+  "delivered_at": null
+}</code></pre>
+
+      <p>And the kitchen whiteboard. The braces, brackets, and most of the quotes evaporate. Indentation says what belongs inside what; a dash starts each list item:</p>
+
+      <div class="code-title">order.yaml — the same thing in YAML</div>
+      <pre><code class="language-yaml">table: 12
+dishes:
+  - dal tadka
+  - veg biryani
+extra_spicy: true
+delivered_at: null</code></pre>
+
+      <p>Three costumes, one body. If you can read the Python version, you can already read the other two — the rest of this chapter is just learning each costume's dress code and the places where it pinches.</p>
+
+      <h2>From characters on disk to a living dict</h2>
+      <p>Before the dress codes, fix the journey in your head, because it explains why any of this matters. A file on disk contains no dicts and no lists — only characters, one after another. Something has to read those characters and <em>build</em> the containers. That something is a <dfn>parser</dfn> — a piece of code that walks through text, obeying a format's rules, and constructs live data from it. Step through the trip:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Just text">
+          <h3>1. On disk, it is only text</h3>
+          <div class="diagram">
+            <div class="d-box hot">settings.yaml<small>140 characters in a row</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Parser</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Your code</div>
+          </div>
+          <p class="step-cap">No structure exists yet. The file is a string of characters that merely <em>follows a convention</em> — colons here, dashes there. A text editor shows it; nothing understands it.</p>
+        </div>
+        <div class="step" data-title="The parser reads">
+          <h3>2. A parser walks the characters</h3>
+          <div class="diagram">
+            <div class="d-box dim">settings.yaml</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Parser<small>json.loads or yaml.safe_load</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Your code</div>
+          </div>
+          <p class="step-cap">The parser applies the costume's rules: for JSON, braces and double quotes; for YAML, indentation and dashes. As it reads, it builds containers in memory — a dict here, a list there, an int, a bool.</p>
+        </div>
+        <div class="step" data-title="Containers appear">
+          <h3>3. Out come the four containers</h3>
+          <div class="diagram">
+            <div class="d-box dim">settings.yaml</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Parser</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">dict<small>holding lists, strings, ints, bools</small></div>
+          </div>
+          <p class="step-cap">The parser's return value is nothing exotic — it is a plain chapter-4 dict. Every YAML mapping became a dict, every dashed block became a list, every bare word became a string, number, bool, or None.</p>
+        </div>
+        <div class="step" data-title="Ordinary access">
+          <h3>4. Your code reads it like any dict</h3>
+          <div class="diagram">
+            <div class="d-box dim">Parser</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">cfg["dishes"][1]<small>"veg biryani"</small></div>
+          </div>
+          <p class="step-cap">From here on, nothing is special. Square-bracket lookups, loops, everything you learned in chapter 4 applies unchanged. The costume came off at the door.</p>
+        </div>
+      </div>
+
+      <h2>JSON: the strict costume</h2>
+      <p><dfn>JSON</dfn> — JavaScript Object Notation, a text format for data that machines exchange — is the till receipt: rigid on purpose. Its whole value is that a JSON document written by a server in one language parses identically in every other language on Earth. The dress code is short and absolutely non-negotiable:</p>
+      <ul>
+        <li>Dicts wear <code>{ }</code>, lists wear <code>[ ]</code> — always.</li>
+        <li>Every string and every dict key wears <strong>double quotes</strong>. Single quotes are rejected.</li>
+        <li>The only value types are: string, number, <code>true</code>, <code>false</code>, <code>null</code>, object (dict), and array (list). Nothing else exists.</li>
+        <li>No comments. None. Not even a little one.</li>
+        <li>No trailing commas. <code>{"a": 1,}</code> is an error, full stop.</li>
+      </ul>
+      <p>In Python, the translator is the built-in <code>json</code> module, and its two verbs are worth memorising now because you will see them in every codebase for the rest of this course: <code>json.loads</code> parses a string into containers (<em>the s means string</em>), and <code>json.dumps</code> serialises containers back into a string. Run the round trip yourself:</p>
+
+      <div class="pyrun" data-title="json.loads and json.dumps — the round trip">
+<textarea class="py-src" spellcheck="false">
+import json
+
+text = """
+{
+  "table": 12,
+  "dishes": ["dal tadka", "veg biryani"],
+  "extra_spicy": true,
+  "delivered_at": null
+}
+"""
+
+order = json.loads(text)        # text in, containers out
+print(type(order).__name__)     # it is a plain dict
+print(order["dishes"][1])       # ordinary ch4 access
+print(order["extra_spicy"])     # true became a real Python True
+print(order["delivered_at"])    # null became None
+
+order["delivered_at"] = "19:42"
+back = json.dumps(order, indent=2)
+print(back)                     # containers in, text out
+
+# JSON is strict. Watch it reject one trailing comma:
+try:
+    json.loads('{"table": 12,}')
+except json.JSONDecodeError as err:
+    print("REJECTED:", err)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Play with it: change <code>true</code> to <code>True</code> in the text and run again — JSON refuses Python's capitalised spelling. Swap the double quotes on <code>"table"</code> for single quotes and read the error. Every one of these rejections is an error message you will someday meet in a real log, and now you will know it in one glance.</p></div>
+
+      <h2>YAML: the human costume</h2>
+      <p><dfn>YAML</dfn> — a text format designed for humans to write configuration in — keeps the same underlying shapes but drops the ceremony. Three words carry its grammar. A <dfn>mapping</dfn> is YAML's name for a dict: lines of <code>key: value</code>. A <dfn>sequence</dfn> is YAML's name for a list: lines starting with <code>- </code>. A <dfn>scalar</dfn> is any single value — a string, number, bool, or null — the leaves of the tree. And instead of braces, <strong>indentation is the syntax</strong>: whatever is indented under a key is inside it.</p>
+
+      <div class="code-title">agent.yaml</div>
+      <pre><code class="language-yaml"># comments exist in YAML -- a luxury JSON never allows
+agent:
+  name: shift-summariser
+  tools:
+    - calculator
+    - web_search
+  limits:
+    max_turns: 5
+    budget_usd: 1.50</code></pre>
+
+      <p>Read it with chapter-4 eyes: the whole file is one dict with a single key <code>agent</code>; its value is another dict; <code>tools</code> holds a list of two strings; <code>limits</code> holds a dict with an int and a float. In Python, after parsing: <code>cfg["agent"]["tools"][1]</code> is <code>"web_search"</code>. Strings usually go unquoted — the parser guesses the type of each bare scalar, which is delightful right up until it guesses wrong (a famous ambush we will spring in a minute). Booleans are <code>true</code>/<code>false</code>, and null is written <code>null</code>, <code>~</code>, or by leaving the value empty.</p>
+      <p>One more comforting fact: YAML is very nearly a superset of JSON. You can paste a JSON object into most YAML files and it parses fine — <code>tools: ["calculator", "web_search"]</code> is legal YAML, just in its inline "flow" style. The two costumes share a wardrobe.</p>
+      <p>Pin the vocabulary before moving on — flip each card until the back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">mapping</span><span class="flip-back">YAML's word for a dict: lines of key: value pairs. Nesting happens by indenting further.</span></button>
+        <button class="flip" type="button"><span class="flip-front">sequence</span><span class="flip-back">YAML's word for a list: each item on its own line, prefixed with a dash and a space.</span></button>
+        <button class="flip" type="button"><span class="flip-front">scalar</span><span class="flip-back">A single value — string, number, bool, or null. The leaves of the data tree, where all guessing about types happens.</span></button>
+        <button class="flip" type="button"><span class="flip-front">parse</span><span class="flip-back">Turn text into live containers. json.loads for JSON, yaml.safe_load for YAML. Also called deserialising.</span></button>
+        <button class="flip" type="button"><span class="flip-front">serialise</span><span class="flip-back">Turn live containers back into text, ready for a file or a network. json.dumps is the one you will meet most.</span></button>
+        <button class="flip" type="button"><span class="flip-front">anchor &amp; alias</span><span class="flip-back">YAML's built-in copy-paste: &amp;name marks a block once, *name reuses it elsewhere in the same file.</span></button>
+      </div>
+
+      <h2>Two conveniences JSON cannot offer</h2>
+      <p>YAML earns its keep in config files with two features worth recognising on sight. The first is <strong>multiline strings</strong>. A <code>|</code> after the key starts a literal block that keeps every line break exactly as written — perfect for embedding a script or a prompt. A <code>&gt;</code> starts a folded block that joins the lines into one long line with spaces:</p>
+
+      <div class="code-title">multiline scalars</div>
+      <pre><code class="language-yaml">release_note: |
+  Fixed the login bug.
+  Upgraded the parser.
+  No downtime expected.
+
+summary: &gt;
+  These folded lines will be joined
+  into one single line, with spaces
+  where the breaks used to be.</code></pre>
+
+      <p>The second is <strong>anchors</strong>. An <dfn>anchor</dfn> — written <code>&amp;name</code> — labels a block of YAML so an alias, written <code>*name</code>, can reuse it later in the same file; the popular <code>&lt;&lt;:</code> merge key copies an anchored mapping in and lets you override individual keys. It is how CI files avoid repeating the same settings for ten jobs:</p>
+
+      <div class="code-title">anchors and aliases — write once, reuse</div>
+      <pre><code class="language-yaml">defaults: &amp;defaults
+  retries: 3
+  timeout: 30
+
+staging:
+  &lt;&lt;: *defaults          # copy everything from defaults
+  url: https://staging.example.com
+
+production:
+  &lt;&lt;: *defaults
+  url: https://example.com
+  retries: 5              # ...then override just this key</code></pre>
+
+      <p>You do not need to write anchors this month. You do need to not panic when you meet <code>&amp;</code> and <code>*</code> in a pipeline file — now you won't.</p>
+
+      <h2>The gotchas that bite in production</h2>
+      <p>YAML's friendliness has a price: because bare scalars are unquoted, the parser must <em>guess</em> what each one is — and its guesses are governed by rules written down years ago. Three ambushes account for almost every YAML war story you will ever hear.</p>
+      <p><strong>Tabs are forbidden.</strong> YAML indentation must be spaces — a tab character anywhere in the indentation is an immediate parse error. This is the number-one "it worked on my machine" YAML failure: an editor silently inserts a tab, the file looks identical to the eye, and the parser explodes. Two spaces per level, and match whatever the file already uses.</p>
+      <p><strong>The Norway problem.</strong> Under the older YAML 1.1 rules — which the most widely used Python parser, PyYAML, still follows — the bare words <code>yes</code>, <code>no</code>, <code>on</code>, and <code>off</code> (in their usual capitalisations) are booleans. So a perfectly innocent country list containing <code>country: NO</code> quietly delivers <code>country: False</code> to your program, and Norway vanishes from the map. The YAML 1.2 specification dropped those extra spellings, keeping only <code>true</code> and <code>false</code>, but 1.1-style parsers are still everywhere — so the professional habit is to quote anything that even smells like a boolean.</p>
+      <p><strong>Overeager numbers.</strong> The version string <code>3.10</code>, unquoted, is the float <code>3.1</code>. A value with a leading zero like <code>010</code> is, under 1.1 rules, an octal number — it parses as <code>8</code>. And pairs of small numbers separated by colons, like the port mapping <code>22:22</code>, can be read as a base-60 ("sexagesimal") number — <code>1342</code>. Run the ambushes yourself; this little function mimics how a YAML 1.1 parser decides what a bare scalar is:</p>
+
+      <div class="pyrun" data-title="The Norway problem, live — a YAML 1.1 type-guesser">
+<textarea class="py-src" spellcheck="false">
+import re
+
+def yaml11_scalar(token):
+    """How a YAML 1.1 parser guesses what a bare value IS.
+    (Simplified, but faithful to the famous ambushes.)"""
+    t = token.strip()
+    if t.lower() in ("yes", "true", "on"):   return True
+    if t.lower() in ("no", "false", "off"):  return False
+    if t.lower() in ("null", "~", ""):       return None
+    if re.fullmatch(r"[-+]?0[0-7]+", t):     return int(t, 8)  # octal!
+    if re.fullmatch(r"[-+]?\d+", t):         return int(t)
+    if re.fullmatch(r"\d+(:[0-5]?\d)+", t):                    # base-60!
+        val = 0
+        for part in t.split(":"):
+            val = val * 60 + int(part)
+        return val
+    try:
+        return float(t)
+    except ValueError:
+        return t                             # finally: a plain string
+
+samples = ["Norway", "NO", "off", "3.10", "22:22", "010", "dal tadka"]
+for raw in samples:
+    v = yaml11_scalar(raw)
+    print(f"{raw!r:&gt;12}  becomes  {v!r}   ({type(v).__name__})")
+
+print()
+print("The fix is quoting: a quoted scalar skips ALL guessing")
+print('and stays a string. Write   country: "NO"   and Norway lives.')
+</textarea>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The universal defence is boring and beautiful: <strong>when in doubt, quote it.</strong> Quote country codes, version numbers, port mappings, anything starting with a special character, and any string containing <code>: </code> or <code>#</code> (an unquoted <code>#</code> starts a comment and silently eats the rest of the line). Double quotes also let you write escapes like <code>\n</code>; single quotes keep everything literal. Quoting is never wrong — guessing sometimes is.</p></div>
+
+      <h2>Reading real specimens</h2>
+      <p>Time to cash in. Below are two files shaped exactly like ones you have deployed against for years. First, a compose-style file — the kind that defines a small stack of services. Click the annotated lines and translate each one back to containers as you go:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">docker-compose.yml — a two-service stack</div>
+        <div class="wl-line"><code>services:</code>
+          <div class="wl-note">The top-level mapping's first key. Everything indented beneath it is its value — a dict whose keys will be the service names. In Python terms, you are looking at <code>cfg["services"]</code>.</div></div>
+        <div class="wl-line"><code>  web:</code>
+          <div class="wl-note">A key inside <code>services</code>, so: <code>cfg["services"]["web"]</code>. The service's whole definition is the mapping indented under it. The name <code>web</code> is yours to choose — it is data, not a keyword.</div></div>
+        <div class="wl-line"><code>    image: nginx:1.27</code>
+          <div class="wl-note">A plain scalar containing a colon. Safe unquoted, because YAML only splits a key from a value at a colon <em>followed by a space</em> — <code>nginx:1.27</code> has none, so it stays one string.</div></div>
+        <div class="wl-line"><code>    ports:</code></div>
+        <div class="wl-line"><code>      - "8080:80"</code>
+          <div class="wl-note">A sequence with one item — a quoted string. The quotes are the habit that saves you: port pairs where both numbers are under 60 (like <code>22:22</code>) can be swallowed as base-60 numbers by 1.1-style parsers. Quote every port mapping, always, and the ambush can never fire.</div></div>
+        <div class="wl-line"><code>    depends_on:</code></div>
+        <div class="wl-line"><code>      - api</code>
+          <div class="wl-note">Another sequence — dash means list item. One item, the bare string <code>api</code>, naming the other service. So <code>cfg["services"]["web"]["depends_on"]</code> is <code>["api"]</code>.</div></div>
+        <div class="wl-line"><code>  api:</code>
+          <div class="wl-note">Back out to two spaces of indentation — so this is a sibling of <code>web</code>, the second key in the <code>services</code> dict. Indentation level IS the nesting level; your eye can walk the tree.</div></div>
+        <div class="wl-line"><code>    build: ./api</code></div>
+        <div class="wl-line"><code>    environment:</code>
+          <div class="wl-note">Note what is missing: dashes. The lines under this key have no <code>- </code> prefix, so this is a nested <em>mapping</em>, not a sequence — a dict of variable names to values.</div></div>
+        <div class="wl-line"><code>      LOG_LEVEL: info</code></div>
+        <div class="wl-line"><code>      DEBUG: "false"</code>
+          <div class="wl-note">Quoted on purpose. Environment variables must be strings, but a bare <code>false</code> would parse as a boolean — and some tools then crash or, worse, coerce it in surprising ways. This is the Norway problem's little brother, defused with two quote marks.</div></div>
+        <div class="wl-line"><code>    restart: unless-stopped</code></div>
+        <div class="wl-line"><code>volumes:</code>
+          <div class="wl-note">Fully unindented — a second top-level key, a sibling of <code>services</code>.</div></div>
+        <div class="wl-line"><code>  pgdata:</code>
+          <div class="wl-note">A key with nothing after the colon: its value is null. In compose files this idiom means "create it with default settings". You will see the bare-key-meaning-defaults trick all over real-world YAML.</div></div>
+      </div>
+
+      <p>Second specimen: a CI pipeline file, in the style GitLab and similar systems use. Same grammar, different vocabulary:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">.gitlab-ci.yml — a two-stage pipeline</div>
+        <div class="wl-line"><code>stages:</code></div>
+        <div class="wl-line"><code>  - test</code>
+          <div class="wl-note">A sequence of stage names, and here order is meaning: the CI system runs the stages top to bottom. Reordering these two lines reorders your pipeline — a one-character diff with real consequences.</div></div>
+        <div class="wl-line"><code>  - deploy</code></div>
+        <div class="wl-line"><code>default:</code></div>
+        <div class="wl-line"><code>  image: python:3.12</code>
+          <div class="wl-note">Settings under <code>default</code> apply to every job. And notice: <code>python:3.12</code> is safely one string (colon, no space), but if you ever write a bare version like <code>3.10</code> on its own, quote it — or the float-guesser will trim it to <code>3.1</code>.</div></div>
+        <div class="wl-line"><code>run-tests:</code>
+          <div class="wl-note">Any top-level key that is not a reserved word is a job name. The whole file is one big dict, and the CI runner reads it exactly the way you would: <code>cfg["run-tests"]["script"]</code> and so on. No magic — dict access.</div></div>
+        <div class="wl-line"><code>  stage: test</code></div>
+        <div class="wl-line"><code>  script:</code>
+          <div class="wl-note">The heart of every job: a sequence of shell commands. Each dash is one list item is one command, run in order. When a pipeline log says "step 2 failed", it means item index 1 of this list.</div></div>
+        <div class="wl-line"><code>    - pip install -r requirements.txt</code></div>
+        <div class="wl-line"><code>    - pytest -q</code></div>
+        <div class="wl-line"><code>  rules:</code></div>
+        <div class="wl-line"><code>    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'</code>
+          <div class="wl-note">Two costumes at once: a sequence of mappings (dash, then <code>key: value</code> on the same line), and a value wrapped in single quotes because it is full of characters — <code>$</code>, <code>==</code>, inner double quotes — that beg to be quoted. The CI system, not YAML, gives the expression its meaning; YAML just delivers it as a string.</div></div>
+        <div class="wl-line"><code>deploy-prod:</code></div>
+        <div class="wl-line"><code>  stage: deploy</code></div>
+        <div class="wl-line"><code>  script:</code></div>
+        <div class="wl-line"><code>    - ./deploy.sh</code></div>
+        <div class="wl-line"><code>  when: manual</code>
+          <div class="wl-note">A plain scalar that tells the CI system to wait for a human click before running this job. Every "manual gate" you have ever pressed in a pipeline UI traces back to one little line like this.</div></div>
+      </div>
+
+      <h2>How code eats these files</h2>
+      <p>The last piece is the two lines of Python that perform the trick. JSON support ships inside Python itself; YAML needs the most popular third-party parser, installed with <code>pip install pyyaml</code> and imported as <code>yaml</code>:</p>
+
+      <div class="code-title">loading configs — the shape you will see everywhere</div>
+      <pre><code class="language-python">import json
+import yaml                       # from: pip install pyyaml
+
+with open("settings.json") as f:
+    cfg = json.load(f)            # load reads a file; loads reads a string
+
+with open("settings.yaml") as f:
+    cfg = yaml.safe_load(f)       # ALWAYS safe_load, never plain load</code></pre>
+
+      <p>Two notes to file away. The <code>with open(...)</code> line is a context manager — <a href="ch018-context-managers.html">chapter 18</a> unpacks it; for now read it as "open the file, and tidy up automatically afterwards". And the word <code>safe_load</code> is not decoration: full YAML can encode instructions to build arbitrary objects, so the unsafe loader can be tricked into running code from a hostile file. <code>safe_load</code> builds only plain containers and scalars — which is all a config should ever be. If you remember one API name from this chapter, make it that one.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Either way, what lands in <code>cfg</code> is the same thing: dicts, lists, strings, numbers, bools, and <code>None</code>. There is no "YAML object" or "JSON object" living in your program afterwards. The costume never makes it past the parser.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You now hold the skeleton key to most files in a modern repo. Compose files, CI pipelines, Kubernetes manifests, and GitHub Actions workflows are YAML mappings and sequences. Every API response, every <code>.mcp.json</code>, every <code>package.json</code>, and every tool call an LLM makes travels as JSON — when an agent "calls a tool", the arguments arrive as a JSON object that <code>json.loads</code> turns into a dict before any code runs (you will build exactly that in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>). In merge requests, watch for the classic diffs: someone quoting a port mapping, quoting <code>"NO"</code>, or fixing an indentation level — you can now review those in seconds. And when you meet <code>pyproject.toml</code>, that is TOML, a third costume for the same dicts; the wardrobe changes, the body never does.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. You run <code>json.loads('{"retries": 3, "hosts": ["a", "b"]}')</code>. What do you get back?</p>
+          <div class="q-opts">
+            <button data-opt="a">A special JSON object you need JSON-specific methods to read</button>
+            <button data-opt="b">A plain Python dict holding an int and a list — ordinary chapter-4 containers</button>
+            <button data-opt="c">The same string, but validated</button>
+          </div>
+          <p class="q-explain">Parsing ends at the door: the output is ordinary containers, accessed with ordinary square brackets. Nothing "JSON-ish" survives into your running program.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. A config file contains <code>country: NO</code> and is read by a YAML 1.1-style parser such as PyYAML. What lands in Python?</p>
+          <div class="q-opts">
+            <button data-opt="a">The string "NO"</button>
+            <button data-opt="b">A parse error — NO is not valid YAML</button>
+            <button data-opt="c">The boolean False — you must quote "NO" to keep Norway</button>
+          </div>
+          <p class="q-explain">Under YAML 1.1 rules, yes/no/on/off are booleans, so Norway's country code becomes False. YAML 1.2 dropped those spellings, but 1.1-style parsers remain everywhere — hence the habit: quote anything that smells like a boolean.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. You indent one YAML line with a tab character and the parser rejects the whole file. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">YAML forbids tabs in indentation — it must be spaces</button>
+            <button data-opt="b">Tabs are allowed, but only at the top level of the file</button>
+            <button data-opt="c">The parser needed the file converted to JSON first</button>
+          </div>
+          <p class="q-explain">Indentation is YAML's syntax, and the spec requires it to be spaces. A tab looks identical on screen, which is exactly why this is the number-one "but the file looks fine!" YAML failure.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. In a multiline YAML value, what does the <code>|</code> block marker do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Folds all the lines into one long line, with spaces at the breaks</button>
+            <button data-opt="b">Keeps every line break exactly as written</button>
+            <button data-opt="c">Marks the value as a shell pipeline to execute</button>
+          </div>
+          <p class="q-explain">The pipe means literal: line breaks survive verbatim, which is why scripts and prompts are embedded with it. The greater-than sign is the folding one that joins lines into a single line.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">5. Compose files conventionally write port mappings quoted, as <code>"8080:80"</code>. What is the quoting defending against?</p>
+          <div class="q-opts">
+            <button data-opt="a">Unquoted pairs of small numbers like 22:22 can parse as a single base-60 number</button>
+            <button data-opt="b">Docker requires every value in the file to be quoted</button>
+            <button data-opt="c">Nothing — it is purely a style preference</button>
+          </div>
+          <p class="q-explain">Under YAML 1.1 rules, colon-separated numbers whose parts fit under 60 are sexagesimal integers — 22:22 becomes 1342 and your port mapping silently vanishes. Quoting every port mapping, whatever the numbers, means the ambush can never fire.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>JSON and YAML are not new kinds of data — they are the dicts, lists, strings, numbers, bools, and None of <a href="ch004-collections.html">chapter 4</a>, written down as text so they can live in files and cross networks.</li>
+          <li>JSON is the strict costume: braces, brackets, double quotes everywhere, no comments, no trailing commas. Its rigidity is the feature — it is the wire format of APIs and of every tool call an LLM makes.</li>
+          <li>YAML is the human costume: indentation for nesting, dashes for list items, <code>key: value</code> for mappings, real comments, multiline blocks, and anchors for reuse.</li>
+          <li>Parsing (<code>json.loads</code>, <code>yaml.safe_load</code>) turns text into live containers; serialising (<code>json.dumps</code>) goes back. After parsing, it is all ordinary dict access — the costume never enters your program.</li>
+          <li>YAML's type-guessing is the source of its gotchas: never indent with tabs, and quote anything that resembles a boolean (<code>NO</code>, <code>off</code>), a version (<code>3.10</code>), or a port pair (<code>22:22</code>). When in doubt, quote.</li>
+          <li>Use <code>yaml.safe_load</code>, never plain <code>load</code> — configs should only ever become plain containers, and the safe loader guarantees it.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

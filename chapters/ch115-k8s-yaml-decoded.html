@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kubernetes YAML, decoded — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch115">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XIII · The Deployment Platform</div>
+        <h1>Kubernetes YAML, decoded</h1>
+        <p class="ch-tagline">Deployment, Service, ConfigMap, Secret — the four manifests behind every agent you run. By the end of this chapter, a wall of Kubernetes YAML reads like a memo you could have written yourself.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 116 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You run the help desk of a busy airport terminal. You could hire people yourself — interview, train, replace them when they quit at 2 a.m. Instead, you file one standing contract with a staffing agency: <em>"Keep exactly three trained assistants at the desk at all times. Uniform: the blue kit, version 1.4.2. Each assistant gets one desk, one headset, and a fixed snack budget — no more. Every few minutes, check each one is awake; before sending them a customer, check they are actually ready to serve. And give the public a single phone number that rings whichever assistant is free."</em></p>
+        <p>Then you go home. Someone resigns overnight? The agency hires a replacement before breakfast — you never get the call. You didn't tell them <em>how</em> to do any of this; you described the world you want and let them keep it true.</p>
+        <p>That contract is a Kubernetes <strong>manifest</strong>. The three assistants are <strong>replicas</strong>, the uniform is your container <strong>image</strong>, the two checks are <strong>probes</strong>, the phone number is a <strong>Service</strong>. The notice board by the desk is a <strong>ConfigMap</strong> — and the sealed envelope in the drawer is a <strong>Secret</strong> that is rather less sealed than it looks.</p>
+      </section>
+
+      <h2>You already read this language</h2>
+      <p>Cast your mind back to <a href="ch005-yaml-and-json.html">chapter 5</a>: YAML is not a programming language, it is <em>dicts and lists in costume</em>. A line like <code>replicas: 3</code> is a dict entry. Indentation means nesting — a dict inside a dict. A leading dash means a list item. That is the entire grammar; there is nothing else to learn.</p>
+      <p>Here is the payoff, ten acts later: <strong>every Kubernetes manifest is one dict.</strong> A 40-line Deployment that makes newcomers' eyes glaze over is a single nested dictionary — the structure you have built in Python since <a href="ch004-collections.html">chapter 4</a>. <a href="ch114-kubectl-fluency.html">kubectl, last chapter</a>, was you <em>asking</em> the cluster questions; a manifest is how you <em>tell</em> it things. And <a href="ch111-kubernetes-plainly.html">chapter 111</a> gave you the idea underneath: declare a desired state, and controllers loop forever making reality match it. The manifest <em>is</em> that desired state, written down.</p>
+      <p>Better still, every manifest opens with the same four keys — learn these and you can orient yourself in any Kubernetes file ever written:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">apiVersion</span><span class="flip-back">Which edition of the rulebook this document follows — <code>apps/v1</code> for Deployments, plain <code>v1</code> for Services, ConfigMaps, Secrets. Wrong edition, rejected paperwork.</span></button>
+        <button class="flip" type="button"><span class="flip-front">kind</span><span class="flip-back">What sort of thing you are declaring: Deployment, Service, ConfigMap, Secret. The form type at the top of the form.</span></button>
+        <button class="flip" type="button"><span class="flip-front">metadata</span><span class="flip-back">The object's name and labels — data <em>about</em> it, not its behaviour. The name is how you refer to it; labels are how other objects find it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">spec</span><span class="flip-back">The desired state itself — the content of the contract. Almost everything interesting lives under <code>spec</code>.</span></button>
+        <button class="flip" type="button"><span class="flip-front">labels</span><span class="flip-back">Arbitrary key/value name tags, like <code>app: support-agent</code>. Kubernetes attaches no meaning to them — matching them is what gives them meaning.</span></button>
+        <button class="flip" type="button"><span class="flip-front">selector</span><span class="flip-back">A query over labels: "everything tagged <code>app: support-agent</code> belongs to me". Deployments use one to claim pods; Services use one to route traffic.</span></button>
+      </div>
+
+      <h2>The Deployment, line by line</h2>
+      <p>A <dfn>Deployment</dfn> is the staffing contract itself: "keep N copies of this pod running, looking exactly like this template". It is the manifest you will read most often, so here is a complete, production-shaped one — the kind that runs an agent's API — with no line left unexplained. Click every annotated line until each one is boring. Boring means fluent.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">deployment.yaml — a complete apps/v1 Deployment</div>
+        <div class="wl-line"><code>apiVersion: apps/v1</code>
+          <div class="wl-note">Workload types — Deployments and their cousins — live in the <code>apps</code> group of the API, stable version 1. This exact string has not changed in years.</div></div>
+        <div class="wl-line"><code>kind: Deployment</code>
+          <div class="wl-note">The form type: "this document declares a Deployment". Together, apiVersion + kind tell the cluster which schema to check the rest of the file against.</div></div>
+        <div class="wl-line"><code>metadata:</code></div>
+        <div class="wl-line"><code>  name: support-agent</code>
+          <div class="wl-note">The Deployment's own name — what you type in <code>kubectl rollout status deployment/support-agent</code>.</div></div>
+        <div class="wl-line"><code>spec:</code>
+          <div class="wl-note">The contract begins — everything above was the envelope, everything below is desired state.</div></div>
+        <div class="wl-line"><code>  replicas: 3</code>
+          <div class="wl-note">"Keep exactly three assistants at the desk." Not "start three" — <em>keep</em> three: crash one and a controller notices 2 &#8800; 3 and starts a replacement. Change it to 10 and reapply: that is scaling.</div></div>
+        <div class="wl-line"><code>  selector:</code>
+          <div class="wl-note">How this Deployment recognises <em>its</em> pods. It does not track children by name — it claims anything wearing the right label.</div></div>
+        <div class="wl-line"><code>    matchLabels:</code></div>
+        <div class="wl-line"><code>      app: support-agent</code>
+          <div class="wl-note">"My pods are the ones tagged <code>app: support-agent</code>." This line and the label line eleven rows down are a pair — they MUST match. A whole section below covers what happens when they don't.</div></div>
+        <div class="wl-line"><code>  template:</code>
+          <div class="wl-note">The pod template — a full pod description nested inside the Deployment, the rubber stamp that prints every replica. Everything you learned about pods in <a href="ch113-agent-in-a-pod.html">chapter 113</a> reappears from here down.</div></div>
+        <div class="wl-line"><code>    metadata:</code></div>
+        <div class="wl-line"><code>      labels:</code></div>
+        <div class="wl-line"><code>        app: support-agent</code>
+          <div class="wl-note">The name tag stamped onto every pod this template prints — the other half of the handshake. The selector above searches for exactly this label; one typo here and the contract is void.</div></div>
+        <div class="wl-line"><code>    spec:</code>
+          <div class="wl-note">A second <code>spec</code>! This one is the <em>pod's</em> desired state, nested inside the Deployment's — dicts in dicts, business as usual.</div></div>
+        <div class="wl-line"><code>      containers:</code>
+          <div class="wl-note">A YAML list (see the dash below) — a pod can hold several containers, like the <a href="ch113-agent-in-a-pod.html">MCP sidecar pattern from chapter 113</a>. Ours holds one.</div></div>
+        <div class="wl-line"><code>      - name: agent</code></div>
+        <div class="wl-line"><code>        image: myregistry.azurecr.io/support-agent:1.4.2</code>
+          <div class="wl-note">The uniform: which <a href="ch110-containers-and-images.html">container image</a> to run, pulled from your Azure Container Registry, pinned to tag <code>1.4.2</code>. Pin versions — <code>:latest</code> is a different surprise every pull.</div></div>
+        <div class="wl-line"><code>        ports:</code></div>
+        <div class="wl-line"><code>        - containerPort: 8000</code>
+          <div class="wl-note">Documents that the app inside listens on port 8000. Mostly informational — but remember the number: the Service and both probes point at it.</div></div>
+        <div class="wl-line"><code>        envFrom:</code>
+          <div class="wl-note">"Take every key in a ConfigMap and inject each as an environment variable." Config flows as it did in <a href="ch019-logging-config-env.html">chapter 19</a> — the app just reads its environment, unaware Kubernetes exists.</div></div>
+        <div class="wl-line"><code>        - configMapRef:</code></div>
+        <div class="wl-line"><code>            name: agent-config</code>
+          <div class="wl-note">A reference, by name, to a ConfigMap we will write shortly. The Deployment doesn't contain the config — it points at it, so config changes without rebuilding the image.</div></div>
+        <div class="wl-line"><code>        env:</code>
+          <div class="wl-note">Alongside the bulk import, <code>env</code> sets individual variables — literals, or single keys plucked from a ConfigMap or Secret with <code>valueFrom</code>.</div></div>
+        <div class="wl-line"><code>        - name: AGENT_ENV</code></div>
+        <div class="wl-line"><code>          value: "production"</code></div>
+        <div class="wl-line"><code>        resources:</code>
+          <div class="wl-note">The snack budget. Two numbers per resource — the difference between them is a favourite interview question.</div></div>
+        <div class="wl-line"><code>          requests:</code></div>
+        <div class="wl-line"><code>            cpu: "250m"</code>
+          <div class="wl-note"><strong>Requests are a booking.</strong> "This pod needs at least a quarter of a CPU core (250 milli-cores) and half a gigabyte." The scheduler uses requests to pick a node with room. Book too much and pods sit Pending with nowhere to go.</div></div>
+        <div class="wl-line"><code>            memory: "512Mi"</code></div>
+        <div class="wl-line"><code>          limits:</code></div>
+        <div class="wl-line"><code>            cpu: "1"</code>
+          <div class="wl-note"><strong>Limits are a ceiling.</strong> Exceed the CPU limit and the container is throttled — slowed, not killed. Exceed the <em>memory</em> limit and it is killed on the spot: the <code>OOMKilled</code> state from <a href="ch114-kubectl-fluency.html">chapter 114</a> is this line being enforced.</div></div>
+        <div class="wl-line"><code>            memory: "1Gi"</code></div>
+        <div class="wl-line"><code>        livenessProbe:</code>
+          <div class="wl-note">The awake-check. Kubernetes calls this endpoint on a schedule; if it keeps failing, the container is judged wedged and <em>restarted</em>. Liveness asks one question: "is this process beyond saving?"</div></div>
+        <div class="wl-line"><code>          httpGet:</code></div>
+        <div class="wl-line"><code>            path: /healthz</code>
+          <div class="wl-note">Your app must actually serve this route — a trivial 200 OK handler. The probe is only as honest as the endpoint behind it.</div></div>
+        <div class="wl-line"><code>            port: 8000</code></div>
+        <div class="wl-line"><code>          initialDelaySeconds: 10</code>
+          <div class="wl-note">Startup grace period — don't declare the app dead while it is still lacing its shoes. Agents that warm caches need this.</div></div>
+        <div class="wl-line"><code>          periodSeconds: 15</code></div>
+        <div class="wl-line"><code>        readinessProbe:</code>
+          <div class="wl-note">The ready-to-serve check — NOT a duplicate of liveness. A failing readiness probe restarts nothing; it removes the pod from the Service's routing list until it passes again. Liveness = "restart me"; readiness = "no customers for a moment". A pod waiting on a slow dependency is not ready, but it is very much alive.</div></div>
+        <div class="wl-line"><code>          httpGet:</code></div>
+        <div class="wl-line"><code>            path: /ready</code></div>
+        <div class="wl-line"><code>            port: 8000</code></div>
+        <div class="wl-line"><code>          periodSeconds: 5</code></div>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>You never have to memorise field names. <code>kubectl explain deployment.spec.replicas</code> prints the official documentation for any field, straight from the cluster — every path, every kind. It is the dictionary you keep on the desk while reading manifests.</p></div>
+
+      <h2>The gotcha: the selector must match the labels</h2>
+      <p>Two places in that file carried the same little dict, <code>app: support-agent</code>: under <code>spec.selector.matchLabels</code> ("these are my pods") and under <code>spec.template.metadata.labels</code> ("stamp this on every pod I print"). This is the classic Kubernetes paper cut: they <strong>must match</strong>, and nothing auto-corrects them. If the template stamped a label the selector isn't looking for, the Deployment would print pods it could never recognise as its own.</p>
+      <p>Kubernetes refuses to let that contradiction exist. Apply a manifest where the two disagree and the API server rejects it outright — no pods, no partial state, just an error:</p>
+
+      <div class="code-title">what a mismatch looks like</div>
+      <pre><code class="language-bash">$ kubectl apply -f deployment.yaml
+The Deployment "support-agent" is invalid: spec.template.metadata.labels:
+Invalid value: map[string]string{"app":"supprot-agent"}:
+`selector` does not match template `labels`</code></pre>
+
+      <p>Read that error once now, calmly, so the day it appears at speed you smile instead of panicking. (One more sharp edge: the selector is <em>immutable</em> — on a live Deployment you can only delete and recreate it. Choose a boring label like <code>app: &lt;name&gt;</code> and never touch it.)</p>
+      <p>And because a manifest is just a dict, you can check the handshake with Python you already own — <a href="ch005-yaml-and-json.html">chapter 5</a> fluency doing real infrastructure work. Run it, fix the typo, run it again:</p>
+
+      <div class="pyrun" data-title="A Deployment is a dict — lint the label handshake">
+<textarea class="py-src" spellcheck="false">
+# The same Deployment, out of costume: plain Python dicts.
+deployment = {
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {"name": "support-agent"},
+    "spec": {
+        "replicas": 3,
+        "selector": {"matchLabels": {"app": "support-agent"}},
+        "template": {
+            "metadata": {"labels": {"app": "supprot-agent"}},  # typo!
+            "spec": {"containers": [
+                {"name": "agent",
+                 "image": "myregistry.azurecr.io/support-agent:1.4.2"},
+            ]},
+        },
+    },
+}
+
+def lint_selector(manifest):
+    sel = manifest["spec"]["selector"]["matchLabels"]
+    pod = manifest["spec"]["template"]["metadata"]["labels"]
+    for key, want in sel.items():
+        got = pod.get(key)
+        if got != want:
+            print(f"REJECTED: selector wants {key}={want!r}")
+            print(f"          pod template has {key}={got!r}")
+            return False
+    print("OK: selector matches the pod template labels")
+    return True
+
+lint_selector(deployment)
+</textarea>
+      </div>
+
+      <h2>What happens when you apply it</h2>
+      <p>Before the other three manifests, watch the whole machine move once. You hand the contract in; three actors do their jobs; the label handshake is the thread connecting them all.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="You apply">
+          <h3>1. You hand in the contract</h3>
+          <div class="diagram">
+            <div class="d-box hot">Your laptop<small>kubectl apply -f deployment.yaml</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">API server<small>validates, stores desired state</small></div>
+            <div class="d-box dim">Controllers</div>
+          </div>
+          <p class="step-cap">kubectl sends the manifest to the API server — the front desk from <a href="ch111-kubernetes-plainly.html">chapter 111</a> — which validates it (where a selector mismatch bounces) and records the desired state. Nothing runs yet; a wish has been filed.</p>
+        </div>
+        <div class="step" data-title="Controller wakes">
+          <h3>2. The Deployment controller notices the gap</h3>
+          <div class="diagram">
+            <div class="d-box dim">Your laptop</div>
+            <div class="d-box">API server</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Deployment controller<small>desired: 3 running, actual: 0</small></div>
+          </div>
+          <p class="step-cap">A controller — a loop that never sleeps — compares desired state with reality: three wanted, zero exist. It creates a ReplicaSet, the middle manager whose only job is keeping the pod count right.</p>
+        </div>
+        <div class="step" data-title="Pods are printed">
+          <h3>3. Three pods, stamped with the label</h3>
+          <div class="diagram">
+            <div class="d-box">ReplicaSet<small>needs 3</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">pod-1<small>app: support-agent</small></div>
+              <div class="d-box hot">pod-2<small>app: support-agent</small></div>
+              <div class="d-box hot">pod-3<small>app: support-agent</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The ReplicaSet prints three pods from the template, each wearing <code>app: support-agent</code>. The scheduler places each on a node that can afford its <em>requests</em> — too-large requests leave pods stuck Pending.</p>
+        </div>
+        <div class="step" data-title="Service routes">
+          <h3>4. The Service finds them by label</h3>
+          <div class="diagram">
+            <div class="d-box">Callers<small>http://support-agent</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Service<small>selector: app=support-agent</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box good">pod-1<small>ready</small></div>
+              <div class="d-box good">pod-2<small>ready</small></div>
+              <div class="d-box dim">pod-3<small>readiness failing</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The Service (next section) runs the same label query and routes traffic to matching pods — but only those whose <em>readiness</em> probe passes. pod-3 is alive but not ready, so it gets no traffic until it recovers.</p>
+        </div>
+        <div class="step" data-title="Self-healing">
+          <h3>5. A pod dies at 2 a.m. You sleep through it.</h3>
+          <div class="diagram">
+            <div class="d-box hot">ReplicaSet<small>actual: 2, desired: 3 — fix it</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box good">pod-1</div>
+              <div class="d-box good">pod-2</div>
+              <div class="d-box good">pod-4<small>fresh replacement</small></div>
+            </div>
+          </div>
+          <p class="step-cap">pod-3's node fails. The ReplicaSet counts 2 &#8800; 3 and prints a replacement; the Service picks it up the moment it turns ready. Nobody paged you. That is what "declarative" buys.</p>
+        </div>
+      </div>
+
+      <h2>The Service: one phone number for a changing team</h2>
+      <p>Pods are cattle: they die, get replaced, and every replacement gets a fresh IP address — so nothing should ever hard-code one. A <dfn>Service</dfn> is the stable front: one fixed internal address and DNS name, load-balancing across whichever pods currently match its label selector. The single phone number that rings whichever assistant is free. Its manifest is refreshingly small:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">service.yaml — a v1 Service</div>
+        <div class="wl-line"><code>apiVersion: v1</code>
+          <div class="wl-note">Services are older than the <code>apps</code> group — they live in the core API, so the version is just <code>v1</code>. Same for ConfigMaps and Secrets.</div></div>
+        <div class="wl-line"><code>kind: Service</code></div>
+        <div class="wl-line"><code>metadata:</code></div>
+        <div class="wl-line"><code>  name: support-agent</code>
+          <div class="wl-note">This name becomes a DNS entry inside the cluster: any pod in the namespace can call <code>http://support-agent</code> — no IPs, ever. It is how an agent's pod reaches a shared MCP server's Service in <a href="ch113-agent-in-a-pod.html">chapter 113</a>.</div></div>
+        <div class="wl-line"><code>spec:</code></div>
+        <div class="wl-line"><code>  selector:</code>
+          <div class="wl-note">The same label-query trick, third appearance — with one small difference: a Service writes its selector directly, no <code>matchLabels</code> wrapper.</div></div>
+        <div class="wl-line"><code>    app: support-agent</code>
+          <div class="wl-note">"Route my traffic to every ready pod tagged <code>app: support-agent</code>." The Service does not know or care that a Deployment made those pods — it only sees labels.</div></div>
+        <div class="wl-line"><code>  ports:</code></div>
+        <div class="wl-line"><code>  - port: 80</code>
+          <div class="wl-note"><code>port</code> is the number the <em>Service</em> answers on — what callers dial. Callers use <code>http://support-agent:80</code> (and port 80 being HTTP's default, they can drop it entirely).</div></div>
+        <div class="wl-line"><code>    targetPort: 8000</code>
+          <div class="wl-note"><code>targetPort</code> is where the <em>container</em> actually listens — the <code>containerPort: 8000</code> from the Deployment. The Service forwards 80 &#8594; 8000. Mixing these two up is the other classic paper cut of this chapter.</div></div>
+      </div>
+
+      <p>One thing is conspicuously absent: a <code>type</code> field. Leave it out and you get the default, <dfn>ClusterIP</dfn> — a virtual IP reachable <em>only inside the cluster</em>. The right default: your agent's API, MCP servers, and A2A endpoint talk pod-to-pod without touching the internet. Exposing anything outside is a deliberate act (other Service types, or an ingress), never an accident of omission.</p>
+
+      <h2>ConfigMap: the notice board</h2>
+      <p>Your agent needs settings — log level, max turns, which model to call — and baking them into the image means rebuilding it for every tweak. A <dfn>ConfigMap</dfn> is a bucket of plain key/value settings living in the cluster, separate from the image, injected at startup:</p>
+
+      <div class="code-title">configmap.yaml</div>
+      <pre><code class="language-yaml">apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+data:
+  LOG_LEVEL: "info"
+  MAX_TURNS: "25"
+  MODEL_NAME: "claude-sonnet-4-5"</code></pre>
+
+      <p>No <code>spec</code> this time — a ConfigMap declares no behaviour, so its content sits under <code>data</code>. Every value is a string (hence <code>"25"</code> in quotes — the <a href="ch005-yaml-and-json.html">chapter 5</a> rule that unquoted YAML values get guessed at). The name <code>agent-config</code> is what the Deployment's <code>envFrom: configMapRef</code> pointed at: apply this, restart the pods, and your agent finds <code>LOG_LEVEL=info</code> in its environment. The uppercase keys are deliberate — <code>envFrom</code> turns each key into an environment variable, so keys must be legal variable names. ConfigMaps can also be mounted as files, which is how longer artefacts — a system prompt, a <a href="ch084-agent-skills.html">SKILL.md</a> — ride along without an image rebuild.</p>
+
+      <h2>Secret: a sealed envelope, not a safe</h2>
+      <p>A <dfn>Secret</dfn> is a ConfigMap's discreet sibling — same shape, same ways of being consumed (env vars via <code>secretKeyRef</code>, or mounted files) — but meant for sensitive values:</p>
+
+      <div class="code-title">secret.yaml</div>
+      <pre><code class="language-yaml">apiVersion: v1
+kind: Secret
+metadata:
+  name: agent-keys
+type: Opaque
+data:
+  API_KEY: c2stbGl2ZS1ub3QtYWN0dWFsbHktc2FmZQ==</code></pre>
+
+      <p>That scrambled-looking value gives people a warm feeling of security. It should not. It is <dfn>base64</dfn> — an <em>encoding</em>: a way of writing any bytes in 64 safe characters, with no key, no password, no secrecy. Encryption is a locked box; encoding is a costume change. Prove it right now:</p>
+
+      <div class="pyrun" data-title="base64 is encoding, not encryption — decode a Secret">
+<textarea class="py-src" spellcheck="false">
+import base64
+
+# The 'data' value from secret.yaml, exactly as stored:
+stored = "c2stbGl2ZS1ub3QtYWN0dWFsbHktc2FmZQ=="
+
+print("What the Secret stores :", stored)
+print("What anyone can read   :", base64.b64decode(stored).decode())
+
+# Encoding needs no key at all -- it is just an alphabet swap:
+plain = "sk-live-not-actually-safe"
+print("Re-encoding it         :", base64.b64encode(plain.encode()).decode())
+</textarea>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Anyone who can run <code>kubectl get secret agent-keys -o yaml</code> reads every key in seconds — and a Secret committed to git is a leaked credential, full stop. Secrets buy separation and access control, not confidentiality from anyone holding cluster access.</p></div>
+
+      <p>So where do real credentials live? Exactly where <a href="ch113-agent-in-a-pod.html">chapter 113</a> put them: outside the cluster, in Azure Key Vault, reached via <em>workload identity</em> — the pod proves who it is with a federated identity token and fetches secrets at runtime, so no API key is ever baked into an image or parked in a manifest. Secret objects still appear in that world (the Key Vault CSI driver can materialise vault values as short-lived Secrets), but the source of truth sits in the vault, behind audit logs and rotation. Rule of thumb: ConfigMap for anything you could say out loud; Key Vault plus workload identity for anything you couldn't.</p>
+
+      <h2>Shipping it: kubectl apply and kubectl diff</h2>
+      <p>Four files sit in a folder — <code>deployment.yaml</code>, <code>service.yaml</code>, <code>configmap.yaml</code>, <code>secret.yaml</code>. Shipping them takes two commands, one of which you half-know from <a href="ch021-just-enough-git.html">git</a>:</p>
+
+      <div class="code-title">terminal — preview, then apply</div>
+      <pre><code class="language-bash">kubectl diff -f deployment.yaml
+
+kubectl apply -f deployment.yaml
+
+kubectl apply -f k8s/
+
+kubectl rollout status deployment/support-agent</code></pre>
+
+      <p>Line by line, because each of these earns its place:</p>
+      <p><strong>Line 1 — <code>kubectl diff -f deployment.yaml</code>.</strong> The dry run. It compares your file against what is live in the cluster and prints a git-style diff of exactly what would change; if live state already matches, it prints nothing. The same reflex as reading <code>git diff</code> before committing — on a production cluster, the reflex that keeps you employed.</p>
+      <p><strong>Line 2 — <code>kubectl apply -f deployment.yaml</code>.</strong> The single verb that does everything. There is no separate "create" versus "update": apply means <em>make the cluster match this file</em>. First time, it creates the Deployment; afterwards, it updates only what differs. Run it twice and the second run changes nothing — idempotent, safe to repeat, which is why automation can run it blindly.</p>
+      <p><strong>Line 3 — <code>kubectl apply -f k8s/</code>.</strong> Point <code>-f</code> at a folder and it applies every manifest inside. The whole agent stack ships in one command — precisely the line you will find in CI/CD pipelines.</p>
+      <p><strong>Line 4 — <code>kubectl rollout status deployment/support-agent</code>.</strong> Applying is filing paperwork; this watches the work happen. It blocks until the new pods are up and <em>ready</em> — your readiness probe deciding when a rollout counts as done — and reports failure if they never get there.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Notice what you never wrote: no "stop the old pods", no "start new ones in order", no "switch traffic". You changed a file that describes the destination and let the controllers drive. That is the declarative habit — and why manifests live in git, get code-reviewed like code, and can rebuild a whole environment from scratch.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any team's repo and look for a folder named <code>k8s/</code>, <code>manifests/</code>, or <code>deploy/</code> — the four kinds you just read cover most of what lives there. In merge requests, the debates you can now follow are label debates ("this selector won't match after the rename"), resource debates ("512Mi is why it's OOMKilled"), and probe debates ("liveness is restarting pods that were just slow — that belongs in readiness"). When a pipeline log shows <code>kubectl apply -f</code> then <code>rollout status</code>, you are watching this chapter run unattended. One caveat: many shops template their YAML with Helm or Kustomize — the files grow placeholders and overlays, but what lands in the cluster is always the plain manifests you can now read.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A teammate edits a Deployment so the selector says <code>app: chat-agent</code> but the pod template labels still say <code>app: support-agent</code>. What happens at <code>kubectl apply</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">The pods start, but the Service can no longer find them</button>
+            <button data-opt="b">The API server rejects the Deployment with a "selector does not match template labels" error — nothing is created</button>
+            <button data-opt="c">Kubernetes silently rewrites the pod labels to match the selector</button>
+          </div>
+          <p class="q-explain">A Deployment that prints pods its own selector cannot claim is a contradiction, so validation rejects it outright. Nothing auto-corrects; you fix the label pair.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. A Service declares <code>port: 80</code> and <code>targetPort: 8000</code>. Which is true?</p>
+          <div class="q-opts">
+            <button data-opt="a">The container must listen on 80; the Service forwards from 8000</button>
+            <button data-opt="b">Both numbers must always be equal or traffic is dropped</button>
+            <button data-opt="c">Callers dial the Service on 80; it forwards to the container listening on 8000</button>
+          </div>
+          <p class="q-explain"><code>port</code> is the Service's number (what callers dial); <code>targetPort</code> is where the container listens. The Service adapts between the two.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. The values under a Secret's <code>data:</code> field are base64-encoded. What does that protect them from?</p>
+          <div class="q-opts">
+            <button data-opt="a">Almost nothing — base64 is a reversible encoding anyone can decode without a key</button>
+            <button data-opt="b">Reading by anyone who lacks the cluster's private decryption key</button>
+            <button data-opt="c">Being accidentally logged, because logs cannot contain base64</button>
+          </div>
+          <p class="q-explain">Base64 is an alphabet change, not encryption — <code>b64decode()</code> reverses it instantly. Real credentials belong in Key Vault, fetched via workload identity.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Your agent pod keeps showing <code>OOMKilled</code>. Which manifest line is being enforced?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>resources.requests.memory</code> — the pod booked too little</button>
+            <button data-opt="b"><code>resources.limits.memory</code> — the container crossed its memory ceiling and was killed</button>
+            <button data-opt="c"><code>livenessProbe</code> — the health endpoint stopped answering</button>
+          </div>
+          <p class="q-explain">Requests are a scheduling booking; limits are the enforced ceiling. CPU over its limit is throttled, but memory over its limit gets the container killed — that is what OOMKilled means.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A pod's readiness probe starts failing while its liveness probe keeps passing. What does Kubernetes do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Restarts the container after three failures</button>
+            <button data-opt="b">Deletes the pod and lets the ReplicaSet print a fresh one</button>
+            <button data-opt="c">Stops routing Service traffic to that pod until the probe passes again</button>
+          </div>
+          <p class="q-explain">Readiness controls traffic, liveness controls restarts. A pod that is alive but not ready is quietly benched by the Service, then put back the moment it reports ready.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Every Kubernetes manifest is one nested dict — chapter 5 fluency, applied. Four keys open every file: <code>apiVersion</code>, <code>kind</code>, <code>metadata</code>, <code>spec</code>.</li>
+          <li>A Deployment declares desired state — "keep N pods matching this template" — and controllers keep it true, replacing dead pods without you.</li>
+          <li>The label handshake is load-bearing: <code>selector.matchLabels</code> must match <code>template.metadata.labels</code>, or the API server rejects the manifest.</li>
+          <li>Requests book resources for scheduling; limits enforce a ceiling — cross the memory limit and the container is OOMKilled. Liveness restarts a wedged container; readiness only benches it from traffic.</li>
+          <li>A Service is a stable name and internal (ClusterIP) address over changing pods: callers dial <code>port</code>, containers answer on <code>targetPort</code>.</li>
+          <li>ConfigMaps carry sayable settings; Secrets are only base64-encoded — encoding, not encryption — so real credentials come from Key Vault via workload identity.</li>
+          <li><code>kubectl diff -f</code> previews, <code>kubectl apply -f</code> converges the cluster to your file, idempotently — the two-step in every pipeline.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

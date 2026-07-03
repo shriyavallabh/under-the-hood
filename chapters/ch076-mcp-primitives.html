@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tools, resources, prompts — and tasks — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch076">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IX · MCP and Agent Protocols</div>
+        <h1>Tools, resources, prompts — and tasks</h1>
+        <p class="ch-tagline">An MCP server can offer your agent three classic kinds of gifts — and the spec keeps adding new ones. The trick to never mixing them up is a single question: who pulls the trigger?</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 77 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You run a travel agency. Out front sits a brilliant junior assistant who plans trips; behind a door marked <em>Back Office</em> sit three counters. The first is the <strong>ticketing desk</strong> — check a fare, hold a seat, issue a refund. The assistant walks over whenever the trip demands it; nobody tells her when. The second is a <strong>filing cabinet</strong> of brochures, fare rules, and past itineraries. The assistant never rummages in it — the office manager decides which folders land on her desk before each meeting. The third is a <strong>laminated menu</strong> bolted to the customer-facing counter: "Honeymoon package", "Visa checklist", "Senior-citizen pilgrimage". Customers point at one to start a well-worn kind of request.</p>
+        <p>One afternoon a customer asks for a round-the-world itinerary — far too big to wait for. The ticketing desk hands over a numbered token: "Come back later, we'll keep working." Halfway through, a runner jogs out from the back office with a question for the customer: "Window or aisle?"</p>
+        <p>That back office is an MCP server. The three counters are its three classic offerings, the token is a <em>task</em>, and the runner is <em>elicitation</em>. This chapter is a tour of all five.</p>
+      </section>
+
+      <h2>Fifteen seconds of recap</h2>
+      <p>Two chapters ago you saw <a href="ch074-why-mcp-exists.html">why MCP exists</a>: without a standard, every agent product must hand-build an integration to every system — the M-by-N explosion. In <a href="ch075-mcp-architecture.html">MCP architecture</a> you met the cast: a <em>host</em> application (Claude Code, an IDE, your harness) runs one <em>client</em> per <em>server</em>, they speak JSON-RPC over stdio or streamable HTTP, and the conversation opens with an <code>initialize</code> handshake where each side declares its capabilities. So far, so much plumbing.</p>
+      <p>This chapter answers the obvious next question: once the handshake is done, <em>what is actually on offer?</em> What can a server put on the table for your agent?</p>
+
+      <h2>The sorting question: who pulls the trigger?</h2>
+      <p>A server's three classic offerings — tools, resources, prompts — confuse newcomers because all three ultimately deliver the same substance: text and data that end up in the model's context. The difference is not <em>what</em> they carry. The difference is <strong>who decides when they are used</strong>. The spec even names them this way: tools are <em>model-controlled</em>, resources are <em>application-controlled</em>, prompts are <em>user-controlled</em>. Hold on to that axis and everything in the MCP universe files itself neatly.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Primitive</th><th>Who decides</th><th>Wire methods</th><th>In the travel agency</th></tr>
+        <tr><td>Tool</td><td>The model, mid-task</td><td><code>tools/list</code>, <code>tools/call</code></td><td>The ticketing desk</td></tr>
+        <tr><td>Resource</td><td>The host application</td><td><code>resources/list</code>, <code>resources/read</code></td><td>The filing cabinet</td></tr>
+        <tr><td>Prompt</td><td>The human user</td><td><code>prompts/list</code>, <code>prompts/get</code></td><td>The laminated menu</td></tr>
+      </table></div>
+
+      <p>Flip these until the control column feels automatic:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">tool</span><span class="flip-back">An action the server will perform on request — model-controlled. The LLM decides mid-task that it needs one, exactly like the tool calling you built in Act V.</span></button>
+        <button class="flip" type="button"><span class="flip-front">resource</span><span class="flip-back">A piece of readable context with a URI — application-controlled. The host app (or its user) picks which ones enter the conversation; the model does not fetch them on a whim.</span></button>
+        <button class="flip" type="button"><span class="flip-front">prompt</span><span class="flip-back">A reusable message template with arguments — user-controlled. Surfaces as a slash command or menu item; a human picks it to start a well-worn workflow.</span></button>
+        <button class="flip" type="button"><span class="flip-front">elicitation</span><span class="flip-back">The server asking the human a question mid-operation, through the client's UI. The user can accept, decline, or cancel. Added in the 2025-06-18 spec revision.</span></button>
+        <button class="flip" type="button"><span class="flip-front">task</span><span class="flip-back">A receipt for long-running work: call now, poll the status, fetch the result later. Experimental, added in the 2025-11-25 spec revision.</span></button>
+        <button class="flip" type="button"><span class="flip-front">spec revision</span><span class="flip-back">MCP versions are dates, like 2025-06-18 or 2025-11-25. Client and server agree on one during the initialize handshake, and each revision publishes a Key Changes page.</span></button>
+      </div>
+
+      <h2>Tools: the model decides</h2>
+      <p>A <dfn>tool</dfn> is an action the server is willing to perform when asked — in plain words, a function with a name, a description, and a schema for its arguments, executed on the server's side of the wall. This should feel like home turf: it is the same handshake you met in <a href="ch035-tool-calling.html">native tool calling</a> and hand-rolled in <a href="ch045-react-loop-by-hand.html">the ReAct loop</a>. The only novelty is <em>where the function lives</em>. In Act V your tools were functions in your own process; an MCP tool lives inside somebody else's server, and your host discovers it at runtime by calling <code>tools/list</code>.</p>
+      <p>What comes back from that call is worth reading slowly, because it is the join point between two worlds — click the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">what the wire carries — a tools/list response (abridged)</div>
+        <div class="wl-line"><code>{</code></div>
+        <div class="wl-line"><code>  "tools": [</code>
+          <div class="wl-note">A server can advertise many tools. The host fetches this list once at startup and again whenever the server sends a <code>notifications/tools/list_changed</code> nudge — the menu can change while the restaurant is open.</div></div>
+        <div class="wl-line"><code>    {</code></div>
+        <div class="wl-line"><code>      "name": "get_invoice_total",</code>
+          <div class="wl-note">The stable identifier. When the model later wants this action, the host sends <code>tools/call</code> with exactly this name — the same lookup-by-name trick as the <code>TOOLS</code> dict in your hand-built loop.</div></div>
+        <div class="wl-line"><code>      "description": "Return the total of an invoice, by id.",</code>
+          <div class="wl-note">This sentence is prompt engineering, not documentation. It is pasted into the model's context so the model can decide whether to call the tool. Vague descriptions are the number-one cause of "the agent never uses my tool".</div></div>
+        <div class="wl-line"><code>      "inputSchema": {</code>
+          <div class="wl-note">A JSON Schema describing the arguments — the same schema language you met with <a href="ch016-type-hints-and-pydantic.html">type hints and Pydantic</a>. SDKs generate it from the function signature so server authors rarely write it by hand.</div></div>
+        <div class="wl-line"><code>        "type": "object",</code></div>
+        <div class="wl-line"><code>        "properties": { "invoice_id": { "type": "string" } },</code></div>
+        <div class="wl-line"><code>        "required": ["invoice_id"]</code>
+          <div class="wl-note">The contract the model's arguments must satisfy. If the model sends nonsense, the host or server can reject it before anything real happens — a safety net your fifty-line loop did not have.</div></div>
+        <div class="wl-line"><code>      }</code></div>
+        <div class="wl-line"><code>    }</code></div>
+        <div class="wl-line"><code>  ]</code></div>
+        <div class="wl-line"><code>}</code></div>
+      </div>
+
+      <p>Tools are <em>model-controlled</em>: once the host has translated this list into the model's native tool-calling format, the model chooses when to invoke one, mid-reasoning, without asking anyone. That autonomy is their power and their danger — which is why tool calls are also where approval prompts, allowlists, and the whole of <a href="ch079-mcp-security.html">MCP security</a> concentrate.</p>
+
+      <h2>Resources: the application decides</h2>
+      <p>A <dfn>resource</dfn> is a piece of readable context the server exposes under a URI — a file, a database schema, a log, a policy document — meaning data you can <em>look at</em>, addressed like a web page. <code>resources/list</code> enumerates them; <code>resources/read</code> with a URI like <code>billing://policies/gst</code> or <code>file:///project/README.md</code> returns the content. Servers can also publish <em>resource templates</em> (URI patterns with blanks to fill, such as <code>invoice://{id}</code>) and let clients <em>subscribe</em> to a resource so they are notified when it changes.</p>
+      <p>Here is the part people miss: the model does not decide to read a resource. Resources are <em>application-controlled</em> — the host, or the human driving it, chooses which ones to attach to the conversation. Think of the office manager placing folders on the assistant's desk: reading them costs attention (and, as <a href="ch071-the-token-bill.html">the token bill</a> chapter drummed in, tokens are money), so the party that curates context is the app, not the model. Resources are also expected to be safe to read — fetching one should not send an email or delete a row. Context in, no side effects out.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>"But my file server exposes <code>read_file</code> as a <em>tool</em>!" — yes, many do, and that is a deliberate design choice, not a mistake. Publishing it as a tool hands the read decision to the model; publishing it as a resource keeps that decision with the app. Same data, different trigger-puller. Choosing between them <em>is</em> the design act.</p></div>
+
+      <h2>Prompts: the user decides</h2>
+      <p>A <dfn>prompt</dfn> is a reusable message template the server offers to humans — a pre-written, parameterised way to start a task that the server's author knows their system handles well. <code>prompts/list</code> advertises them with names, descriptions, and argument lists; <code>prompts/get</code> fills in the arguments and returns ready-to-send messages. A code-review server might ship a <code>review_merge_request</code> prompt; a billing server, a <code>monthly_report</code> prompt taking a <code>month</code> argument.</p>
+      <p>Prompts are <em>user-controlled</em>: they surface in the host's interface as slash commands or menu entries, and a human picks one. If you have ever typed a slash command in Claude Code that came from an MCP server, you have used this primitive — the server defined the template, the client rendered it as a command, and you pulled the trigger. It is the laminated menu: the expertise of the person who built the back office, packaged so customers ask for the right thing in the right words.</p>
+
+      <p>Before we run all three, here is how little code they cost a server author in the official Python SDK — a teaser for <a href="ch077-build-an-mcp-server.html">the next chapter</a>, where you will build and wire one of these for real:</p>
+
+      <div class="code-title">server.py — three counters, three decorators</div>
+      <pre><code class="language-python">from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("billing")
+
+@mcp.tool()
+def get_invoice_total(invoice_id: str) -&gt; dict:
+    """Return the total of an invoice, by id."""
+    return {"invoice_id": invoice_id, "total": 1500, "currency": "INR"}
+
+@mcp.resource("billing://policies/gst")
+def gst_policy() -&gt; str:
+    """The current GST policy text."""
+    return "GST is applied at 18 percent for services."
+
+@mcp.prompt()
+def monthly_report(month: str) -&gt; str:
+    """Draft the monthly billing report."""
+    return f"Write the monthly billing report for {month}. Flag anything overdue."</code></pre>
+
+      <h2>All three primitives, one running system</h2>
+      <p>The simulation below is a miniature MCP server: one dispatcher, three primitives, and — the point of the whole chapter — three <em>different deciders</em> using them. The message shapes match the real spec; only the plumbing (JSON-RPC over a transport) is collapsed into a function call, and the model is a scripted <code>fake_llm</code> as usual. Press <strong>Run</strong>, then read who triggered what.</p>
+
+      <div class="pyrun" data-title="One server, three trigger-pullers — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- A miniature MCP server: one dict, one dispatcher ------
+SERVER = {
+    "tools": {
+        "get_invoice_total": {
+            "description": "Return the total of an invoice, by id",
+            "handler": lambda args: {"total": 1500, "currency": "INR"},
+        },
+    },
+    "resources": {
+        "billing://policies/gst": "GST is applied at 18 percent for services.",
+    },
+    "prompts": {
+        "monthly_report": "Write the monthly billing report for {month}. "
+                          "Flag anything overdue.",
+    },
+}
+
+def handle(method, params):
+    """The server's router. Real ones speak JSON-RPC; same shapes."""
+    if method == "tools/list":
+        return [{"name": n, "description": t["description"]}
+                for n, t in SERVER["tools"].items()]
+    if method == "tools/call":
+        return SERVER["tools"][params["name"]]["handler"](params["arguments"])
+    if method == "resources/read":
+        return SERVER["resources"][params["uri"]]
+    if method == "prompts/get":
+        return SERVER["prompts"][params["name"]].format(**params["arguments"])
+    return f"ERROR: unknown method {method}"
+
+# ---- Decider 1: the USER picks a prompt (a slash command) --
+print("[user]  picks /monthly_report June")
+print("        prompts/get returns:",
+      handle("prompts/get", {"name": "monthly_report",
+                             "arguments": {"month": "June"}}))
+print()
+
+# ---- Decider 2: the APP attaches a resource to context -----
+print("[app]   attaches billing://policies/gst to the context")
+policy = handle("resources/read", {"uri": "billing://policies/gst"})
+print("        resources/read returns:", policy)
+print()
+
+# ---- Decider 3: the MODEL calls a tool mid-task ------------
+def fake_llm(context):
+    if "total" not in context:
+        return {"tool": "get_invoice_total", "arguments": {"id": "INV-42"}}
+    return {"answer": "INV-42 totals 1500 INR; GST at 18% adds 270."}
+
+context = policy
+for turn in range(3):
+    move = fake_llm(context)
+    if "tool" in move:
+        print("[model] requests tool:", move["tool"])
+        result = handle("tools/call", {"name": move["tool"],
+                                       "arguments": move["arguments"]})
+        print("        tools/call returns:", result)
+        context += str(result)
+    else:
+        print("[model] FINAL:", move["answer"])
+        break
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Modify it: add a second tool (say <code>send_reminder</code>) and make <code>fake_llm</code> call it after reading the total. Then move the GST text out of <code>resources</code> and expose it as a <code>get_policy</code> tool instead — notice how the <em>code</em> barely changes but the <em>decider</em> does. That one-line refactor is the whole tools-versus-resources debate in miniature.</p></div>
+
+      <h2>Why tools hog 90 percent of the attention</h2>
+      <p>Read about MCP anywhere and you will mostly read about tools. Browse real servers and many expose <em>only</em> tools. The skew is real, and it has mechanical reasons, not fashion:</p>
+      <p><strong>Tools plug into a socket that already exists.</strong> Every agent host is already a tool-calling loop — the one you built by hand in Act V and met again in <a href="ch054-create-agent.html">LangChain's create_agent</a>. Supporting MCP tools costs a host almost nothing: fetch <code>tools/list</code>, translate the schemas into the model's native tool format, route <code>tools/call</code>. Resources and prompts, by contrast, need <em>product surface</em> — a resource picker, an @-mention affordance, a slash-command menu. Each client must design and build that UI, and many simply have not.</p>
+      <p><strong>Tools can impersonate the other two.</strong> A server author in a hurry can wrap any document in a <code>get_document</code> tool and any template in a <code>run_playbook</code> tool. The reverse is not true. So the path of least resistance funnels everything into tools — even when handing the model control of what enters the context is exactly wrong for the job.</p>
+
+      <div data-bars data-title="Where the ecosystem's attention goes, across the three classic primitives" data-unit="%" data-note="Round, illustrative numbers — the point is the skew, not the digits.">
+        <div class="bar" data-label="Tools" data-value="90"></div>
+        <div class="bar" data-label="Resources" data-value="6"></div>
+        <div class="bar" data-label="Prompts" data-value="4"></div>
+      </div>
+
+      <p>Should you care? Yes, twice over. As an <em>operator</em>, when a server misbehaves you now know to ask which primitive is in play — a runaway context bill from model-triggered document fetches is a "should have been a resource" bug. As a future <em>author</em>, the three-way split is a gift: it lets you place each capability with the party best placed to decide. The next chapter puts that to work.</p>
+
+      <h2>The newer additions: tasks and elicitation</h2>
+      <p>The three classic primitives assume a tidy world: every operation finishes quickly, and the server never needs to ask anybody anything. Real back offices are messier — some jobs take an hour, and some need a mid-job decision from the customer. Two newer spec additions patch exactly those holes; here they are in one flow. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Call as a task">
+          <h3>1. A big job arrives — as a task</h3>
+          <div class="diagram">
+            <div class="d-box hot">Agent<small>tools/call: archive_reports — run it as a task</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Server</div>
+            <div class="d-box dim">You</div>
+          </div>
+          <p class="step-cap">Archiving a year of reports will take minutes, not milliseconds. So the request is made as a <dfn>task</dfn> — a call-now, fetch-later arrangement for long-running work, added (as experimental) in the 2025-11-25 revision.</p>
+        </div>
+        <div class="step" data-title="Receipt, not result">
+          <h3>2. The server hands back a receipt</h3>
+          <div class="diagram">
+            <div class="d-box dim">Agent</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Server<small>task-42, status: working</small></div>
+            <div class="d-box dim">You</div>
+          </div>
+          <p class="step-cap">No result yet — just a task handle and a status. The agent is free to do other things and poll later. This is the numbered token from the story, and the same call-now-collect-later shape you saw with <a href="ch039-async-await.html">async and await</a>.</p>
+        </div>
+        <div class="step" data-title="Server asks the user">
+          <h3>3. Mid-job, the server needs a human</h3>
+          <div class="diagram">
+            <div class="d-box dim">Agent</div>
+            <div class="d-box">Server<small>elicitation: "Overwrite last year's archive?"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">You<small>a small form appears in your client</small></div>
+          </div>
+          <p class="step-cap">The server sends an <dfn>elicitation</dfn> request — a structured question for the human, delivered through the client's UI, added in the 2025-06-18 revision. The task's status flips to <em>input_required</em>. You can accept (and answer), decline, or cancel — the server never talks to you directly, only through the client.</p>
+        </div>
+        <div class="step" data-title="Answer, resume">
+          <h3>4. You answer; the job resumes</h3>
+          <div class="diagram">
+            <div class="d-box hot">You<small>"Keep last year's archive"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Server<small>task-42, status: working</small></div>
+            <div class="d-box dim">Agent<small>polls now and then</small></div>
+          </div>
+          <p class="step-cap">Your answer flows back and the status returns to <em>working</em>. If this pause-for-a-human pattern feels familiar, it should — it is the same human-in-the-loop idea as LangGraph's <a href="ch062-human-in-the-loop.html">interrupt and resume</a>, standardised at the protocol layer.</p>
+        </div>
+        <div class="step" data-title="Collect the result">
+          <h3>5. Done — collect on the receipt</h3>
+          <div class="diagram">
+            <div class="d-box good">Agent<small>fetches the result for task-42</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box good">Server<small>status: completed</small></div>
+          </div>
+          <p class="step-cap">The status reaches <em>completed</em> (the other endings are <em>failed</em> and <em>cancelled</em>) and the agent retrieves the result. One long job, one human question, zero connections held hostage.</p>
+        </div>
+      </div>
+
+      <p>Keep both at "recognise it when you see it" depth for now. Elicitation is deliberately narrow — simple, schema-described fields, so a server can ask "which region?" but cannot render an arbitrary app inside your client. And tasks are still stamped experimental, which is the spec's way of saying: useful today, details may still shift, check before you build on them.</p>
+
+      <h2>The spec is a living document — read it like one</h2>
+      <p>Everything above describes a protocol that is still growing. MCP revisions are named by date — <code>2025-03-26</code>, <code>2025-06-18</code>, <code>2025-11-25</code> — and client and server negotiate which revision they share during the <code>initialize</code> handshake, alongside <em>capability flags</em> declaring which primitives each side actually supports. That negotiation is why a two-year-old server still works with a brand-new client: neither side assumes features the other never claimed.</p>
+      <p>So when something you read contradicts something you observe, do what working engineers do: open the changelog. The official spec site (<code>modelcontextprotocol.io</code>) publishes a "Key Changes" page per revision, listing exactly what was added, changed, or deprecated since the previous one — elicitation appears in the 2025-06-18 page, tasks in 2025-11-25. Skimming those pages when a new revision lands takes ten minutes and quietly puts you ahead of most people arguing about MCP online.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any MCP server's README and look at what it exports — you will now read the list differently: a wall of tools and nothing else tells you the author took the path of least resistance. In Claude Code, run <code>/mcp</code> and you can see each connected server's tools; server-provided prompts appear in the slash-command menu, and resources can be pulled in with @-mentions. In a merge request, "expose the schema as a resource instead of a tool" is a reviewer moving the trigger from the model to the app — you now know exactly what that sentence costs and buys. And when a teammate says "that only landed in the November spec revision", they are citing the Key Changes page you just learned to read.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A server exposes last quarter's sales report. Who decides whether it enters the model's context — if it is exposed as a <em>resource</em>?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model, whenever it judges the report relevant</button>
+            <button data-opt="b">The host application (or the human driving it)</button>
+            <button data-opt="c">The server, which pushes it into every conversation</button>
+          </div>
+          <p class="q-explain">Resources are application-controlled: the host curates which ones are attached. Had the same report been wrapped in a <code>get_report</code> tool, the model would hold that trigger instead — same data, different decider.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Why do tools get the lion's share of MCP attention?</p>
+          <div class="q-opts">
+            <button data-opt="a">They are the only primitive in the official spec; the others are extensions</button>
+            <button data-opt="b">They are cheaper in tokens than resources and prompts</button>
+            <button data-opt="c">They plug straight into the tool-calling socket every agent host already has, while resources and prompts need extra UI that many clients never built</button>
+          </div>
+          <p class="q-explain">All three are core spec, and tools are not inherently cheaper. The skew is mechanical: hosts already run a tool-calling loop, so supporting tools is nearly free — and tools can impersonate the other two, so lazy designs funnel everything into them.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What is elicitation?</p>
+          <div class="q-opts">
+            <button data-opt="a">The server asking the human a structured question mid-operation, delivered through the client, with accept, decline, or cancel as outcomes</button>
+            <button data-opt="b">The model asking the server for a bigger context window</button>
+            <button data-opt="c">The client asking the server to list its capabilities during initialize</button>
+          </div>
+          <p class="q-explain">Elicitation (2025-06-18 revision) reverses the usual direction: the server needs input from the user and asks via the client's UI. It is deliberately limited to simple, schema-described fields — a question form, not an app.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. An agent starts a long-running operation as a task. What does the server return immediately?</p>
+          <div class="q-opts">
+            <button data-opt="a">The final result, once it is ready — the connection stays open and waits</button>
+            <button data-opt="b">A task handle with a status the agent can poll, collecting the result later</button>
+            <button data-opt="c">Nothing — tasks are fire-and-forget with no way to check progress</button>
+          </div>
+          <p class="q-explain">Tasks (experimental, 2025-11-25 revision) are call-now, fetch-later: the server hands back a receipt, the status moves through states like working, input_required, and completed, and the agent collects the result when it is done.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A server's prompt named <code>review_merge_request</code> will typically show up in your client as what?</p>
+          <div class="q-opts">
+            <button data-opt="a">A tool the model calls automatically whenever it sees a merge request</button>
+            <button data-opt="b">A background job that runs on every commit</button>
+            <button data-opt="c">A slash command or menu item that a human picks to start the workflow</button>
+          </div>
+          <p class="q-explain">Prompts are user-controlled templates: the server defines them, the client surfaces them as commands or menu entries, and a human pulls the trigger — the laminated menu on the front counter.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>An MCP server's three classic offerings differ by <em>who pulls the trigger</em>: tools are model-controlled, resources are application-controlled, prompts are user-controlled.</li>
+          <li>Tools are the familiar tool-calling handshake with the function living in someone else's server — discovered via <code>tools/list</code>, invoked via <code>tools/call</code>, described by JSON Schema, and the natural home of approval gates.</li>
+          <li>Resources are URI-addressed context with no side effects; prompts are parameterised templates that surface as slash commands. Wrapping either in a tool is possible — but it silently hands the model a decision that belonged to the app or the user.</li>
+          <li>Tools dominate the ecosystem because every host already has a tool-calling socket, and tools can impersonate the other two — a skew of convenience, not of merit.</li>
+          <li>Newer spec additions fill real gaps: tasks give long-running work a poll-able receipt (working, input_required, completed, failed, cancelled), and elicitation lets a server ask the user a structured question mid-job.</li>
+          <li>The spec evolves in dated revisions negotiated at initialize; when in doubt, read the Key Changes page for the revision in question rather than arguing from memory.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

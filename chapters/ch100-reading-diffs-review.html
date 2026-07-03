@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading diffs and reviewing like a pro — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch100">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>Reading diffs and reviewing like a pro</h1>
+        <p class="ch-tagline">Red and green will read as fluently as prose, you will know exactly what to hunt for, and you will leave comments authors are glad to receive. A booby-trapped diff waits at the end — and you are going to catch every trap in it.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 101 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You email the rental agreement for your new flat to a lawyer friend. Fourteen pages of dense legalese. It comes back an hour later — but she has not rewritten it. She has <em>marked it up</em>: every deleted phrase struck through in red, every new phrase in green, and in the margins, short notes. You do not reread fourteen pages. You read only the markings, and in five minutes you know everything that changed.</p>
+        <p>Then, on page nine, a red-green pair with no explanation: the notice period, quietly changed from sixty days to thirty. The landlord's cover note never mentioned it. Your friend's margin comment sits right beside it: <em>"Was this discussed? It isn't in the covering letter."</em> Polite. Precise. Devastating.</p>
+        <p>That marked-up contract is a <strong>diff</strong>. The margin conversation is a <strong>code review</strong>. And the most valuable thing a reviewer ever catches is exactly what your friend caught: the change nobody mentioned.</p>
+      </section>
+
+      <h2>A diff is a redline, and you already half-read them</h2>
+      <p>Back in <a href="ch021-just-enough-git.html">the git chapter</a> you learned that a commit is a snapshot of the whole project. A <dfn>diff</dfn> is the subtraction of two snapshots — a machine-generated redline showing only the lines that differ, so a reviewer never rereads the whole file. Every merge request from the previous chapter had one waiting under its Changes tab; now you learn to actually read it.</p>
+      <p>The colour code has exactly two rules. A line prefixed with <code>-</code> (shown red) existed in the old version and is being removed. A line prefixed with <code>+</code> (shown green) is being added in the new version. That is the whole alphabet. There is no such thing as a "modified line" in a diff — a changed line always appears as a pair: the red line as it was, directly above the green line as it will be. Read every pair as a before-and-after photograph.</p>
+      <p>Lines with no prefix (just a leading space) are <dfn>context lines</dfn> — unchanged lines included around each change purely so you can orient yourself. They are the unmarked sentences your lawyer friend left visible around each strikethrough.</p>
+      <p>Here is the smallest interesting diff in the world:</p>
+
+      <div class="code-title">a one-line change, as git shows it</div>
+      <pre><code class="language-diff">--- a/greeting.py
++++ b/greeting.py
+@@ -1,4 +1,4 @@
+ def greet(name):
+-    return "Hello " + name
++    return f"Hello, {name}!"
+
+ print(greet("Asha"))</code></pre>
+
+      <p>One function, one changed line, shown as a remove-add pair with context for orientation. Now let us name every part, because each line is load-bearing.</p>
+
+      <h2>The anatomy, line by line</h2>
+      <p>Click each annotated line and make sure it feels boring. Boring means fluent — same trick as <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">the same diff, dissected</div>
+        <div class="wl-line"><code>diff --git a/greeting.py b/greeting.py</code>
+          <div class="wl-note">The envelope. Git names the file being compared, in both its old (<code>a/</code>) and new (<code>b/</code>) incarnations. A multi-file diff is just several of these envelopes stacked; GitLab turns each one into a collapsible file section.</div></div>
+        <div class="wl-line"><code>--- a/greeting.py</code>
+          <div class="wl-note">The old version — the "a" side, the minus side. If a file is brand new, this line reads <code>--- /dev/null</code>: it came from nothing. That is how you spot file creations at a glance.</div></div>
+        <div class="wl-line"><code>+++ b/greeting.py</code>
+          <div class="wl-note">The new version — the "b" side, the plus side. A deleted file has <code>+++ /dev/null</code>: it goes to nothing. Renames show a different path on each side.</div></div>
+        <div class="wl-line"><code>@@ -1,4 +1,4 @@</code>
+          <div class="wl-note">The famous hunk header, decoded in the next section. For now: it is a map reference telling you where in the file you are standing.</div></div>
+        <div class="wl-line"><code> def greet(name):</code>
+          <div class="wl-note">A context line — note the single leading space instead of <code>+</code> or <code>-</code>. Unchanged, shown only so you know which function you are inside.</div></div>
+        <div class="wl-line"><code>-    return "Hello " + name</code>
+          <div class="wl-note">Red. This exact line exists in the old version and will not exist in the new one. On its own it would be a deletion; paired with the next line, it is the "before" half of an edit.</div></div>
+        <div class="wl-line"><code>+    return f"Hello, {name}!"</code>
+          <div class="wl-note">Green, the "after" half. Reading red-green pairs top-to-bottom — was this, becomes this — is the core fluency skill. Practise it until your eye does it automatically.</div></div>
+        <div class="wl-line"><code> print(greet("Asha"))</code>
+          <div class="wl-note">Trailing context. The diff shows a handful of unchanged lines after the change too, so the edit never floats in a void.</div></div>
+      </div>
+
+      <h2>Hunks and the strange @@ line</h2>
+      <p>Diffs do not show whole files; they show <dfn>hunks</dfn> — contiguous patches of change, each wrapped in a few context lines, like paragraphs in the redline. A big merge request is a list of files, each file a list of hunks. The <code>@@ -1,4 +1,4 @@</code> header on each hunk is its map reference: <code>-1,4</code> means "in the <em>old</em> file, this hunk starts at line 1 and spans 4 of its lines"; <code>+1,4</code> says the same for the <em>new</em> file. If a hunk adds more than it removes, the second number grows: <code>@@ -10,9 +10,17 @@</code> tells you nine old lines became seventeen new ones before you have read a single line of code.</p>
+      <p>Nobody computes these numbers by hand. But being able to <em>read</em> them means you always know where you are — and any text after the closing <code>@@</code> (often a function name) is git being helpful about which function the hunk lives inside.</p>
+
+      <h2>Make a diff with your own hands</h2>
+      <p>The best way to trust a format is to generate it yourself. Python's standard library ships <code>difflib</code>, the same family of algorithms git uses. Below, an old and a new version of a tiny billing function go in, and a unified diff comes out. Press <strong>Run</strong>, then check the hunk header against what you would predict.</p>
+
+      <div class="pyrun" data-title="Generate a real diff with difflib — run me">
+<textarea class="py-src" spellcheck="false">
+import difflib
+
+old_code = '''def total(prices):
+    result = 0
+    for p in prices:
+        result = result + p
+    return result
+'''
+
+new_code = '''def total(prices, discount=0):
+    """Sum prices, applying an optional discount."""
+    result = sum(prices)
+    return result * (1 - discount)
+'''
+
+diff = list(difflib.unified_diff(
+    old_code.splitlines(keepends=True),
+    new_code.splitlines(keepends=True),
+    fromfile="a/billing.py",
+    tofile="b/billing.py",
+))
+print("".join(diff))
+
+# The +N -N badge GitLab shows next to every file is just this:
+adds = sum(1 for line in diff
+           if line.startswith("+") and not line.startswith("+++"))
+dels = sum(1 for line in diff
+           if line.startswith("-") and not line.startswith("---"))
+print(f"file badge: +{adds} -{dels}")
+
+# Try it: edit new_code (rename a variable, add a line),
+# re-run, and watch the hunk header and badge update.
+</textarea>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Notice the whole function shows as removed-then-added even though some lines feel "the same but edited". The diff has no concept of editing — only of lines that stopped existing and lines that started existing. Tools that highlight the changed <em>characters</em> inside a red-green pair (GitLab does this) are a cosmetic layer on top of exactly this output.</p></div>
+
+      <h2>Unified or side-by-side — and the lines you cannot see</h2>
+      <p>Everything so far has been the <dfn>unified view</dfn>: old and new interleaved in one column, red directly above green. It is compact, it is what <code>git diff</code> prints in a terminal, and it is ideal for small, surgical changes. The alternative is the <dfn>side-by-side view</dfn>: old file left, new file right, changed regions aligned across the gutter. When a function has been substantially rewritten — when the red and green blocks are too large to pair up in your head — side-by-side lets you read the new version as flowing code with the old one in peripheral vision. In GitLab the toggle lives in the viewer settings on the Changes tab. Rule of thumb: unified for tweaks, side-by-side for rewrites.</p>
+      <p>Now the trap every new reviewer falls into. A diff shows you a keyhole: each hunk plus three-or-so context lines. The truth often lives <em>outside</em> that keyhole — the variable defined forty lines up, the function's other caller, the import block at the top of the file. GitLab (like GitHub) puts fold bars between hunks; clicking them expands the hidden, unchanged lines right there in the review. Expanding context is not a power-user trick. It is basic diligence, and the booby-trapped diff at the end of this chapter will punish anyone who skips it.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Adopt this as a reflex: <em>never review a change to a function you cannot see the whole of.</em> If the hunk shows the middle of something, expand up and down until you have the full body on screen. Half the "how did that get merged?" bugs in the wild slipped through a keyhole.</p></div>
+
+      <h2>The Changes tab, click by click</h2>
+      <p>Here is the whole reviewing surface of a GitLab merge request, recreated as a walkable tour. This is the screen you will live in.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Changes tab">
+          <h3>1. Open the Changes tab</h3>
+          <div class="diagram">
+            <div class="d-box dim">Overview<small>description, discussion</small></div>
+            <div class="d-box dim">Commits<small>4</small></div>
+            <div class="d-box dim">Pipelines<small>passed</small></div>
+            <div class="d-box hot">Changes<small>2 files, +17 -14</small></div>
+          </div>
+          <p class="step-cap">Overview holds the description and discussion; Changes holds the diff. The badge already tells you the shape of the review: two files, seventeen additions, fourteen removals — small enough to review properly.</p>
+        </div>
+        <div class="step" data-title="File list">
+          <h3>2. Scan the file list first</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">pipeline/client.py<small>+17 -9</small></div>
+              <div class="d-box">tests/test_client.py<small>+0 -5</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">diff pane<small>hunks render here</small></div>
+          </div>
+          <p class="step-cap">Read the file list like a table of contents first. It already whispers a question: the source file grew, but the test file only <em>lost</em> lines. New behaviour with fewer tests? Hold that thought.</p>
+        </div>
+        <div class="step" data-title="Unified view">
+          <h3>3. Read hunks in unified view</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">@@ -10,9 +10,17 @@<small>hunk header: your map reference</small></div>
+              <div class="d-box hot">- DEFAULT_TIMEOUT = 30<small>red: as it was</small></div>
+              <div class="d-box good">+ DEFAULT_TIMEOUT = 3<small>green: as it will be</small></div>
+              <div class="d-box dim">URL = "https://..."<small>context line</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Red above green: was this, becomes this. Read every pair as a before-and-after photograph and ask of each one, "did the description warn me about you?"</p>
+        </div>
+        <div class="step" data-title="Side-by-side">
+          <h3>4. Toggle side-by-side for rewrites</h3>
+          <div class="diagram">
+            <div class="d-box hot">viewer settings<small>gear: side-by-side</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">old file<small>left column</small></div>
+            </div>
+            <div class="d-col">
+              <div class="d-box good">new file<small>right column</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Same diff, different projection: when a whole function was reworked, read the right column as normal code and glance left only to compare.</p>
+        </div>
+        <div class="step" data-title="Expand context">
+          <h3>5. Expand the hidden lines</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">fold bar<small>click: reveal lines above</small></div>
+              <div class="d-box">the hunk<small>changed lines + 3 context</small></div>
+              <div class="d-box hot">fold bar<small>click: reveal lines below</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Between hunks sit fold bars hiding every unchanged line. Click to expand until you can see the whole function — and, crucially, things like the import block at the top of the file.</p>
+        </div>
+        <div class="step" data-title="Comment">
+          <h3>6. Comment on the exact line</h3>
+          <div class="diagram">
+            <div class="d-box">a diff line<small>hover it</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">comment button<small>appears in the gutter</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">Start a review<small>hold comment as pending</small></div>
+              <div class="d-box dim">Add comment now<small>fires one notification instantly</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Hovering any line summons a comment button in the gutter. Always prefer "Start a review": your comments queue up as pending instead of pinging the author one by one.</p>
+        </div>
+        <div class="step" data-title="Submit">
+          <h3>7. Submit the review as one package</h3>
+          <div class="diagram">
+            <div class="d-box">pending comments<small>4 queued</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Submit review<small>optional summary on top</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">author notified once<small>whole review, in context</small></div>
+          </div>
+          <p class="step-cap">Submitting publishes everything at once, with an optional summary. The author gets one coherent review instead of twelve stray pings — and you get to reread your comments before they land.</p>
+        </div>
+      </div>
+
+      <h2>What a good reviewer actually looks for</h2>
+      <p>Here is the liberating part: reviewing is not "could I have written this?" It is "can I verify this?" — a different skill, and one you already have from years of operating production systems and <a href="ch091-claude-code-dissected.html">reviewing what agents propose</a> before approving it. Work down this checklist, in order, every time:</p>
+      <ol>
+        <li><strong>Does it do what it says?</strong> Read the title and description first, then hold every red-green pair up against them. Every change should be <em>accounted for</em>. A change the description never mentions — the sixty-to-thirty-days clause — is finding number one, every time. It may be innocent; it still gets a question.</li>
+        <li><strong>Are the tests there — and honest?</strong> New behaviour should come with new or updated tests (pytest fluency arrives in <a href="ch103-pytest.html">the pytest chapter</a>, but you can count test functions today). Watch especially for tests <em>deleted or loosened</em> in the same MR that changes behaviour: sometimes legitimate, often a way of making a red pipeline green without making the code right.</li>
+        <li><strong>Names and readability.</strong> Would the next reader — six months from now, at 2 a.m., mid-incident — understand this? <code>scored_batch</code> beats <code>data2</code>. Naming comments feel small; they are compound interest.</li>
+        <li><strong>Edge cases.</strong> Empty list, zero, <code>None</code>, the failure path. What happens when the network call fails, when the retry runs out? Happy-path-only code is half-written — you learned to read the unhappy path in <a href="ch009-errors-and-tracebacks.html">the tracebacks chapter</a>.</li>
+        <li><strong>Security smells.</strong> Hardcoded secrets, credentials in fixtures, SQL built by string concatenation, TLS verification switched off, secrets written to logs, surprise new dependencies. Any of these blocks the merge — the instinct <a href="ch087-guardrails.html">the guardrails chapter</a> drilled for agents applies to human diffs too.</li>
+      </ol>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>You never need to out-code the author to add value. "What happens when this list is empty?" is a first-class review comment, and either the author answers convincingly — in which case the answer usually belongs in the code or tests — or they discover a bug you just prevented. Questions are findings.</p></div>
+
+      <h2>How to say it: ask, don't accuse</h2>
+      <p>A review comment lands in another human's day. Two habits keep the temperature low and the quality high. First, address the code, never the coder: "this function returns an empty dict on failure", not "you swallowed the error". Second, when something looks wrong, <em>ask</em> — a genuine question is both more polite and more accurate, because sometimes the surprising thing is deliberate and the real bug is a missing explanation in the code.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Instead of</th><th>Try</th></tr>
+        <tr><td>"You broke the timeout."</td><td>"Was the timeout change from 30 to 3 intentional? It isn't mentioned in the description."</td></tr>
+        <tr><td>"This is wrong."</td><td>"I think this returns an empty dict on failure — how will callers tell an error from a genuinely empty batch?"</td></tr>
+        <tr><td>"Bad variable name."</td><td>"nit: could <code>data2</code> be <code>scored_batch</code>? Fine to skip."</td></tr>
+        <tr><td>"Why are there no tests???"</td><td>"Could we add a test for the retry path — say, two failures then a success?"</td></tr>
+      </table></div>
+
+      <p>Third habit: suggest concretely. When you know the fix, do not describe it — write it. GitLab lets any diff comment carry a <dfn>suggestion</dfn>: a fenced block of replacement code the author can apply with one click. It is the most generous move in reviewing:</p>
+
+      <div class="code-title">a review comment with an applyable suggestion</div>
+      <pre><code class="language-markup">Small one: this token should come from the environment,
+not source control.
+
+```suggestion
+API_TOKEN = os.environ["SCORES_API_TOKEN"]
+```</code></pre>
+
+      <p>And a small shared vocabulary keeps everyone honest about which comments block the merge and which do not. Flip these until they are yours:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">hunk</span><span class="flip-back">One contiguous patch of change, wrapped in a few context lines. A diff is a list of files; each file is a list of hunks.</span></button>
+        <button class="flip" type="button"><span class="flip-front">context line</span><span class="flip-back">An unchanged line (leading space, no colour) shown around a change so you can orient yourself. Expandable via the fold bars.</span></button>
+        <button class="flip" type="button"><span class="flip-front">unified view</span><span class="flip-back">Old and new interleaved in one column, red above green. Compact; best for small, surgical changes.</span></button>
+        <button class="flip" type="button"><span class="flip-front">side-by-side</span><span class="flip-back">Old file left, new file right, aligned across the gutter. Best when a function was rewritten rather than tweaked.</span></button>
+        <button class="flip" type="button"><span class="flip-front">suggestion</span><span class="flip-back">A review comment containing replacement code the author can apply with one click. The most concrete way to disagree.</span></button>
+        <button class="flip" type="button"><span class="flip-front">nit</span><span class="flip-back">Reviewer shorthand for "tiny and optional" — take it or leave it. A nit never blocks a merge, and saying so keeps trust.</span></button>
+        <button class="flip" type="button"><span class="flip-front">blocking comment</span><span class="flip-back">A finding that must be resolved before merge — a bug, a missing test, a security smell. Say plainly that it blocks, and why.</span></button>
+        <button class="flip" type="button"><span class="flip-front">LGTM</span><span class="flip-back">"Looks good to me" — approval shorthand. Earned by an actual read-through, not by scrolling to the bottom quickly.</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This skill compounds everywhere. On the command line, <code>git diff</code> prints unified diffs and <code>git log -p</code> shows each commit as one; every AI coding assistant — Claude Code included — presents its proposed edits as red-green diffs for your approval, so diff fluency is literally the interface between you and your agents. And in the data-science teams this Act prepares you for, the reviewer who reliably asks "where is the test for the failure path?" and "was this constant change intentional?" becomes the person whose approval means something — without needing to be the best coder in the room. From tomorrow, that can be you.</p></div>
+
+      <h2>Your first real review</h2>
+      <p>Time to earn the chapter. A merge request has arrived, titled <strong>"Add retry to the scores client"</strong>, described as: <em>"Retries transient failures up to 3 times with backoff. No behaviour change otherwise."</em> The pipeline is green. Below is the full diff — both files. Read it slowly, checklist in hand. At least four things here deserve a comment, and one can only be suspected by remembering what a hunk <em>cannot</em> show you. The quiz checks what you caught.</p>
+
+      <div class="code-title">merge request diff: "Add retry to the scores client"</div>
+      <pre><code class="language-diff">diff --git a/pipeline/client.py b/pipeline/client.py
+--- a/pipeline/client.py
++++ b/pipeline/client.py
+@@ -10,9 +10,17 @@ import requests
+
+ URL = "https://scores.internal.example/api/v2"
+-DEFAULT_TIMEOUT = 30
++DEFAULT_TIMEOUT = 3
++API_TOKEN = "sk-live-4f9d21c7e8ab55"
+
+-def fetch_scores(batch_id):
+-    resp = requests.get(URL, params={"batch": batch_id},
+-                        timeout=DEFAULT_TIMEOUT)
+-    resp.raise_for_status()
+-    return resp.json()
++def fetch_scores(batch_id, retries=3):
++    for attempt in range(retries):
++        try:
++            resp = requests.get(
++                URL,
++                params={"batch": batch_id},
++                headers={"Authorization": API_TOKEN},
++                timeout=DEFAULT_TIMEOUT,
++            )
++            resp.raise_for_status()
++            return resp.json()
++        except Exception:
++            time.sleep(2 ** attempt)
++    return {}
+diff --git a/tests/test_client.py b/tests/test_client.py
+--- a/tests/test_client.py
++++ b/tests/test_client.py
+@@ -38,8 +38,3 @@ def test_fetch_scores_ok(fake_api):
+     assert scores["batch"] == "batch-7"
+
+-def test_fetch_scores_raises_on_500(fake_api):
+-    fake_api.status = 500
+-    with pytest.raises(requests.HTTPError):
+-        fetch_scores("batch-7")
+-
+ def test_scores_are_floats(fake_api):</code></pre>
+
+      <p>Done reading? Notebook out — commit to your findings before you scroll on. Then check yourself.</p>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Warm-up, mechanics: in the header <code>@@ -10,9 +10,17 @@</code>, what does <code>-10,9</code> tell you?</p>
+          <div class="q-opts">
+            <button data-opt="a">10 lines were removed and 9 were added</button>
+            <button data-opt="b">In the old file, this hunk starts at line 10 and spans 9 of its lines</button>
+            <button data-opt="c">The change was made on the 10th of September</button>
+          </div>
+          <p class="q-explain">The minus side describes the old file, the plus side the new: start line, then span. Here nine old lines became seventeen new ones — the hunk header told you the change grew the file before you read any code.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. "Does it do what it says": the description promises "No behaviour change otherwise." Which red-green pair breaks that promise?</p>
+          <div class="q-opts">
+            <button data-opt="a">Adding the <code>retries=3</code> parameter to the function signature</button>
+            <button data-opt="b">Adding the <code>headers=</code> argument to the request</button>
+            <button data-opt="c"><code>DEFAULT_TIMEOUT = 30</code> becoming <code>DEFAULT_TIMEOUT = 3</code></button>
+          </div>
+          <p class="q-explain">The timeout was cut tenfold and the description never mentions it — this diff's sixty-to-thirty-days clause. Slow-but-healthy responses that used to succeed will now time out. The retry parameter and header are what the description advertises; the timeout is the stowaway.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Security: which line should block this merge until it is fixed, no matter how good the rest is?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>API_TOKEN = "sk-live-4f9d21c7e8ab55"</code></button>
+            <button data-opt="b"><code>time.sleep(2 ** attempt)</code></button>
+            <button data-opt="c"><code>params={"batch": batch_id}</code></button>
+          </div>
+          <p class="q-explain">A live credential hardcoded in source control is a blocking finding, full stop — once merged it lives in git history forever, even if a later commit removes it. The fix is the suggestion you saw earlier: read it from the environment, and rotate the leaked token. The backoff line and the params are fine.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Tests: what does the deleted <code>test_fetch_scores_raises_on_500</code> tell a sharp reviewer?</p>
+          <div class="q-opts">
+            <button data-opt="a">Routine clean-up — the test was probably redundant</button>
+            <button data-opt="b">The new code silently returns <code>{}</code> instead of raising on failure, and the test that would have failed was removed to keep the pipeline green</button>
+            <button data-opt="c">Nothing — client code does not need failure tests</button>
+          </div>
+          <p class="q-explain">Follow the logic: the new <code>except Exception</code> swallows every error and finally returns an empty dict, so callers can no longer tell "server down" from "batch genuinely empty". The old test asserted that failures raise — the new code fails that test, and it vanished in the same MR. A green pipeline is not the same thing as correct behaviour; this deserves a firm, blocking comment.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Etiquette: you decide to raise the timeout change. Which comment is the professional one?</p>
+          <div class="q-opts">
+            <button data-opt="a">"You broke the timeout. Revert this."</button>
+            <button data-opt="b">"Was the change from 30 to 3 intentional? It isn't in the description — if slow responses were the problem, could we keep 30 and lean on the new retries instead?"</button>
+            <button data-opt="c">Say nothing — the author presumably had a reason</button>
+          </div>
+          <p class="q-explain">Ask, don't accuse — and suggest concretely. Option (b) addresses the code, leaves room for a good answer you have not thought of, and proposes a specific alternative. Option (a) attacks the person; option (c) is how sixty days quietly becomes thirty.</p>
+        </div>
+      </section>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>There was a fifth trap, hiding <em>outside</em> the keyhole. The new code calls <code>time.sleep(...)</code> — but is <code>time</code> imported? The hunk cannot tell you: the only import visible is the <code>import requests</code> peeking through the hunk header. Expanding context is the only way to know. And the twist worth savouring: if the import is missing, the crash happens inside the retry path — the <em>exact</em> path whose test this MR deleted. The deleted test would have caught the missing import. In reviews, the traps hold hands.</p></div>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A diff is a machine-made redline: red <code>-</code> lines are the old version, green <code>+</code> lines the new, and a changed line is always a red-green pair — there is no "modified line".</li>
+          <li>Hunks are the diff's paragraphs, and the <code>@@ -start,span +start,span @@</code> header is a map reference: old-file position on the minus side, new-file position on the plus side.</li>
+          <li>Use unified view for tweaks and side-by-side for rewrites — and always expand context until you can see the whole function, because the bug often lives just outside the keyhole.</li>
+          <li>Review with a checklist, in order: does it do what the description says, are the tests present and honest, names, edge cases, security smells. Unexplained changes and deleted tests are the two loudest alarms.</li>
+          <li>Comment on the code, not the coder: ask genuine questions, mark tiny things as <code>nit:</code>, say plainly when something blocks, and use GitLab suggestions to hand the author a one-click fix.</li>
+          <li>Batch comments with "Start a review" and publish once with "Submit review" — one coherent package beats a drip-feed of notifications.</li>
+          <li>You do not need to out-code the author to review well; verify claims and ask the questions the diff raises. You can do that now.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

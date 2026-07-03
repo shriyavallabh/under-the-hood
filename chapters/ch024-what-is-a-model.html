@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What a model actually is — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch024">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act III · The Data Scientist's World</div>
+        <h1>What a model actually is</h1>
+        <p class="ch-tagline">Strip the mystery off the most overloaded word in your workplace: a model is just a function whose numbers were chosen by data. Fit one yourself in this chapter — by hand, then properly — and credit scoring and ChatGPT stop being magic on the same afternoon.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 24 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>There is a chai stall outside a big office building, and the man who runs it has a superpower. Every morning at six, before a single customer arrives, he glances at the sky, feels the air, and decides how much milk to buy and how many cups to brew. Cold, grey morning? Brew for ninety. Warm and sunny? Forty will do. He has never written down a formula. He has never heard the word "regression". But ten years of mornings — thousands of them, each one a little experiment with a recorded outcome — have quietly tuned a rule inside his head: <em>the colder the morning, the more cups I sell, by roughly this much</em>.</p>
+        <p>Ask him to explain and he will shrug: "experience." But look closely at what experience did. It took a pile of past examples — temperature in, cups sold out — and it adjusted the numbers in his internal rule until his guesses stopped missing. That tuned rule is a <strong>model</strong>. The pile of mornings is <strong>training data</strong>. And the daily glance at the sky, applying the already-tuned rule to a brand-new morning, is <strong>inference</strong>. Everything your data-science colleagues ship — credit scoring, fraud flags, ChatGPT — is this chai stall, scaled up.</p>
+      </section>
+
+      <h2>A model is a function fitted to data</h2>
+      <p>You already know what a <a href="ch007-functions.html">function</a> is: something that takes inputs and returns an output, like <code>def predict(temp): return ...</code>. And in the <a href="ch023-pandas-numpy-notebooks.html">last chapter</a> you met the DataFrame — a table of rows, each row one recorded example. Put those two ideas together and you have this entire chapter, and honestly most of Act III.</p>
+      <p>A <dfn>model</dfn> is a function with adjustable numbers inside it, plus the specific values of those numbers that were chosen by matching the function against past data. That second half is the important half. A programmer writing ordinary code decides the numbers herself — "charge 18 percent GST" is a rule a human typed. A model's numbers are not typed in by anyone; they are <em>discovered</em>, by an algorithm that keeps nudging them until the function's outputs agree with recorded reality as closely as possible.</p>
+      <p>Two more words and you can read half the vocabulary in any model review. The inputs the function looks at are called <dfn>features</dfn> — the measurable facts about each example, like the morning temperature, or an applicant's salary. The adjustable numbers inside the function are called <dfn>weights</dfn> (you will also hear <em>parameters</em>, which means the same thing) — they encode how much each feature matters, and in which direction. When someone says "a 175-billion-parameter model", they are counting these adjustable numbers.</p>
+      <p>And the two phases of a model's life have names you will hear daily. <dfn>Training</dfn> — also called <em>fitting</em> — is the phase where an algorithm chews through past examples and settles the weights. <dfn>Inference</dfn> — also called <em>prediction</em> or <em>serving</em> — is the phase where the finished function, weights now frozen, is handed fresh inputs and asked for an output. Training happens rarely and costs a lot; inference happens constantly and costs little. Every API call you have ever made to an LLM was inference. The training happened months earlier, on someone else's very large electricity bill.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">model</span><span class="flip-back">A function whose internal numbers were chosen by fitting it to past data, instead of being typed in by a programmer.</span></button>
+        <button class="flip" type="button"><span class="flip-front">feature</span><span class="flip-back">An input the model looks at — temperature, salary, months since last default. One column in the training table.</span></button>
+        <button class="flip" type="button"><span class="flip-front">weight</span><span class="flip-back">An adjustable number inside the model saying how much a feature matters and in which direction. Synonym: parameter.</span></button>
+        <button class="flip" type="button"><span class="flip-front">training / fitting</span><span class="flip-back">The one-off, expensive phase: an algorithm nudges the weights until the model's outputs match the recorded examples as closely as possible.</span></button>
+        <button class="flip" type="button"><span class="flip-front">inference</span><span class="flip-back">The everyday, cheap phase: frozen weights, new input in, prediction out. Every LLM API call is inference.</span></button>
+        <button class="flip" type="button"><span class="flip-front">loss / error</span><span class="flip-back">A single number scoring how badly the model currently misses the known answers. Training is the art of driving it down.</span></button>
+      </div>
+
+      <h2>The tiniest model on Earth: a straight line</h2>
+      <p>Data scientists reach for grand things — gradient boosting, neural networks, transformers — but every one of them is a bigger sibling of the smallest model that exists: a straight line through some points. You met its equation in school and then, if you are like most people, never once used it. Today it earns its keep:</p>
+      <p style="text-align:center"><code>cups = m &times; temperature + c</code></p>
+      <p>Read it with your new vocabulary. <code>temperature</code> is the <strong>feature</strong> — the one input this model considers. <code>m</code> and <code>c</code> are the <strong>weights</strong> — exactly two adjustable numbers. <code>m</code> (the slope) says how many cups each extra degree adds or removes; <code>c</code> (the intercept) is the baseline the line starts from. Choose values for <code>m</code> and <code>c</code> and the function is fully specified: feed in any temperature, out comes a prediction. Choose them <em>well</em> and the predictions match the chai seller's logbook. Choosing them well is the whole game.</p>
+      <p>So play the game. Below is the stall's actual logbook — eight mornings of (temperature, cups sold) — and a line with two badly chosen weights. Your job is to be the training algorithm: run it, look at the misses, edit <code>m</code> and <code>c</code> at the top, and run again. The score to beat is a <dfn>total squared error</dfn> — each miss multiplied by itself, then summed, so big misses hurt disproportionately and misses in opposite directions cannot politely cancel out. The best possible line scores about 1.2. You start at 3,286.</p>
+
+      <div class="pyrun" data-title="Be the training algorithm — edit m and c, then Run">
+<textarea class="py-src" spellcheck="false">
+# The chai stall's logbook: (morning temp in deg C, cups sold)
+DATA = [(14, 92), (16, 85), (18, 79), (22, 66),
+        (25, 57), (28, 48), (31, 39), (34, 30)]
+
+# ---- THE TWO WEIGHTS. Edit these, press Run, repeat. ----
+m = -1.0    # slope: cups per extra degree (note: negative!)
+c = 100.0   # intercept: the baseline the line starts from
+
+def predict(temp):
+    return m * temp + c        # the entire model
+
+total = 0.0
+print(f"{'temp':&gt;5} {'actual':&gt;7} {'model':&gt;7} {'miss':&gt;7}")
+for temp, cups in DATA:
+    guess = predict(temp)
+    miss = guess - cups
+    total += miss * miss       # squared, so big misses scream
+    print(f"{temp:&gt;5} {cups:&gt;7} {guess:&gt;7.1f} {miss:&gt;+7.1f}")
+
+print()
+print(f"TOTAL SQUARED ERROR: {total:,.1f}   (best possible: ~1.2)")
+if total &lt; 5:
+    print("Superb. You are within noise of the ideal line.")
+elif total &lt; 300:
+    print("Very close - tiny nudges to m or c now.")
+else:
+    print("Coach's hints: if every miss is negative, raise c.")
+    print("If hot mornings miss high and cold ones miss low,")
+    print("make m more negative (steeper downhill).")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Genuinely do this — three or four runs is enough, and the feel of it is the point. Notice what you are doing: looking at the errors, deciding which weight to nudge and which way, and re-checking. Congratulations, you have manually performed <em>gradient descent</em>, the nudge-and-recheck procedure that trains neural networks. Theirs is automated and runs a few billion nudges; the instinct is identical.</p></div>
+
+      <p>One detail deserves a pause: the good value of <code>m</code> is <em>negative</em> (around minus three). The model learned that heat pushes sales down. Weights carry direction, not just strength — and that stays true at every scale. In a real credit-scoring model, "months of salary history" earns a positive weight while "number of recent missed payments" earns a firmly negative one. Nobody typed those signs in; the data insisted on them.</p>
+
+      <h2>Let the data choose the weights</h2>
+      <p>Nudging by hand was instructive, but no bank pays people to eyeball slopes. For a straight line there is a wonderfully old piece of mathematics — <dfn>least squares</dfn>, dating to Gauss around 1809 — which says: the line with the smallest possible total squared error can be computed <em>directly</em> from the data, with two short formulas. No trial, no error. The slope is "how temperature and cups move together, divided by how much temperature moves on its own", and the intercept is whatever makes the line pass through the average point. Here it is in pure Python — this is real training, the actual thing, no libraries:</p>
+
+      <div class="pyrun" data-title="Real training: least squares fits the line in one pass">
+<textarea class="py-src" spellcheck="false">
+DATA = [(14, 92), (16, 85), (18, 79), (22, 66),
+        (25, 57), (28, 48), (31, 39), (34, 30)]
+
+xs = [temp for temp, cups in DATA]
+ys = [cups for temp, cups in DATA]
+n = len(DATA)
+
+# --- TRAINING: the data chooses the weights -------------
+mean_x = sum(xs) / n
+mean_y = sum(ys) / n
+
+together = sum((x - mean_x) * (y - mean_y) for x, y in DATA)
+alone    = sum((x - mean_x) ** 2 for x in xs)
+
+m = together / alone         # learned weight 1: the slope
+c = mean_y - m * mean_x      # learned weight 2: the intercept
+
+print(f"TRAINING DONE. Learned weights: m={m:.3f}, c={c:.2f}")
+
+err = sum((m * x + c - y) ** 2 for x, y in DATA)
+print(f"Total squared error: {err:.2f}  - beat that by hand!")
+
+# --- INFERENCE: frozen weights meet new mornings ---------
+print()
+print("Tomorrow's forecasts through the frozen model:")
+for temp in (12, 21, 36):
+    print(f"  {temp:&gt;2} deg C  -&gt;  brew for ~{m * temp + c:.0f} cups")
+</textarea>
+      </div>
+
+      <p>Run it. Training completes in a millisecond, lands on roughly <code>m = -3.09</code> and <code>c = 134.5</code>, and scores about 1.22 — the number you were chasing by hand. Then comes the part that pays the bills: <strong>inference</strong>. Three temperatures the model has never seen go in; three brewing plans come out. Notice the phase change. During training the weights moved and the data was in charge. During inference the weights are frozen and the model simply <em>is</em> a function, as plain as any you met in <a href="ch007-functions.html">chapter 7</a>.</p>
+      <p>Now read the same training code the way a reviewer would, line by line:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">fit_line.py — least squares, annotated</div>
+        <div class="wl-line"><code>xs = [temp for temp, cups in DATA]</code>
+          <div class="wl-note">A <a href="ch008-comprehensions.html">comprehension</a> peeling one column out of the row-shaped data. In a real project this whole block is a pandas column: <code>df["temp"]</code> — same idea, <a href="ch023-pandas-numpy-notebooks.html">chapter 23</a> clothing.</div></div>
+        <div class="wl-line"><code>mean_x = sum(xs) / n</code>
+          <div class="wl-note">The average temperature. Least squares is built from averages — the fitted line is guaranteed to pass through the point (mean_x, mean_y), the "centre of gravity" of the data.</div></div>
+        <div class="wl-line"><code>together = sum((x - mean_x) * (y - mean_y) for x, y in DATA)</code>
+          <div class="wl-note">The heart of it. For each morning: is temperature above its average at the same time cups are below theirs? Opposite-side pairs make this sum strongly negative — which is precisely the evidence that the line should slope downhill. Statisticians call this quantity covariance.</div></div>
+        <div class="wl-line"><code>alone    = sum((x - mean_x) ** 2 for x in xs)</code>
+          <div class="wl-note">How spread out temperature is by itself (its variance, unscaled). This is the denominator that turns "they move together" into "cups per degree".</div></div>
+        <div class="wl-line"><code>m = together / alone</code>
+          <div class="wl-note">The learned slope: joint movement divided by solo movement. This single division is what "the data chooses the weight" literally looks like. No human opinion involved.</div></div>
+        <div class="wl-line"><code>c = mean_y - m * mean_x</code>
+          <div class="wl-note">With the slope fixed, slide the line up or down until it passes through the centre of gravity. That pins the intercept.</div></div>
+        <div class="wl-line"><code>err = sum((m * x + c - y) ** 2 for x, y in DATA)</code>
+          <div class="wl-note">The final loss on the training data — the same score you minimised by hand. Real teams also check this on data the model has NEVER seen; why that matters so much is the story of <a href="ch027-ds-vocabulary.html">chapter 27</a>.</div></div>
+        <div class="wl-line"><code>print(f"  {temp:&gt;2} deg C  -&gt;  brew for ~{m * temp + c:.0f} cups")</code>
+          <div class="wl-note">Inference is one multiply and one add. This asymmetry — training is the hard part, prediction is trivial — holds all the way up to LLMs, where it becomes "months of GPUs" versus "fractions of a second per token".</div></div>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The best line scored 1.22, not zero — and that is healthy. Real data has noise: a cricket match, a bus breakdown, a random office party all jiggle the cups. A model that hit zero error on noisy data would have memorised the jiggles instead of learning the pattern, and would predict <em>worse</em> tomorrow. That failure mode is called overfitting, and it is important enough to get its own treatment in <a href="ch027-ds-vocabulary.html">Speaking data scientist</a>.</p></div>
+
+      <h2>The life of every model, in five steps</h2>
+      <p>What you just did — logbook, choose a shape, fit, freeze, predict — is not a toy sequence. It is the lifecycle of every model in production anywhere, from the chai line to a bank's credit engine to a frontier LLM. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Collect examples">
+          <h3>1. Collect examples</h3>
+          <div class="diagram">
+            <div class="d-box hot">Data<small>past inputs + known outcomes</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Shape<small>y = mx + c</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Weights<small>m = ?, c = ?</small></div>
+          </div>
+          <p class="step-cap">Everything starts with recorded history: mornings and cups, past loans and whether they were repaid, terabytes of human text. No examples, no model — data is the raw material, not an accessory.</p>
+        </div>
+        <div class="step" data-title="Choose a shape">
+          <h3>2. Choose the function's shape</h3>
+          <div class="diagram">
+            <div class="d-box">Data</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Shape<small>line? tree? transformer?</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Weights<small>still empty</small></div>
+          </div>
+          <p class="step-cap">A human picks the family of function: a straight line, a decision tree, a neural network, a transformer. The shape fixes HOW MANY weights there are and how they combine — but not their values.</p>
+        </div>
+        <div class="step" data-title="Train">
+          <h3>3. Training: shrink the error</h3>
+          <div class="diagram">
+            <div class="d-box">Data</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Fitting loop<small>nudge weights, re-score, repeat</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Loss<small>going down</small></div>
+          </div>
+          <p class="step-cap">An algorithm adjusts the weights to drive the loss down — your hand-nudging, automated. For a line it is one formula; for an LLM it is billions of tiny nudges across months of GPU time. Same job.</p>
+        </div>
+        <div class="step" data-title="Freeze and ship">
+          <h3>4. Freeze the weights and save the artifact</h3>
+          <div class="diagram">
+            <div class="d-box">Fitting loop<small>finished</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Model file<small>m = -3.09, c = 134.5</small></div>
+          </div>
+          <p class="step-cap">Training ends; the weights are frozen and written to a file. For your line that file could be two numbers on a sticky note. For your colleagues it is a .pkl file — chapter 26 opens that jar. For an LLM it is hundreds of gigabytes of weights.</p>
+        </div>
+        <div class="step" data-title="Inference">
+          <h3>5. Inference: the model earns its keep</h3>
+          <div class="diagram">
+            <div class="d-box hot">New input<small>tomorrow: 21 deg C</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Frozen model</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Prediction<small>~70 cups</small></div>
+          </div>
+          <p class="step-cap">From here on the model is just a function being called — thousands of times a day, weights untouched. When it eventually drifts out of date, the loop restarts at step 1 with fresher data. That is what "we retrained the model" means.</p>
+        </div>
+      </div>
+
+      <h2>From credit scoring to ChatGPT: the same idea, scaled</h2>
+      <p>Now cash the promise in the chapter title. Take your two-weight line and grow it along two dimensions only — more features, more flexible shape — and you walk the entire road from the chai stall to ChatGPT without ever changing the core idea.</p>
+      <p><strong>A credit-scoring model</strong> is the chai line with more columns. Instead of one feature it reads a few dozen — income, existing EMIs, repayment history, age of the oldest account — and instead of two weights it holds a few hundred, one or more per feature, each fitted against years of past loans whose outcomes are known. Training asks: which combination of weights best separates the loans that were repaid from the ones that defaulted? Inference is your loan application flowing through the frozen weights in a few milliseconds and emerging as a score. When a regulator asks a bank to "explain the model", the honest core of the answer is: here are the features, here are the fitted weights, here is the data we fitted them on.</p>
+      <p><strong>A large language model</strong> is a much wilder shape — a transformer, whose inner workings get their own chapter in <a href="ch029-transformers-plainly.html">Transformers, in plain terms</a> — but wearing exactly the same job description. It is a function. Its input features are the words (strictly, the <a href="ch030-tokens-embeddings-context.html">tokens</a>) of the text so far; its output is a prediction of the next token. Its weights — hundreds of billions of them — were fitted to trillions of words of human text, by the automated version of the nudging you did by hand: predict the next token, measure the miss, nudge every weight a hair in the direction that shrinks the miss, repeat until the electricity bill rivals a small town's. And every chat message you have ever sent to it was inference: frozen weights, new input, predicted output, no learning happening at all.</p>
+
+      <div class="viz-tiles">
+        <div class="tile"><div class="tile-label">Chai line</div>
+          <div class="tile-value">2</div><div class="tile-delta">weights · 1 feature · fits in your head</div></div>
+        <div class="tile"><div class="tile-label">Credit-scoring model</div>
+          <div class="tile-value">~500</div><div class="tile-delta">weights · dozens of features · fits in a .pkl file</div></div>
+        <div class="tile"><div class="tile-label">Frontier LLM</div>
+          <div class="tile-value">~1,000,000,000,000</div><div class="tile-delta">weights · features are tokens · fits in a data centre</div></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Those counts are round, illustrative numbers — real credit models range from tens to thousands of weights, and frontier-LLM sizes are mostly unpublished (GPT-3, one of the last openly documented ones, had 175 billion). The point is the staircase, not the exact stairs: every step up is the same recipe — a function, fitted to data — with more weights and a richer shape. What scale changes about <em>behaviour</em>, and why an LLM still is not the right tool for a credit decision, is exactly where <a href="ch031-llms-vs-deterministic.html">LLMs vs deterministic models</a> picks up.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will now recognise this chapter everywhere. In a data scientist's merge request: <code>model.fit(X_train, y_train)</code> is step 3 of the lifecycle and <code>model.predict(X_new)</code> is step 5 — the next chapter, <a href="ch025-classical-ml.html">The classical toolkit</a>, is about exactly those two calls. In the repo: a file called <code>model.pkl</code> or <code>model_v3.pkl</code> is the frozen-weights artifact from step 4 (<a href="ch026-pkl-files.html">chapter 26</a> explains the jar). In architecture diagrams: a "training pipeline" that runs weekly and an "inference service" that runs always — now you know why they are separate systems with wildly different hardware bills. And in meetings: "the model was retrained on Q2 data", "feature engineering", "the weights haven't changed since March" — all plain sentences to you now.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Which sentence best captures what a model actually is?</p>
+          <div class="q-opts">
+            <button data-opt="a">A program that thinks for itself once deployed</button>
+            <button data-opt="b">A database of past examples that gets searched at prediction time</button>
+            <button data-opt="c">A function whose internal numbers were chosen by fitting it to past data</button>
+          </div>
+          <p class="q-explain">A model does not store or search the examples — it distilled them into weights during training. What ships is a function plus fitted numbers: for the chai line, literally <code>m</code> and <code>c</code>.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. In <code>cups = m &times; temperature + c</code>, what are <code>temperature</code> and <code>m</code>, respectively?</p>
+          <div class="q-opts">
+            <button data-opt="a">A weight and a feature</button>
+            <button data-opt="b">A feature and a weight</button>
+            <button data-opt="c">Both are features</button>
+          </div>
+          <p class="q-explain">Temperature is the input the model reads — a feature. <code>m</code> is an adjustable number inside the function — a weight — and training exists purely to choose values like <code>m</code> and <code>c</code> well.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Every API call your agents make to a hosted LLM is which phase of the model lifecycle?</p>
+          <div class="q-opts">
+            <button data-opt="a">Inference — frozen weights, new input, predicted output</button>
+            <button data-opt="b">Training — the model learns a little from every request</button>
+            <button data-opt="c">Fitting — the provider re-runs least squares per request</button>
+          </div>
+          <p class="q-explain">The weights were fitted months earlier and do not change when you call the API. Your prompt flows through frozen weights and a prediction flows back — inference, nothing else.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. What was the training algorithm actually doing while you nudged <code>m</code> and <code>c</code> by hand?</p>
+          <div class="q-opts">
+            <button data-opt="a">Memorising the logbook rows so it could look them up later</button>
+            <button data-opt="b">Checking the weights against a rulebook written by a statistician</button>
+            <button data-opt="c">Adjusting the weights to make the total error on known examples as small as possible</button>
+          </div>
+          <p class="q-explain">Training is error-shrinking, nothing more mystical: score the misses, nudge the weights in the direction that reduces them, repeat. Least squares just computes where that process would end up, in one step.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. In what sense is ChatGPT "the same idea" as the chai-stall line?</p>
+          <div class="q-opts">
+            <button data-opt="a">It is not — LLMs are a fundamentally different kind of object from fitted functions</button>
+            <button data-opt="b">Both are functions fitted to data; the differences are the shape of the function and the number of weights</button>
+            <button data-opt="c">Both predict beverage sales, just at different scales</button>
+          </div>
+          <p class="q-explain">An LLM is a function (text so far in, next-token prediction out) whose hundreds of billions of weights were fitted to trillions of words. Shape and scale are astronomically different; the recipe — function fitted to data, training then inference — is identical.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A model is a function fitted to data: adjustable numbers inside, values chosen by matching past examples — not rules typed in by a programmer.</li>
+          <li>Features are the inputs the model reads; weights (parameters) are the fitted numbers saying how much each feature matters — including in which direction, which is why weights can be negative.</li>
+          <li>Training (fitting) adjusts weights to shrink error on known examples and happens rarely at great cost; inference applies the frozen weights to new inputs and is what runs in production — every LLM API call included.</li>
+          <li>You fitted the tiniest possible model yourself: two weights, one feature, and a squared-error score — first by hand-nudging (gradient descent's instinct) and then exactly, with least squares in pure Python.</li>
+          <li>Zero training error on noisy data is a warning sign, not a triumph — the model has memorised noise instead of pattern (overfitting, coming in chapter 27).</li>
+          <li>Credit scoring and ChatGPT sit on the same staircase: the same fit-then-freeze-then-predict recipe, scaled from two weights to roughly a trillion.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

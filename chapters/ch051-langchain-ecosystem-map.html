@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The LangChain ecosystem map — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch051">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VI · LangChain</div>
+        <h1>The LangChain ecosystem map</h1>
+        <p class="ch-tagline">Five package names look like chaos until you see the org chart. After this chapter, every import line in a LangChain file will tell you exactly where you are standing on the map.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 52 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your cousin gets a job at a giant industrial group — one famous brand name painted on the front gate. On day one she expects one building. Instead the campus has five. There is the <em>standards bureau</em>, a small quiet office that decides the shape of every plug, socket, and form used on campus — it makes nothing, but everything is built to its specifications. There are the <em>vendor pavilions</em>, one per electricity supplier, each selling an adapter that converts that supplier's odd connector into the standard plug. There is the big <em>assembly plant</em> where ready-to-use machines get put together from standard parts. Behind it stands the <em>control tower</em>, which choreographs the complicated assembly lines — the ones with branches, loops, and human sign-off stations. And on the hill sits the <em>camera room</em>, recording every station so that when a machine misbehaves, someone can replay exactly what happened.</p>
+        <p>One brand. Five buildings, each with its own stamp on every crate it ships. LangChain is that campus, and the stamps are import lines. This chapter is your visitor map.</p>
+      </section>
+
+      <h2>One brand, five packages</h2>
+      <p>Quick recap of where you stand. In <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> you built an agent loop by hand — model, tools, history, a for-loop, done. In <a href="ch050-reading-real-code-5.html">the last chapter</a> you read a real annotated agent and recognised every part. So you already know what an agent framework must <em>do</em>. What trips people up with LangChain is not the ideas — it is that "LangChain" is one name for a whole family of separately installed packages, and tutorials mix them freely without telling you which is which.</p>
+      <p>Here is the untangling. <dfn>LangChain</dfn> is three things at once: a company, an ecosystem of Python packages that company publishes, and one specific package (<code>langchain</code>) inside that ecosystem. When someone says "we use LangChain", they usually mean the ecosystem. When you read <code>from langchain.agents import create_agent</code>, that is the specific package. The five members of the family you will meet constantly:</p>
+      <ul>
+        <li><code>langchain-core</code> — the standards bureau. Interfaces and message types everything else agrees on.</li>
+        <li><code>langchain-openai</code>, <code>langchain-anthropic</code>, and friends — the vendor pavilions. One adapter package per model provider.</li>
+        <li><code>langchain</code> — the assembly plant. The high-level framework: <code>create_agent</code>, middleware, <code>init_chat_model</code>.</li>
+        <li><code>langgraph</code> — the control tower. Orchestration for flows the standard loop cannot express.</li>
+        <li><code>langsmith</code> — the camera room. Observability: tracing, evaluation, monitoring.</li>
+      </ul>
+      <p>Remember from <a href="ch011-imports-and-modules.html">the imports chapter</a> that a Python import names the package it comes from, right there on the line. That single fact is about to become your compass: on this campus, <em>every crate carries its building's stamp</em>. You never have to guess which layer you are reading.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Package names on PyPI use hyphens (<code>pip install langchain-anthropic</code>) but Python identifiers cannot contain hyphens, so the import uses an underscore (<code>from langchain_anthropic import ...</code>). Same package, two spellings. This bites everyone exactly once.</p></div>
+
+      <h2>Walk the campus, one building at a time</h2>
+      <p>Step through the map. Watch which building lights up, and what it would be doing during one real agent run.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="langchain-core">
+          <h3>1. langchain-core — the standards bureau</h3>
+          <div class="diagram">
+            <div class="d-box hot">langchain-core<small>messages · tool interface · model interface</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">everything else<small>builds to these specs</small></div>
+          </div>
+          <p class="step-cap">A deliberately small package with almost no dependencies. It defines the shapes: what a message object looks like (<code>HumanMessage</code>, <code>AIMessage</code>, <code>ToolMessage</code> — next chapter's whole topic), what a tool is, what any chat model must accept and return. It contains no agents and calls no APIs. It exists so that every other package can agree on the plugs and sockets.</p>
+        </div>
+        <div class="step" data-title="integrations">
+          <h3>2. Provider integrations — the vendor pavilions</h3>
+          <div class="diagram">
+            <div class="d-box hot">langchain-openai<small>ChatOpenAI</small></div>
+            <div class="d-box hot">langchain-anthropic<small>ChatAnthropic</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">langchain-core<small>the standard plug</small></div>
+          </div>
+          <p class="step-cap">Each provider gets its own small package that wraps that provider's raw API (the one you called directly in <a href="ch033-first-api-call.html">chapter 33</a>) in the standard interface from core. They are versioned and released separately — when a provider ships a new model or changes a parameter, only its adapter needs an update, not the whole ecosystem.</p>
+        </div>
+        <div class="step" data-title="langchain">
+          <h3>3. langchain — the assembly plant</h3>
+          <div class="diagram">
+            <div class="d-box hot">langchain<small>create_agent · middleware · init_chat_model</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">langchain-core</div>
+            <div class="d-box">adapters</div>
+          </div>
+          <p class="step-cap">The main framework package. Its star export, <code>create_agent</code>, is your fifty-line ReAct loop industrialised: native tool calling, retries, streaming, and hook points called middleware where you can intercept each turn. You hand it a model and some tools; it hands you a running agent. Chapters <a href="ch054-create-agent.html">54</a> and <a href="ch055-middleware.html">55</a> take it apart.</p>
+        </div>
+        <div class="step" data-title="langgraph">
+          <h3>4. langgraph — the control tower</h3>
+          <div class="diagram">
+            <div class="d-box dim">langchain</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">langgraph<small>StateGraph · checkpointers · interrupts</small></div>
+          </div>
+          <p class="step-cap">The orchestration engine, for when one loop is not enough: multi-step workflows with branches, parallel paths, pause-for-a-human, and saved state you can resume next week. Here is the quiet twist: <code>create_agent</code> itself runs on the LangGraph runtime under the hood. The plant's machines are driven by the tower even when you never look at it. Act VII lives here, starting at <a href="ch057-why-graphs.html">chapter 57</a>.</p>
+        </div>
+        <div class="step" data-title="langsmith">
+          <h3>5. langsmith — the camera room</h3>
+          <div class="diagram">
+            <div class="d-box">your agent<small>running</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">langsmith<small>traces · evals · monitoring</small></div>
+          </div>
+          <p class="step-cap">Observability. It records every model call, tool call, and intermediate step of a run so you can replay it when something goes wrong. Unusually, you often never import it: set the environment variables <code>LANGSMITH_TRACING</code> and <code>LANGSMITH_API_KEY</code> and the other packages start reporting to it automatically. It watches; it does not steer.</p>
+        </div>
+        <div class="step" data-title="one run">
+          <h3>6. One agent run touches every building</h3>
+          <div class="diagram">
+            <div class="d-box hot">your code<small>create_agent(...)</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">langgraph<small>runs the loop</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">adapter<small>calls the provider</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">langsmith<small>records it all</small></div>
+          </div>
+          <p class="step-cap">You call <code>create_agent</code> from <code>langchain</code>; the loop executes on the <code>langgraph</code> runtime; messages and tool schemas are <code>langchain-core</code> objects; the actual API call goes through a provider adapter; and if tracing is on, <code>langsmith</code> films the whole thing. Five buildings, one product rolling off the line.</p>
+        </div>
+      </div>
+
+      <h2>The map on one page</h2>
+      <p>Because every crate is stamped, identifying the layer is a mechanical skill. Read the first dotted name after <code>from</code> (or after <code>import</code>) and look it up:</p>
+
+      <div class="tbl"><table>
+        <tr><th>The import starts with</th><th>Layer</th><th>What it tells you</th></tr>
+        <tr><td><code>langchain_core.</code></td><td>Core</td><td>A shared interface or data shape — messages, tools, prompts. No behaviour of its own worth fearing.</td></tr>
+        <tr><td><code>langchain_openai</code>, <code>langchain_anthropic</code>, ...</td><td>Integration</td><td>One provider's adapter. Model names and provider-specific quirks live here.</td></tr>
+        <tr><td><code>langchain_community.</code></td><td>Integration (long tail)</td><td>The community grab-bag of adapters — hundreds of them, unevenly maintained. Check freshness before trusting.</td></tr>
+        <tr><td><code>langchain.</code></td><td>Framework</td><td>High-level machinery: <code>create_agent</code>, middleware, <code>init_chat_model</code>. The batteries-included layer.</td></tr>
+        <tr><td><code>langgraph.</code></td><td>Orchestration</td><td>Custom flow control: state graphs, checkpointing, human-in-the-loop. You are below the framework now.</td></tr>
+        <tr><td><code>langsmith</code></td><td>Observability</td><td>Tracing and evaluation — and often there is no import at all, just environment variables.</td></tr>
+      </table></div>
+
+      <p>Six stamps to memorise. Flip the cards until each one comes back without thinking:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">langchain-core</span><span class="flip-back">The standards bureau. Message types, tool and model interfaces. Tiny, stable, everything depends on it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">partner package</span><span class="flip-back">A per-provider adapter like langchain-openai or langchain-anthropic. Wraps one vendor's raw API in the standard interface, versioned on its own.</span></button>
+        <button class="flip" type="button"><span class="flip-front">langchain</span><span class="flip-back">The main framework package. create_agent, middleware, init_chat_model — your hand-built loop with the rough edges machined off.</span></button>
+        <button class="flip" type="button"><span class="flip-front">langgraph</span><span class="flip-back">The orchestration engine underneath. State graphs, checkpointing, pause-and-resume. create_agent secretly runs on it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">langsmith</span><span class="flip-back">Observability. Records traces of every run for debugging and evals. Usually switched on by environment variables, not imports.</span></button>
+        <button class="flip" type="button"><span class="flip-front">langchain-community</span><span class="flip-back">The long tail of community-maintained integrations. Useful, huge, unevenly maintained — check the docs date before copying from it.</span></button>
+      </div>
+
+      <h2>Reading the stamps on a real file</h2>
+      <p>Here is the top of a typical modern agent file. Read it the way a customs officer reads shipping labels — click each line and confirm you can name the building it came from.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">agent.py — the imports block</div>
+        <div class="wl-line"><code>from langchain.agents import create_agent</code>
+          <div class="wl-note">Stamp: <strong>framework</strong>. The assembly plant's flagship product — the prebuilt agent loop. Seeing this line also carbon-dates the file as current-era (more on that below).</div></div>
+        <div class="wl-line"><code>from langchain.chat_models import init_chat_model</code>
+          <div class="wl-note">Stamp: <strong>framework</strong>. A convenience factory — give it a model name like <code>"claude-sonnet-4-5"</code> and it finds and configures the right provider adapter for you, so your code is not welded to one vendor.</div></div>
+        <div class="wl-line"><code>from langchain_core.messages import HumanMessage</code>
+          <div class="wl-note">Stamp: <strong>core</strong>. A data shape from the standards bureau. The whole message vocabulary — <code>HumanMessage</code>, <code>AIMessage</code>, <code>ToolMessage</code> — is <a href="ch052-messages-and-models.html">the next chapter</a>.</div></div>
+        <div class="wl-line"><code>from langchain_core.tools import tool</code>
+          <div class="wl-note">Stamp: <strong>core</strong>. The <code>@tool</code> decorator that turns a plain function into a schema the model can call. Note it lives in core, not in <code>langchain</code> — it is an interface, so it belongs to the bureau.</div></div>
+        <div class="wl-line"><code>from langchain_anthropic import ChatAnthropic</code>
+          <div class="wl-note">Stamp: <strong>integration</strong>. One vendor pavilion. If a merge request bumps only this package's version "for the new model", now you know why nothing else had to change.</div></div>
+        <div class="wl-line"><code>from langgraph.checkpoint.memory import InMemorySaver</code>
+          <div class="wl-note">Stamp: <strong>orchestration</strong>. A checkpointer from the control tower — the thing that lets an agent's state survive between runs. Full story in <a href="ch061-checkpointing.html">chapter 61</a>. Its presence tells you this agent remembers.</div></div>
+      </div>
+
+      <p>Now do it yourself, on anything. The runner below is a working customs officer: it stamps every import line with its layer and flags the museum pieces. Paste imports from any tutorial you have bookmarked and see what it says.</p>
+
+      <div class="pyrun" data-title="The import customs officer — stamp any tutorial's imports">
+<textarea class="py-src" spellcheck="false">
+# Paste ANY import lines from a LangChain tutorial between the
+# triple quotes, press Run, and each line gets stamped with the
+# layer it ships from -- plus a freshness check for museum-era code.
+
+IMPORTS = """
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool
+from langchain_anthropic import ChatAnthropic
+from langgraph.graph import StateGraph, START, END
+from langchain.agents import initialize_agent
+from langchain.memory import ConversationBufferMemory
+"""
+
+LAYER = {
+    "langchain_core":      "CORE           standards bureau",
+    "langchain_openai":    "INTEGRATION    OpenAI adapter",
+    "langchain_anthropic": "INTEGRATION    Anthropic adapter",
+    "langchain_community": "INTEGRATION    community grab-bag",
+    "langchain":           "FRAMEWORK      the assembly plant",
+    "langgraph":           "ORCHESTRATION  the control tower",
+    "langsmith":           "OBSERVABILITY  the camera room",
+}
+
+STALE = {
+    "initialize_agent":         "pre-1.0 agent builder, replaced by create_agent",
+    "AgentExecutor":            "pre-1.0 loop runner, replaced by create_agent",
+    "LLMChain":                 "pre-1.0 chain class, retired",
+    "ConversationBufferMemory": "pre-1.0 memory class, checkpointers do this now",
+}
+
+stale_hits = 0
+for line in IMPORTS.strip().splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split()
+    module = parts[1] if parts[0] in ("from", "import") else "?"
+    root = module.split(".")[0]
+    stamp = LAYER.get(root, "UNKNOWN        not a LangChain-family package")
+    print(stamp)
+    print("   " + line)
+    for marker, why in STALE.items():
+        if marker in line:
+            stale_hits += 1
+            print("   ^ STALE: " + why)
+    print()
+
+if stale_hits:
+    print(f"VERDICT: {stale_hits} museum-era import(s) found.")
+    print("This tutorial predates LangChain 1.0 -- do not copy it blindly.")
+else:
+    print("VERDICT: all stamps are current-era. Safe to follow.")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Try feeding it the imports from the last LangChain blog post you read, or add a fake line like <code>from django.db import models</code> and watch it shrug with UNKNOWN. The classifier is doing exactly what you should do in your head: first dotted name, look up the stamp, done.</p></div>
+
+      <h2>Carbon-dating a tutorial</h2>
+      <p>Here is the part that saves you real pain. LangChain has existed since late 2022 and has been rewritten more than once, so the internet is full of confident, well-written, <em>completely outdated</em> tutorials. The big line in the sand is <strong>LangChain 1.0</strong> (late 2025): agents were rebuilt around <code>create_agent</code> on the LangGraph runtime, and the older machinery was moved aside into a separate legacy package (<code>langchain-classic</code>) so the main package could stay clean. Anything written before that line teaches you a museum.</p>
+      <p>Three eras, three sets of fingerprints:</p>
+      <ul>
+        <li><strong>The legacy era (2023–2024):</strong> <code>initialize_agent</code>, <code>AgentExecutor</code>, <code>LLMChain</code>, <code>ConversationBufferMemory</code>, and imports like <code>from langchain.llms import OpenAI</code> — providers bundled inside the main package instead of partner packages. If you see any of these, close the tab.</li>
+        <li><strong>The LCEL era (2023–2025):</strong> <dfn>LCEL</dfn> — the LangChain Expression Language — is the pipe syntax, <code>prompt | model | parser</code>, for composing steps into a pipeline. It still exists and is fine for simple transformations, but a tutorial that builds <em>agents</em> out of long LCEL chains is from before agents got their own machinery.</li>
+        <li><strong>The 1.x era (current):</strong> <code>create_agent</code>, <code>init_chat_model</code>, middleware, partner packages installed separately, LangGraph named openly as the engine underneath. This is the era this course teaches.</li>
+      </ul>
+
+      <div class="code-title">carbon dating at a glance — museum out, current in</div>
+      <pre><code class="language-diff">- from langchain.agents import initialize_agent, AgentExecutor
+- from langchain.llms import OpenAI
+- from langchain.memory import ConversationBufferMemory
++ from langchain.agents import create_agent
++ from langchain.chat_models import init_chat_model
++ from langgraph.checkpoint.memory import InMemorySaver
+</code></pre>
+
+      <p>The install line is a second fingerprint. Old posts say <code>pip install langchain openai</code> and nothing else. A current setup names the family members it actually uses:</p>
+
+      <div class="code-title">a current-era install line</div>
+      <pre><code class="language-bash">pip install -U langchain langchain-anthropic langgraph
+</code></pre>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Stale docs are not just a beginner hazard — coding assistants trained on years of old tutorials will happily generate <code>AgentExecutor</code> code too. When an AI pair-programmer hands you LangChain code, run the same carbon-dating check on its imports that you would run on a blog post. You now spot the fingerprints faster than it can type them.</p></div>
+
+      <p>Why should you trust the design instead of resenting the churn? Because the split is the same one you would make. Recall <a href="ch012-why-so-many-files.html">why big projects split into many files</a>: things that change at different speeds get separated. Provider APIs change monthly — so adapters are separate packages. Interfaces must almost never change — so core is tiny and frozen. Orchestration is deep infrastructure — so it is its own engine. The ecosystem map is that principle, drawn at package scale.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open the <code>pyproject.toml</code> or <code>requirements.txt</code> of any agent repository (<a href="ch020-environments-and-packaging.html">chapter 20</a> taught you to read these) and the map appears: <code>langchain</code>, <code>langchain-anthropic</code>, <code>langgraph</code>, sometimes <code>langsmith</code>, each pinned to its own version. In merge requests you will see titles like "bump langchain-openai for the new model names" touching one line — the vendor pavilion updated, nothing else disturbed. And in incident channels, "check the LangSmith trace" means: go to the camera room and replay the run. When a teammate asks "is this doc current?", you can now answer from the imports alone, in about four seconds.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. You read <code>from langchain_core.messages import AIMessage</code>. Which building shipped that crate?</p>
+          <div class="q-opts">
+            <button data-opt="a">The assembly plant — the main framework package</button>
+            <button data-opt="b">A vendor pavilion — a provider adapter</button>
+            <button data-opt="c">The standards bureau — shared interfaces and data shapes</button>
+          </div>
+          <p class="q-explain">The first dotted name is <code>langchain_core</code>, so it is the core layer: a data shape everyone agrees on, with no behaviour to fear. Read the stamp, know the building.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Why do <code>ChatOpenAI</code> and <code>ChatAnthropic</code> live in separate installable packages instead of inside <code>langchain</code> itself?</p>
+          <div class="q-opts">
+            <button data-opt="a">Licensing — each provider legally requires its own package</button>
+            <button data-opt="b">Release independence — a provider's API change only forces an update to its own adapter</button>
+            <button data-opt="c">Performance — separate packages import faster</button>
+          </div>
+          <p class="q-explain">Provider APIs change constantly; interfaces should not. Splitting adapters into partner packages means a new model name ships as a one-package version bump, without touching core, the framework, or anyone else's code.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. A tutorial you found builds its agent with <code>initialize_agent</code> and <code>AgentExecutor</code>. What is the correct conclusion?</p>
+          <div class="q-opts">
+            <button data-opt="a">It predates LangChain 1.0 — close it and find a <code>create_agent</code>-era source</button>
+            <button data-opt="b">It is the advanced API for power users</button>
+            <button data-opt="c">It is fine — those names are aliases for the current API</button>
+          </div>
+          <p class="q-explain">Those are legacy-era fingerprints. The 1.0 rebuild replaced them with <code>create_agent</code> and moved the old machinery into a separate legacy package. A tutorial teaching them is teaching a museum exhibit.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. What is the real relationship between <code>create_agent</code> (in <code>langchain</code>) and LangGraph?</p>
+          <div class="q-opts">
+            <button data-opt="a">They are competitors — you pick one or the other</button>
+            <button data-opt="b">LangGraph is a plugin you can optionally bolt onto <code>create_agent</code></button>
+            <button data-opt="c"><code>create_agent</code> is a prebuilt agent that runs on the LangGraph runtime underneath</button>
+          </div>
+          <p class="q-explain">The assembly plant's machines are driven by the control tower: <code>create_agent</code> gives you the standard loop ready-made, and when you need custom flow — branches, pauses, multi-agent choreography — you drop down to LangGraph directly.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Your agent behaved strangely in production yesterday and you want to replay exactly what it did, step by step. Which layer do you reach for?</p>
+          <div class="q-opts">
+            <button data-opt="a">langchain-core — it defines what a run is</button>
+            <button data-opt="b">langsmith — the observability layer that recorded the trace</button>
+            <button data-opt="c">langchain-community — someone has probably built a replayer</button>
+          </div>
+          <p class="q-explain">LangSmith is the camera room: with tracing switched on (largely via environment variables), it records every model call, tool call, and intermediate step, so yesterday's run can be replayed and inspected today.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>"LangChain" names a company, an ecosystem, and one package — the ecosystem is five layers: core (interfaces), integrations (per-provider adapters), langchain (the framework, <code>create_agent</code> and middleware), langgraph (orchestration), and langsmith (observability).</li>
+          <li>Every import line carries its layer's stamp: read the first dotted name — <code>langchain_core</code>, <code>langchain_anthropic</code>, <code>langchain</code>, <code>langgraph</code>, <code>langsmith</code> — and you know exactly which part of the machine you are looking at.</li>
+          <li>Provider adapters are separate packages on purpose: fast-changing vendor APIs get isolated so an update to one never disturbs the rest.</li>
+          <li><code>create_agent</code> is not an alternative to LangGraph — it runs on the LangGraph runtime, and you drop to LangGraph directly only when the standard loop cannot express your flow.</li>
+          <li>Carbon-date every tutorial before trusting it: <code>initialize_agent</code>, <code>AgentExecutor</code>, <code>LLMChain</code>, and bundled provider imports are pre-1.0 museum pieces; <code>create_agent</code>, <code>init_chat_model</code>, and partner packages mark the current era.</li>
+          <li>LangSmith watches rather than steers — it is usually enabled by environment variables, and "check the trace" is where production debugging starts.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

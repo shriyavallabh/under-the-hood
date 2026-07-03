@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>When pipelines fail — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch102">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>When pipelines fail</h1>
+        <p class="ch-tagline">A red pipeline is not an accusation — it is a message with a return address. This chapter teaches you to open the log, read it from the bottom, name the failure in one of six ways, and know instantly whether to retry, fix, or ask.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 103 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>The departure board flips to CANCELLED in red, and half the gate erupts. People photograph the board. Someone demands a supervisor. But the woman next to you — clearly a veteran of a thousand flights — just picks up her bag and walks to the desk with one question: <em>"Why?"</em> Because the reason decides everything. Fog over the runway? Wait an hour and the same plane flies — no action needed, just retry. Crew shortage? The airline rebooks you — someone else's fix. Your visa expired last Tuesday? No amount of waiting at the gate will ever board you — that one is yours to fix, and retrying is pure theatre.</p>
+        <p>A failed pipeline is that cancelled flight. The red icon is just the board — loud, alarming, and almost information-free. The <em>reason</em> lives one click deeper, in the job log, and it nearly always falls into one of six familiar categories. Veterans do not panic at red. They ask why, classify, and act. By the end of this chapter, you are the woman with the bag.</p>
+      </section>
+
+      <h2>Red is information, not a verdict</h2>
+      <p>In the previous chapter you decoded <code>.gitlab-ci.yml</code>: a pipeline is stages, stages are jobs, and a job is nothing more mysterious than a fresh container running the shell commands listed under its <code>script:</code>. That plumbing tells you exactly what "failed" means. A job fails when one of its commands finishes with a non-zero <dfn>exit code</dfn> — the little number every program hands back to the shell when it ends, where zero means "all good" and anything else means "something went wrong". GitLab runs your commands, watches the exit codes, and paints the job red the moment one is not zero.</p>
+      <p>That is the whole trick. Nobody's judgement is involved, no AI decided your code is bad, and the red X on your <a href="ch099-merge-requests.html">merge request</a> is not a comment on you as a professional. A command returned 1 instead of 0. Your job now is exactly the airport question: <em>why?</em> — and the answer is always written down, waiting, in the <dfn>job log</dfn>: the captured, timestamped output of everything the job printed while it ran.</p>
+      <p>Getting to it takes two clicks, in the GitLab screens you toured in <a href="ch098-gitlab-tour.html">the GitLab tour</a>: from the merge request, click the failed pipeline in the pipeline widget, then click the job with the red X. You land on a dark page full of scrolling text. Most newcomers freeze here, because the log for even a small job can run to hundreds or thousands of lines. The next section is the skill that unfreezes you.</p>
+
+      <h2>Read the log bottom-up</h2>
+      <p>You already own this skill. Back in <a href="ch009-errors-and-tracebacks.html">the errors and tracebacks chapter</a> you learned that a Python traceback reads bottom-up: the last line names the actual error, the line above it points at the exact code that raised it, and everything higher is just the trail of calls that led there. Reading top-down drowns you in framework noise; reading bottom-up hands you the culprit in seconds. Job logs obey the same law, for the same reason — output is written in time order, so the failure is always the <em>last</em> interesting thing that happened.</p>
+      <p>The top of every job log is runner housekeeping: which machine picked up the job, which Docker image it pulled, the git checkout, the cache restore. It looks intimidating and matters almost never. The bottom is where the verdict lives — so scroll straight to the end, find the failure line, and walk <em>upward</em> until you hit the first line that actually explains something. GitLab even helps: the log is folded into collapsible sections (preparing executor, getting source, your script, and so on), and your commands appear prefixed with <code>$</code>, so you can see exactly which command was running when things died.</p>
+      <p>Here is a real-shaped failed log. Click the annotated lines — and notice the notes teach you to read it in reverse order:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">Job log: test — read me from the bottom</div>
+        <div class="wl-line"><code>Running with gitlab-runner 17.5.0 (runner-a1b2c3)</code>
+          <div class="wl-note">Runner housekeeping. Which machine took the job. On a first read: skip.</div></div>
+        <div class="wl-line"><code>Using Docker image python:3.11-slim ...</code>
+          <div class="wl-note">The container this job ran in. You only care when reproducing locally (later in this chapter) or when the failure happens up here, before your commands even start — that smells like infra, not you.</div></div>
+        <div class="wl-line"><code>Checking out 4f9c2d1e as detached HEAD (ref is feature/faster-retries)...</code>
+          <div class="wl-note">The exact commit being tested. Worth one glance: is this actually your latest push? A stale pipeline on an old commit has fooled many people.</div></div>
+        <div class="wl-line"><code>$ pip install -r requirements.txt</code></div>
+        <div class="wl-line"><code>Successfully installed langchain-1.0.3 pytest-8.2.0 ...</code>
+          <div class="wl-note">Install succeeded — so on your upward walk you can rule out a dependency failure. Every command that finished cleanly is a suspect eliminated.</div></div>
+        <div class="wl-line"><code>$ ruff check src/ tests/</code></div>
+        <div class="wl-line"><code>All checks passed!</code>
+          <div class="wl-note">Lint passed too. Not a formatting problem. Two suspects down.</div></div>
+        <div class="wl-line"><code>$ pytest -q tests/</code>
+          <div class="wl-note">The command that was running when the job died — it matches a line under <code>script:</code> in <code>.gitlab-ci.yml</code>. This is what you will re-run locally.</div></div>
+        <div class="wl-line"><code>........................................F</code></div>
+        <div class="wl-line"><code>FAILED tests/test_retry.py::test_gives_up_after_three - AssertionError: assert 5 == 3</code>
+          <div class="wl-note">THE CULPRIT — the first genuinely explanatory line on your walk up from the bottom. It names the file, the exact test, and the broken expectation: the code retried five times, the test expected three. Ninety percent of triage is finding this one line.</div></div>
+        <div class="wl-line"><code>1 failed, 41 passed in 14.20s</code>
+          <div class="wl-note">The summary. One test failed, forty-one are fine — this is a scalpel problem, not a bulldozer problem.</div></div>
+        <div class="wl-line"><code>ERROR: Job failed: exit code 1</code>
+          <div class="wl-note">START HERE, at the very bottom. This line is the verdict, and it appears on virtually every failed job — which means it tells you almost nothing. It only says "a command exited non-zero". The truth is always in the lines above it.</div></div>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>On long logs, do not scroll by hand. Use your browser's find-in-page for <code>FAILED</code>, <code>Error</code>, or <code>Traceback</code>, or click GitLab's "scroll to bottom" button on the job page. The goal is always the same: reach the last interesting line fast, then walk up.</p></div>
+
+      <h2>The six usual suspects</h2>
+      <p>Here is the secret that turns pipeline panic into routine: almost every failure you will ever see is one of six types. Data scientists and platform engineers triage red pipelines quickly not because they read faster, but because they pattern-match the bottom of the log against this list. Test yourself first — each card shows a tell-tale bottom line; guess the diagnosis, then flip:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">would reformat src/agent.py — 1 file would be reformatted</span><span class="flip-back">Lint / format failure. The style robot disagrees with your whitespace. Run the formatter locally, commit, push.</span></button>
+        <button class="flip" type="button"><span class="flip-front">FAILED tests/test_parser.py::test_empty_input - AssertionError</span><span class="flip-back">Test failure. Your change broke an expectation. Reproduce locally with pytest, then fix the code — or the test, if the expectation itself changed.</span></button>
+        <button class="flip" type="button"><span class="flip-front">ModuleNotFoundError: No module named 'pandas'</span><span class="flip-back">Dependency / install failure. The environment is missing something your code imports. Fix requirements.txt or the lockfile.</span></button>
+        <button class="flip" type="button"><span class="flip-front">SyntaxError: invalid syntax (agent.py, line 42)</span><span class="flip-back">Build failure. The code does not even parse or import — nothing else got a chance to run. The error names the file and line.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Connection timed out after 30000 milliseconds</span><span class="flip-back">Flaky / infra failure. The network, a runner, or an external service hiccuped. Usually nothing to do with your commit. Retry once.</span></button>
+        <button class="flip" type="button"><span class="flip-front">403 Forbidden: authentication required</span><span class="flip-back">Permissions / secrets failure. A token is missing, expired, or not available on your branch. Usually a maintainer fixes a CI/CD variable.</span></button>
+      </div>
+
+      <p>Now the full field guide — symptom, cause, and exactly what to do:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Failure type</th><th>Tell-tale bottom lines</th><th>Usual cause</th><th>Your move</th></tr>
+        <tr><td>Lint / format</td><td><code>would reformat</code>, <code>line too long</code>, a wall of style codes like <code>E501</code></td><td>Code works fine but violates the team's style rules</td><td>Run the linter/formatter locally, commit the diff it produces</td></tr>
+        <tr><td>Test failure</td><td><code>FAILED tests/...</code>, <code>AssertionError</code>, <code>N failed, M passed</code></td><td>Your change broke a behaviour a test pins down — or the test now pins the wrong thing</td><td>Reproduce with pytest locally; fix the code, or update the test with reviewer agreement</td></tr>
+        <tr><td>Dependency / install</td><td><code>ModuleNotFoundError</code>, <code>No matching distribution found</code>, pip resolver errors</td><td>requirements out of sync with imports, a bad version pin, or a Python-version mismatch</td><td>Fix requirements/lockfile; make CI's Python match yours</td></tr>
+        <tr><td>Build</td><td><code>SyntaxError</code>, <code>ImportError</code> during collection, <code>failed to build</code> on an image</td><td>The code cannot parse/import, or the Docker image cannot assemble</td><td>Run the same build step locally; the error names file and line — fix and push</td></tr>
+        <tr><td>Flaky / infra</td><td>Timeouts, <code>503 Service Unavailable</code>, <code>runner system failure</code>, <code>No space left on device</code></td><td>Network blips, an overloaded runner, an external registry having a bad day</td><td>Retry once. If it recurs, report the pattern — do not keep mashing retry</td></tr>
+        <tr><td>Permissions / secrets</td><td><code>401 Unauthorized</code>, <code>403 Forbidden</code>, <code>could not read Username</code>, "variable is not set"</td><td>Missing or expired token; a CI/CD variable that is protected and your branch is not</td><td>Check the job's variables against project settings; usually a maintainer's one-minute fix</td></tr>
+      </table></div>
+
+      <p>A few field notes that save real time. <strong>Lint failures</strong> are the most common and the least scary — the fix is usually one command (the same <code>ruff</code> or formatter the pipeline ran) followed by a commit; many teams wire it into pre-commit hooks so it never reaches CI at all. <strong>Test failures</strong> are the pipeline doing its job: a test encoded an expectation and your change violated it — the next chapter, <a href="ch103-pytest.html">on pytest</a>, teaches you to read and write those expectations yourself. <strong>Dependency failures</strong> often appear when someone adds an import without adding the package, or when CI's Python version differs from the laptop's — the environment discipline from <a href="ch020-environments-and-packaging.html">the environments chapter</a> is the vaccine. <strong>Build failures</strong> fail fastest and explain themselves best; a <code>SyntaxError</code> with a line number is the friendliest error in this whole zoo. <strong>Flaky failures</strong> are the only type where the honest answer is "not my commit" — and the only type where retry is a legitimate first move. <strong>Permissions failures</strong> are special for one more reason: they are frequently not yours to fix, and the fastest resolution is a well-written message to whoever maintains the project's CI settings.</p>
+
+      <h2>Retry or fix?</h2>
+      <p>Every failed job in GitLab has a tempting Retry button, and using it well is a mark of seniority. The rule is one sentence: <strong>retry is only for failures that were never about your commit.</strong> If the bottom of the log points at your code, your tests, your requirements file, or your formatting, retrying is the visa-expired traveller re-checking the departures board — the same red will come back in eight minutes, you will have learned nothing, and you will have burned runner minutes the whole team shares.</p>
+      <p>So ask two questions, in order. First: <em>does the failing line mention something my change plausibly touched?</em> If yes, fix. Second: <em>is the failure external — a timeout, a 503, a runner crash, a registry blip?</em> If yes, retry <em>once</em>. If the same external failure comes back on the retry, it is no longer <dfn>flaky</dfn> — the word for a failure that comes and goes without any code change — it is a real outage or a real misconfiguration, and it deserves a report, not a third retry.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Serial retrying is how teams end up "living with" a flaky test that fails one run in five. Every mashed retry teaches everyone to distrust the pipeline, and a distrusted pipeline stops gating anything. If you retry the same job twice in one day for the same reason, say so out loud in the merge request — naming a flake is the first step to killing it.</p></div>
+
+      <h2>Reproduce it locally</h2>
+      <p>Here is the demystifying move: a CI job is just commands in a container, so you can almost always run the failure on your own laptop. Open <code>.gitlab-ci.yml</code>, find the failing job, and read its <code>script:</code> list — those lines are shell commands, nothing more. Check out the same branch (<a href="ch021-just-enough-git.html">just enough git</a> covers the checkout), then run the same commands in order:</p>
+
+      <div class="code-title">terminal — replaying the failed job by hand</div>
+      <pre><code class="language-bash">git switch feature/faster-retries
+pip install -r requirements.txt
+ruff check src/ tests/
+pytest -q tests/test_retry.py::test_gives_up_after_three</code></pre>
+
+      <p>Note the last line: you do not need to re-run all forty-two tests. The FAILED line in the log gave you the exact test's address, and pytest accepts it verbatim — a tight loop of seconds instead of minutes. If the failure reproduces locally, you are in the best possible position: a private, fast, fully inspectable copy of the bug. If it does <em>not</em> reproduce, that is information too — the difference between your machine and CI (Python version, missing environment variable, an OS difference) is now the prime suspect, and the job log's header tells you the exact Docker image to compare against. For a perfect replica, run the commands inside that same image with <code>docker run -it python:3.11-slim bash</code> — same container, same behaviour.</p>
+
+      <h2>Build your own triage assistant</h2>
+      <p>Let us turn everything so far into working code. This little script does exactly what you just learned to do with your eyes: scan a job log from the bottom up, match tell-tale lines against the six signatures, and announce the failure type with a recommended move. Press Run, then paste the tail of any failed log you have ever seen into one of the samples and run it again:</p>
+
+      <div class="pyrun" data-title="Bottom-up log triage — run me">
+<textarea class="py-src" spellcheck="false">
+# Triage a CI job log the way a senior engineer does:
+# from the BOTTOM, matching against six known signatures.
+
+SIGNATURES = [
+    ("permissions / secrets", "fix (often a maintainer fixes a CI variable)",
+     ["401 Unauthorized", "403 Forbidden", "could not read Username"]),
+    ("flaky / infra", "retry ONCE, then investigate if it recurs",
+     ["Connection timed out", "runner system failure",
+      "503 Service Unavailable", "No space left on device"]),
+    ("dependency / install", "fix requirements or the version pin",
+     ["ModuleNotFoundError", "No matching distribution found"]),
+    ("lint / format", "run the formatter locally, commit the diff",
+     ["would reformat", "line too long"]),
+    ("test failure", "reproduce locally with pytest, then fix",
+     ["FAILED tests/", "AssertionError"]),
+    ("build", "run the build step locally; error names file and line",
+     ["SyntaxError", "ImportError", "failed to build"]),
+]
+
+def triage(log):
+    lines = [l for l in log.strip().splitlines() if l.strip()]
+    for line in reversed(lines):            # bottom-up, like a traceback
+        for kind, move, sigs in SIGNATURES:
+            for sig in sigs:
+                if sig in line:
+                    return kind, move, line.strip()
+    return "unknown", "read the full log, then ask with a report", lines[-1]
+
+SAMPLES = {
+  "job: test": """
+$ pytest -q tests/
+FAILED tests/test_retry.py::test_gives_up_after_three - AssertionError
+1 failed, 41 passed in 14.20s
+ERROR: Job failed: exit code 1
+""",
+  "job: install": """
+$ pip install -r requirements.txt
+Collecting pandas==9.9.9
+ERROR: No matching distribution found for pandas==9.9.9
+ERROR: Job failed: exit code 1
+""",
+  "job: build-image": """
+Using Docker image python:3.11-slim ...
+Error pulling image: Connection timed out
+ERROR: Job failed (system failure): runner system failure
+""",
+  "job: deploy-docs": """
+$ git clone https://gitlab.example.com/group/docs.git
+fatal: could not read Username for 'https://gitlab.example.com'
+ERROR: Job failed: exit code 128
+""",
+}
+
+for name, log in SAMPLES.items():
+    kind, move, evidence = triage(log)
+    print(name)
+    print("  evidence :", evidence)
+    print("  type     :", kind)
+    print("  your move:", move)
+    print()
+</textarea>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Notice the loop reads <code>reversed(lines)</code> — the bottom-up rule, encoded. Notice too that the generic verdict line <code>ERROR: Job failed: exit code 1</code> matches no signature, so the scan walks right past it to the first explanatory line, exactly as you did in the walkthrough. Real teams keep scripts like this in their toolbelt; some wire them into chat bots that annotate failed pipelines automatically.</p></div>
+
+      <h2>The whole dance, end to end</h2>
+      <p>Time to put every piece together. Step through a complete real-world triage, exactly as the screens appear in GitLab:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Red X on the MR">
+          <h3>1. The merge request goes red</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Merge request !42<small>Add retry logic to the ingest agent</small></div>
+              <div class="d-box hot">Pipeline #8817 failed<small>for 4f9c2d1e on feature/faster-retries</small></div>
+              <div class="d-box dim">Merge<small>blocked until the pipeline passes</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The MR page's pipeline widget shows the red X, and the merge button is disabled — pipelines gate merges. Do not retry yet, do not push anything yet. Click the pipeline link.</p>
+        </div>
+        <div class="step" data-title="Find the failed job">
+          <h3>2. The pipeline graph shows which job died</h3>
+          <div class="diagram">
+            <div class="d-box good">lint<small>passed 00:42</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">test<small>failed 01:56</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">build<small>skipped</small></div>
+          </div>
+          <p class="step-cap">Stages run left to right, and the graph is the map: lint passed, test failed, build never ran because its stage was never reached. One red job. Click it.</p>
+        </div>
+        <div class="step" data-title="Jump to the bottom">
+          <h3>3. Open the log and go straight to the end</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">Preparing executor / getting source<small>runner housekeeping — skip</small></div>
+              <div class="d-box dim">$ pip install / $ ruff check<small>both succeeded — suspects eliminated</small></div>
+              <div class="d-box hot">1 failed, 41 passed — exit code 1<small>the verdict, last lines of the log</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Hundreds of lines, but you only need the bottom. The verdict says a command exited 1 during pytest. Now walk upward for the first explanatory line.</p>
+        </div>
+        <div class="step" data-title="Find the culprit line">
+          <h3>4. Walk up to the line that explains</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">FAILED tests/test_retry.py::test_gives_up_after_three<small>AssertionError: assert 5 == 3</small></div>
+              <div class="d-box dim">ERROR: Job failed: exit code 1<small>the verdict you started from</small></div>
+            </div>
+          </div>
+          <p class="step-cap">One line up from the summary sits the culprit: a named test, a named file, a broken expectation. The code retried five times; the test demands it give up after three.</p>
+        </div>
+        <div class="step" data-title="Classify and decide">
+          <h3>5. Classify: test failure — so fix, not retry</h3>
+          <div class="diagram">
+            <div class="d-box dim">Flaky / infra?<small>no — nothing external in the log</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Touches my change?<small>yes — I wrote the retry logic</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Reproduce locally</div>
+          </div>
+          <p class="step-cap">Two triage questions, answered in seconds. The failing test is about the exact behaviour this MR changes, so the Retry button would be pure theatre. Reproduce it instead.</p>
+        </div>
+        <div class="step" data-title="Fix and go green">
+          <h3>6. Reproduce, fix, push — and watch it go green</h3>
+          <div class="diagram">
+            <div class="d-box">pytest -q tests/test_retry.py<small>same failure on the laptop in 2 seconds</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">fix max_retries, commit, push</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Pipeline #8818 passed<small>merge unblocked</small></div>
+          </div>
+          <p class="step-cap">The single failing test re-runs locally in seconds, the off-by-two bug is obvious, and the push triggers a fresh pipeline. Green. Total time from red X to fix: about ten minutes — because every step was routine, not detective work.</p>
+        </div>
+      </div>
+
+      <h2>Asking for help without losing goodwill</h2>
+      <p>Sometimes triage dead-ends: the log points somewhere you cannot see, the failure will not reproduce, or the fix clearly needs permissions you do not have. Asking for help is the correct move — senior engineers do it constantly — but <em>how</em> you ask decides whether you get an answer in three minutes or a sigh. The unspoken etiquette: retry once if it smelled like infra, spend an honest thirty to forty-five minutes on your own triage, and then ask with a <strong>failure report</strong> that does the reader's first five minutes of work for them:</p>
+
+      <div class="code-title">a failure report that gets answered fast</div>
+      <pre><code class="language-markup">Job: &lt;link to the failed job&gt;
+Branch / commit: feature/faster-retries @ 4f9c2d1e
+
+What failed (last lines of the log):
+    FAILED tests/test_retry.py::test_gives_up_after_three - AssertionError: assert 5 == 3
+    1 failed, 41 passed in 14.20s
+
+What I tried:
+    - Reproduced locally with pytest — same failure
+    - Passes on main; fails only with my change to RetryPolicy
+    - Not flaky: failed identically on a retry
+
+My best guess: my new backoff loop counts the first attempt as a retry.
+Question: should max_retries include the first attempt, or not?</code></pre>
+
+      <p>Every element earns its place. The <em>link</em> means nobody has to hunt. The <em>exact bottom lines</em> mean nobody has to scroll. <em>What you tried</em> proves effort and eliminates the first three suggestions anyone would make. The <em>best guess</em> gives an expert something to confirm or correct in one sentence — far faster than composing an explanation from scratch. Compare this with "pipeline is broken, can someone look?" — a message that transfers all of the work and none of the information. One habit, and never break it: paste log lines, but never paste secrets, tokens, or anything from the CI/CD variables screen. Logs mask known secrets automatically; your clipboard does not.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Watch any active repository's merge requests for a week and you will see this whole chapter play out: commits titled "fix lint" thirty seconds after a red pipeline (lint failure, correctly triaged), a lonely "retry" on a job that timed out pulling an image (flaky, correctly retried once), and an MR comment that quotes four log lines and pings the platform channel about a 403 (permissions, correctly escalated). You will also spot the anti-patterns — the same job retried five times in an hour, or a red pipeline sitting untouched for two days because its author found the log intimidating. When a data scientist mutters "CI is red again" in standup, you can now ask the only question that matters: <em>what do the bottom lines say?</em></p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Your merge request's pipeline just went red. What is the correct first move?</p>
+          <div class="q-opts">
+            <button data-opt="a">Click Retry — most failures clear themselves</button>
+            <button data-opt="b">Open the failed job's log and read it from the bottom</button>
+            <button data-opt="c">Push a new commit to trigger a fresh pipeline</button>
+          </div>
+          <p class="q-explain">The reason decides the action, and the reason lives at the bottom of the job log. Retrying or re-pushing before reading is acting before knowing — the same red will usually come straight back.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. The last explanatory line reads <code>ERROR: No matching distribution found for pandas==9.9.9</code>. Which failure type is this, and what is your move?</p>
+          <div class="q-opts">
+            <button data-opt="a">Flaky/infra — retry once and it will pass</button>
+            <button data-opt="b">Test failure — run pytest locally</button>
+            <button data-opt="c">Dependency/install — fix the version pin in requirements</button>
+          </div>
+          <p class="q-explain">pip is saying no such version of the package exists, so the requirements file itself is wrong. No number of retries changes what is on the package index — this is a fix, not a retry.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">3. When is the Retry button the right first response?</p>
+          <div class="q-opts">
+            <button data-opt="a">Whenever you are confident your code is correct</button>
+            <button data-opt="b">Whenever the failure is in a test you did not write</button>
+            <button data-opt="c">When the log shows an external failure — a timeout, a 503, a runner crash — unrelated to your commit</button>
+          </div>
+          <p class="q-explain">Retry is only for failures that were never about your change: infrastructure hiccups. And only once — if the same external failure returns on the retry, it is an outage or a misconfiguration and deserves a report.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. What does the final line <code>ERROR: Job failed: exit code 1</code> actually tell you?</p>
+          <div class="q-opts">
+            <button data-opt="a">Only that some command exited non-zero — the real reason sits in the lines above it</button>
+            <button data-opt="b">That the runner itself crashed</button>
+            <button data-opt="c">That exactly one test failed</button>
+          </div>
+          <p class="q-explain">That line appears on virtually every failed job, whatever the cause — it is the verdict, not the evidence. The bottom-up walk starts there and continues up to the first line that explains something.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Which help request will get answered fastest?</p>
+          <div class="q-opts">
+            <button data-opt="a">"The pipeline is broken again, can someone take a look?"</button>
+            <button data-opt="b">A job link, the exact failing log lines, what you already tried, and your best guess</button>
+            <button data-opt="c">A screenshot of the red X on the merge request page</button>
+          </div>
+          <p class="q-explain">A good failure report does the reader's first five minutes of work for them: no hunting, no scrolling, the obvious suggestions already ruled out, and a guess they can confirm or correct in one line.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A job fails when one command exits non-zero; the red X is a message, not a judgement, and the reason is always written in the job log.</li>
+          <li>Read logs bottom-up — the same skill as tracebacks from <a href="ch009-errors-and-tracebacks.html">chapter 9</a>: start at the verdict, walk up to the first explanatory line, and skip the runner housekeeping at the top.</li>
+          <li>Six types cover almost every failure: lint/format, test, dependency/install, build, flaky/infra, and permissions/secrets. Classify first — the type dictates the move.</li>
+          <li>Retry is only for failures that were never about your commit, and only once; everything else needs a fix, and serial retrying teaches the whole team to distrust the pipeline.</li>
+          <li>A CI job is just commands in a container — copy the <code>script:</code> lines from <code>.gitlab-ci.yml</code> and replay them locally, targeting the exact failing test for a seconds-fast loop.</li>
+          <li>Ask for help after honest triage, with a failure report: job link, exact bottom lines, what you tried, and your best guess — never pasted secrets.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

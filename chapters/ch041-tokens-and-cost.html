@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The meter is always running — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch041">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IV · Talking to the Model</div>
+        <h1>The meter is always running</h1>
+        <p class="ch-tagline">Every token in, every token out — and every turn, the whole conversation again. Learn how LLM pricing really works, why chats quietly get dearer as they get longer, and the three levers that cut the bill.</p>
+        <div class="ch-meta"><span>~20 min</span><span>Chapter 42 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your family retains a brilliant but peculiar law firm. The lawyer answers any letter with flawless judgement — under two strict billing rules. Rule one: reading is billed per page, and <em>writing</em> is billed at five times the reading rate, because writing is the hard part. Rule two: the lawyer keeps no memory of your case. None. Every time you write in, the clerk photocopies the <em>entire</em> correspondence — every letter you ever sent, every reply you ever received — staples your new one-line question to the back, and the lawyer reads the whole bundle from page one. Billed per page, every time.</p>
+        <p>The clerk offers two mercies. Pages the lawyer read recently sit in a warm pile on the desk, and re-reading a warm page costs a tenth of the normal rate. And if you do not need the answer today, the overnight drop-box is half price.</p>
+        <p>That law firm is every LLM API on Earth. The pages are tokens, the warm pile is the prompt cache, the drop-box is the batch API — and the meter, as you are about to see, is always running.</p>
+      </section>
+
+      <h2>Two prices on one meter</h2>
+      <p>Everything you learned in <a href="ch030-tokens-embeddings-context.html">the tokens chapter</a> now gets a price tag. Vendors bill in tokens, quoted per million, and every request has exactly two line items. <dfn>Input tokens</dfn> are everything you send — the system prompt, the conversation history, the user's question, any documents or tool results stuffed in. <dfn>Output tokens</dfn> are everything the model generates back. They are priced very differently:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Model tier</th><th>Input, per 1M tokens</th><th>Output, per 1M tokens</th><th>Output multiple</th></tr>
+        <tr><td>Small and fast</td><td>$1.00</td><td>$5.00</td><td>5x</td></tr>
+        <tr><td>Mid-tier workhorse</td><td>$3.00</td><td>$15.00</td><td>5x</td></tr>
+        <tr><td>Frontier</td><td>$5.00</td><td>$25.00</td><td>5x</td></tr>
+      </table></div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>These are illustrative round numbers, deliberately shaped like real 2026 price lists — always check your vendor's current pricing page. The durable fact is the <em>ratio</em>: output tokens typically cost four to five times what input tokens cost, at every vendor, at every tier.</p></div>
+
+      <p>Why is writing dearer than reading? Because of how the machine works. When the model reads your prompt, it can process all of those tokens in one big parallel pass — cheap. But it generates its reply one token at a time, and every single output token requires another full pass over everything that came before it. Reading is a skim; writing is labour. The lawyer's five-times rate for drafting is not greed, it is physics.</p>
+      <p>This asymmetry gives you your first practical instinct: a verbose model is an expensive model. The single simplest cost control in the entire field is <code>max_tokens</code> — a hard cap on how many output tokens one response may contain. You met it in <a href="ch033-first-api-call.html">your first API call</a>; now you know why every serious request sets it.</p>
+
+      <h2>The multiplier nobody sees: every turn resends everything</h2>
+      <p>Here is the part that surprises almost everyone, and it follows directly from something you already know: the API is <dfn>stateless</dfn> — the model remembers nothing between calls, so your code must re-send the entire conversation history with every single turn. In the law firm, the clerk photocopies the whole case file every time. In your code, the <code>messages</code> list — which only ever grows — goes over the wire again and again.</p>
+      <p>That means turn ten of a chat does not cost what turn one cost. Take a modest example: a 2,000-token system prompt, users writing about 200 tokens per message, the model replying with about 300. Turn one sends 2,200 input tokens. Turn two sends those again, plus the first reply, plus the new question — 2,700. Every turn adds the previous exchange to the pile, so each turn is billed more than the last. Watch the cumulative input bill:</p>
+
+      <div data-bars data-title="One chat's cumulative input-token bill, turn by turn" data-unit="tokens"
+           data-note="Illustrative 10-turn chat: 2,000-token system prompt, 200-token questions, 300-token replies. The bill accelerates while the conversation itself grows only linearly — the last bar is the entire chat's actual text.">
+        <div class="bar" data-label="after turn 1" data-value="2200"></div>
+        <div class="bar" data-label="after turn 2" data-value="4900"></div>
+        <div class="bar" data-label="after turn 4" data-value="11800"></div>
+        <div class="bar" data-label="after turn 6" data-value="20700"></div>
+        <div class="bar" data-label="after turn 8" data-value="31600"></div>
+        <div class="bar" data-label="after turn 10" data-value="44500"></div>
+        <div class="bar" data-label="actual text in the whole chat" data-value="7000"></div>
+      </div>
+
+      <p>Read that last bar twice. After ten turns you have paid for 44,500 input tokens to sustain a conversation containing only 7,000 tokens of actual text. Roughly six times over, you re-billed words that had already been billed. The conversation grew in a straight line; the bill grew in a curve. This is the <dfn>history-resend multiplier</dfn> — the single biggest force in LLM economics, and it is invisible until you plot it.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>This is exactly how a harmless-looking loop becomes a bill. Remember from <a href="ch035-tool-calling.html">the tool-calling chapter</a> that every tool call is a full turn: model call, tool result appended, model call again. Now imagine an agent that dumps a 30,000-token file into a tool result on step 2 of a 40-step run. That file is re-sent — and re-billed — on all 38 remaining steps: over a million input tokens for one file. Add a retry loop ("just run it again until the tests pass") and you multiply the whole curve. Nobody wrote a bug; someone wrote a loop, and the meter did the rest.</p></div>
+
+      <h2>Prompt caching: the warm pile on the desk</h2>
+      <p>Vendors know the resend multiplier is brutal, so they offer the same mercy as the clerk: <dfn>prompt caching</dfn> — recently seen input is kept warm on the vendor's servers, and when your next request starts with the exact same tokens, that prefix is re-read at a steep discount instead of full price. The going rates: writing to the cache costs a small premium over normal input (about 25% more for the default short-lived cache; longer-lived caches cost more to write), and reading from it costs about a tenth of normal input — roughly 90% off. The cache pays for itself from the second use onward.</p>
+      <p>The one rule that governs everything: <strong>caching is a prefix match on exact bytes</strong>. The vendor compares your new request to the cached one from the very first character. The moment a single byte differs, everything from that point onward is a cache miss. Step through one lifecycle:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Turn 1: write">
+          <h3>1. Turn one — the cache gets written</h3>
+          <div class="diagram">
+            <div class="d-box hot">Request<small>system prompt + docs, 2,200 tokens</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Vendor cache<small>prefix stored, ~1.25x price this once</small></div>
+          </div>
+          <p class="step-cap">The first request pays a small premium to store the prefix. Slightly dearer than normal — an investment, not a saving, on turn one.</p>
+        </div>
+        <div class="step" data-title="Turn 2: read">
+          <h3>2. Turn two — the prefix comes back warm</h3>
+          <div class="diagram">
+            <div class="d-box good">Cached prefix<small>2,200 tokens at ~0.1x</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">New tokens<small>last reply + new question, full price</small></div>
+          </div>
+          <p class="step-cap">Everything the cache has seen is ~90% off; only the genuinely new tail pays full rate. In a long chat, the warm prefix is almost the whole request — which is why caching roughly halves a ten-turn bill and saves even more on longer ones.</p>
+        </div>
+        <div class="step" data-title="One byte breaks it">
+          <h3>3. The silent invalidator</h3>
+          <div class="diagram">
+            <div class="d-box hot">"Today is 2 July, 09:14"<small>a timestamp at the top of the system prompt</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Cache<small>miss — everything after byte one re-billed</small></div>
+          </div>
+          <p class="step-cap">Someone helpfully adds the current time to the top of the system prompt. Every request now differs from the last at byte one, so nothing ever hits the cache — with no error, no warning, just a quietly doubled bill. Timestamps, random request IDs, and unsorted JSON keys are the classic culprits. Volatile content belongs at the end of the prompt, never the start.</p>
+        </div>
+        <div class="step" data-title="Verify">
+          <h3>4. Trust, but verify</h3>
+          <div class="diagram">
+            <div class="d-box good">usage<small>cache_read_input_tokens: 2200</small></div>
+            <div class="d-box">usage<small>input_tokens: 500 (full price)</small></div>
+          </div>
+          <p class="step-cap">Every API response carries a usage block that splits the bill: full-price input, cache writes, cache reads, output. If the cache-read number is zero request after request, a silent invalidator is at work. This little block is your meter reading — log it.</p>
+        </div>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Vendors differ in mechanics — some cache automatically, others ask you to mark cache points in the request — but the economics and the prefix rule are universal. The design habit that always works: put the stable stuff first (frozen system prompt, fixed tool list, big documents) and the changing stuff last (the user's question, the current date).</p></div>
+
+      <h2>Run the meter yourself</h2>
+      <p>Below is the whole chapter as twenty lines of arithmetic: a simulated ten-turn chat, billed with and without caching. As in every runnable page here, the "model" is a scripted stand-in — <code>fake_llm()</code> just returns a reply size — because the economics do not care what the reply says. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="The token meter, simulated — run me">
+<textarea class="py-src" spellcheck="false">
+# Illustrative round prices, per MILLION tokens (shaped like
+# real 2026 price lists -- check your vendor for exact rates).
+PRICE_IN, PRICE_OUT = 3.00, 15.00     # output ~5x input
+CACHE_WRITE, CACHE_READ = 3.75, 0.30  # write ~1.25x, read ~0.1x
+
+SYSTEM, USER, REPLY, TURNS = 2000, 200, 300, 10
+
+def fake_llm(prompt_tokens):
+    # A real agent would call a paid API here. The economics
+    # are identical: prompt in, reply out, both metered.
+    return REPLY  # every reply is 300 tokens in this simulation
+
+print(f"{'turn':&gt;4} {'input tok':&gt;10} {'plain $':&gt;9} {'cached $':&gt;9}")
+history = SYSTEM          # tokens in the transcript so far
+cached = 0                # tokens sitting warm in the prompt cache
+plain_total = cache_total = 0.0
+
+for turn in range(1, TURNS + 1):
+    history += USER                    # your message joins the pile
+    reply = fake_llm(history)
+
+    # Without caching: the WHOLE transcript is full-price input
+    plain = (history * PRICE_IN + reply * PRICE_OUT) / 1e6
+
+    # With caching: the already-seen prefix is ~90% off
+    fresh = history - cached
+    with_cache = (cached * CACHE_READ + fresh * CACHE_WRITE
+                  + reply * PRICE_OUT) / 1e6
+    cached = history                   # prefix is cached for next turn
+
+    plain_total += plain
+    cache_total += with_cache
+    print(f"{turn:&gt;4} {history:&gt;10} {plain:&gt;9.4f} {with_cache:&gt;9.4f}")
+    history += reply                   # the reply joins the pile too
+
+print()
+print(f"Distinct text in the whole chat: {history} tokens")
+print(f"Ten turns without caching: ${plain_total:.4f}")
+print(f"Ten turns with caching:    ${cache_total:.4f}"
+      f"  ({100 * (1 - cache_total / plain_total):.0f}% less)")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now make it hurt. Set <code>TURNS = 50</code> and watch the plain column climb while the cached column barely notices. Set <code>SYSTEM = 50000</code> — a big document pasted into the prompt — and see caching go from "nice" to "non-negotiable". One chat is pennies either way; the numbers only look small until you multiply by ten thousand users a day, which is exactly the multiplication a finance team does.</p></div>
+
+      <h2>Batch: half price if you can wait</h2>
+      <p>The overnight drop-box is real, and it is called the <dfn>batch API</dfn> — you submit a big list of requests, the vendor runs them on spare capacity, and you collect the results later, typically at 50% off everything. "Later" usually means under an hour, with a guarantee of within a day. Nobody can sit in a chat window waiting for that, so batch is useless for conversation — and perfect for everything nobody is waiting on: classifying last month's ten thousand support tickets overnight, re-summarising a document library, running an evaluation suite, generating embeddings for a new corpus.</p>
+      <p>The discipline is simply to ask, for every workload: <em>is a human actually waiting for this answer?</em> If not, it belongs in the drop-box. Teams routinely discover that half their token spend is bulk work that nobody was waiting on, running at full interactive price out of habit.</p>
+
+      <h2>The words on the invoice</h2>
+      <p>Six terms carry every pricing conversation you will ever sit in. Flip until they feel obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">input tokens</span><span class="flip-back">Everything you send: system prompt, full history, question, tool results. Cheap per token — but re-sent and re-billed every single turn.</span></button>
+        <button class="flip" type="button"><span class="flip-front">output tokens</span><span class="flip-back">Everything the model generates. Typically 4-5x the input price, because each output token needs its own full pass over everything before it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">prompt cache</span><span class="flip-back">The vendor keeps your recent prompt prefix warm; re-reading it costs ~10% of normal input. Exact-byte prefix match — one changed byte up front and nothing hits.</span></button>
+        <button class="flip" type="button"><span class="flip-front">cache write</span><span class="flip-back">Storing a prefix costs a small premium the first time (~25% over normal input for the default cache). An investment that pays off from the second use.</span></button>
+        <button class="flip" type="button"><span class="flip-front">batch API</span><span class="flip-back">Submit now, collect within a day (usually under an hour), pay about half price. For bulk work no human is waiting on.</span></button>
+        <button class="flip" type="button"><span class="flip-front">max_tokens</span><span class="flip-back">A hard per-request cap on output length. The simplest guardrail there is, because output is the expensive kind of token.</span></button>
+      </div>
+
+      <h2>Budget guardrails: what to ask any vendor (or your own team)</h2>
+      <p>You operate these systems, which means sooner or later you will sit in the meeting where the invoice gets explained. These are the questions that make that meeting short — each one maps to a lever from this chapter:</p>
+      <ul>
+        <li><strong>Is output capped?</strong> Does every request set <code>max_tokens</code>, and does every agent loop have a hard turn limit? Output is the 5x-priced token, and unbounded loops are how bills happen.</li>
+        <li><strong>Is there a hard budget with alerts?</strong> Can spend be capped per API key, per team, per feature — and does something alert (or cut off) <em>before</em> the invoice, not after?</li>
+        <li><strong>Can we see the split?</strong> Does the usage dashboard separate input, output, cache writes, and cache reads — per feature? A single total hides everything actionable.</li>
+        <li><strong>What is our cache hit rate?</strong> If cache reads are near zero, what is invalidating the prefix — a timestamp, a per-user ID, an unstable tool list?</li>
+        <li><strong>What could move to batch?</strong> Which workloads have no human waiting, and are they getting the 50% discount?</li>
+        <li><strong>Are we tiering models?</strong> Is a frontier-priced model doing work a small model passes the quality bar on — classification, routing, extraction?</li>
+        <li><strong>What do long conversations cost us?</strong> Is anything trimming, summarising, or capping history growth, or does every chat ride the resend curve to the end?</li>
+      </ul>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this chapter everywhere. In response logs: the <code>usage</code> block with <code>input_tokens</code>, <code>output_tokens</code>, and the cache fields — the meter reading attached to every call. In merge requests: "set max_tokens on the summariser", "move the eval run to the batch API", "the system prompt change broke the cache". In vendor dashboards: cost split by input/output and a cache hit-rate chart. And in the incident channel, the classic post-mortem: a retry loop or an over-eager agent ran all weekend, and the fix is a turn cap plus a budget alert — both of which you can now propose by name.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Why do output tokens cost roughly five times more than input tokens?</p>
+          <div class="q-opts">
+            <button data-opt="a">They don't — it varies randomly by vendor</button>
+            <button data-opt="b">Input is read in one parallel pass, but output is generated one token at a time, each needing another full pass</button>
+            <button data-opt="c">Vendors charge a premium for creative content</button>
+          </div>
+          <p class="q-explain">Reading is a parallel skim; generating is sequential labour — every output token requires another pass over everything before it. That is why the 4-5x ratio shows up at every vendor, and why capping output with <code>max_tokens</code> is the first guardrail.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Your one-line question on turn 20 of a chat costs far more than the same question did on turn 1. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">Vendors charge loyal users more over time</button>
+            <button data-opt="b">The model thinks harder about later questions</button>
+            <button data-opt="c">The API is stateless, so the entire 20-turn history is re-sent — and re-billed — as input with your one line</button>
+          </div>
+          <p class="q-explain">The model remembers nothing between calls; your code resends the whole transcript every turn. That is the history-resend multiplier: the bill grows in a curve while the conversation grows in a line.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. A teammate adds "Current time: 09:14:22" to the top of the system prompt. The cache hit rate drops to zero. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">Caching is an exact-byte prefix match — a value that changes every request invalidates everything after it</button>
+            <button data-opt="b">Timestamps are a forbidden token type</button>
+            <button data-opt="c">The cache only works for user messages, not system prompts</button>
+          </div>
+          <p class="q-explain">One changed byte at the front and nothing downstream ever matches — no error, just full price on every request. Volatile content (times, IDs) belongs at the end of the prompt; the stable prefix goes first.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Which workload belongs on the batch API?</p>
+          <div class="q-opts">
+            <button data-opt="a">The customer-facing chat assistant</button>
+            <button data-opt="b">Classifying last month's ten thousand support tickets overnight</button>
+            <button data-opt="c">An agent that must react to live market prices</button>
+          </div>
+          <p class="q-explain">Batch trades speed for a ~50% discount: results usually within an hour, guaranteed within a day. Perfect for bulk work nobody is waiting on; useless for anything interactive or time-critical.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. An agent dumps a 30,000-token file into a tool result on step 2 of a 40-step run. Roughly what happens to the bill?</p>
+          <div class="q-opts">
+            <button data-opt="a">The file is billed once, when the tool returns it</button>
+            <button data-opt="b">Nothing — tool results are free</button>
+            <button data-opt="c">The file rides the history into all remaining steps and is re-billed ~38 more times — over a million input tokens</button>
+          </div>
+          <p class="q-explain">Every tool call is a full turn, and every turn resends the whole history — the file included. This is how a harmless-looking loop becomes a bill; the defences are turn caps, trimming big tool results, and prompt caching.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>LLM APIs bill two things: input tokens (everything you send) and output tokens (everything generated) — and output costs 4-5x more because generation is sequential work.</li>
+          <li>The API is stateless, so every turn resends the entire history; the bill grows in a curve while the conversation grows in a line. Agent loops and fat tool results multiply this — that is how a harmless loop becomes a bill.</li>
+          <li>Prompt caching re-reads an unchanged prompt prefix at ~90% off (for a ~25% one-time write premium). It is an exact-byte prefix match: keep stable content first, volatile content last, and watch out for timestamps.</li>
+          <li>The batch API gives ~50% off anything nobody is waiting on — usually back within an hour, guaranteed within a day.</li>
+          <li>Every response carries a <code>usage</code> block splitting full-price input, cache activity, and output. It is the meter reading; log it and alert on it.</li>
+          <li>The guardrails to demand anywhere: <code>max_tokens</code> on every request, turn caps on every loop, hard budgets with alerts, a dashboard that splits the bill, and the cheapest model that passes the quality bar.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

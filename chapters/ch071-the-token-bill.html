@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The 2x token bill — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch071">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VIII · Deep Agents</div>
+        <h1>The 2x token bill</h1>
+        <p class="ch-tagline">Deep agents bill roughly twice what a plain loop does on the same task. This chapter follows the meter turn by turn — where every extra token goes, why the overhead is a feature, and a clean framework for deciding when double is a bargain.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 72 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your bathroom tap leaks. A handyman comes over, fixes it in an hour, and bills you 2,000 rupees. Simple job, simple invoice.</p>
+        <p>Now imagine you had called a full renovation firm instead. A site manager arrives first and walks the house, writing a plan on a clipboard. She opens a job folder and files her notes. She briefs a plumbing crew — and the crew gets its own complete induction: safety rules, site map, the whole folder read aloud. After the crew reports back, she updates the clipboard, checks the folder, and only then signs off. For the same tap, the firm's invoice reads 4,000 rupees — and not one line of it is padding. Every rupee bought <em>coordination</em>: the plan, the folder, the briefings, the reports.</p>
+        <p>For a leaky tap, hiring the firm is absurd. For gutting and rebuilding the whole house, the handyman is the absurd choice — he will lose track by day three. That is this chapter in one picture. Deep agents are the renovation firm. The question is never "which is cheaper?" It is "which jobs collapse without coordination?"</p>
+      </section>
+
+      <h2>You have met the machinery — now meet the invoice</h2>
+      <p>Quick recap of where we are in this act. <a href="ch066-what-makes-an-agent-deep.html">Chapter 66</a> named the four things that make an agent "deep": a detailed system prompt, a planning tool, a file system, and subagents — and <a href="ch067-create-deep-agent-anatomy.html">chapter 67</a> showed <code>create_deep_agent</code> wiring all four into one harness. <a href="ch068-planning-and-todos.html">Chapter 68</a> showed the <code>write_todos</code> planning tool keeping long tasks on the rails, <a href="ch069-virtual-filesystem.html">chapter 69</a> gave the agent a virtual file system to park its working notes, and <a href="ch070-subagents.html">chapter 70</a> introduced the <code>task</code> tool that spawns fresh-context subagents. Each piece earned its keep on capability. This chapter asks the operator's question: what does all of that machinery <em>cost</em>?</p>
+      <p>The honest answer, and the number this chapter is named after: on the same task suites, community benchmarks and published evaluations that re-run identical work through both architectures keep landing in the same neighbourhood — a deep agent burns somewhere between one-and-a-half and two-and-a-half times the tokens of a plain ReAct loop, and "roughly 2x" is the folk number everyone quotes. The bars below use round, illustrative figures — the shape is what matters, not the last digit:</p>
+
+      <div data-bars data-title="Same research task, total tokens billed (illustrative round numbers)" data-unit="tokens"
+           data-note="The deep agent finishes the same task with roughly double the token spend — the rest of this chapter is an itemised receipt for the second bar.">
+        <div class="bar" data-label="Plain ReAct loop" data-value="100000"></div>
+        <div class="bar" data-label="Deep agent" data-value="200000"></div>
+      </div>
+
+      <p>Remember the two facts that make any agent bill grow, from <a href="ch041-tokens-and-cost.html">the tokens-and-cost chapter</a> and <a href="ch045-react-loop-by-hand.html">the loop you built by hand</a>: the model is stateless, so the <em>entire transcript</em> is re-sent on every single turn, and you pay for every token in both directions. Everything a deep agent adds — instructions, plans, file contents, subagent briefings — rides that same conveyor belt, again and again. Overhead in an agent is never a one-time fee. It is a per-turn tax.</p>
+
+      <h2>Where the extra tokens go: an itemised receipt</h2>
+      <p>Take that illustrative extra 100,000 tokens and split it into the four buckets every deep-agent bill contains. Again — round numbers, real proportions:</p>
+
+      <div data-bars data-title="Where the deep agent's EXTRA tokens went (illustrative breakdown)" data-unit="tokens"
+           data-note="Subagent spawning and the re-sent system prompt usually dominate; planning and file traffic are smaller but never free.">
+        <div class="bar" data-label="Bigger system prompt, re-sent every turn" data-value="35000"></div>
+        <div class="bar" data-label="Subagent spawning (hidden second loops)" data-value="35000"></div>
+        <div class="bar" data-label="Planning turns (write_todos)" data-value="15000"></div>
+        <div class="bar" data-label="File operations (write, read, re-read)" data-value="15000"></div>
+      </div>
+
+      <h3>Bucket 1: the bigger system prompt</h3>
+      <p>A plain loop's system prompt might be a few hundred tokens: "you are a helpful assistant, here are your two tools." A deep agent's system prompt must teach the planning protocol, describe the file tools (<code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code>), explain when and how to delegate via <code>task</code>, and lay out standards for doing all of it well. That easily runs to a few thousand tokens. Harmless as a one-off — except it is not a one-off. Statelessness means those thousands of tokens are re-sent on turn one, turn two, turn seventeen. A 2,600-token prompt over a 40-turn run is over 100,000 input tokens before the agent has done anything at all.</p>
+
+      <h3>Bucket 2: planning turns</h3>
+      <p>Every <code>write_todos</code> call is a full round trip that gathers no evidence and produces no answer. The model reads the whole transcript, writes a plan, and the plan itself joins the transcript — where you pay to re-send it on every later turn. Then the plan gets <em>updated</em> as items complete, which is another round trip each time. <a href="ch068-planning-and-todos.html">Chapter 68</a> showed why this is worth it — plans are the difference between a 100-turn run that finishes and one that wanders. But on the receipt, planning is pure coordination overhead: turns about the work rather than turns of the work.</p>
+
+      <h3>Bucket 3: file operations</h3>
+      <p>The <a href="ch069-virtual-filesystem.html">virtual file system</a> exists to keep bulk out of the context — park the 5,000-token research dump in a file, keep only the filename in the transcript. That genuinely saves tokens. But the plumbing itself costs: every <code>write_file</code> is a turn, every <code>read_file</code> is a turn, and the moment a file is read, its contents pour into the history and get re-billed on every turn after that. A deep agent that writes notes, reads them back twice, and edits them once has spent four round trips on filing. Good filing — but filing.</p>
+
+      <h3>Bucket 4: subagent spawning — the big one</h3>
+      <p>Here is the line item people miss. When the orchestrator calls <code>task("research X")</code>, the transcript shows one modest tool call and, later, one tidy summary. What actually happened in between is invisible: a <em>whole second agent</em> booted up, with its own copy of a big system prompt, its own loop, its own growing history, its own ten or twenty tool calls — every one of them billed. You pay for the entire hidden loop and see only the summary. Spawn three subagents and you are running four agents' worth of metered conversation to produce one answer. <a href="ch070-subagents.html">Context quarantine</a> is why this is worth doing — the orchestrator stays lean and focused — but the quarantined context is not free context. It is someone else's bill stapled to yours.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Notice what is <em>not</em> on the receipt: quality overhead. The deep agent does not think "better" per token. It spends its extra tokens on structure — plans, files, briefings — the same way the renovation firm spends money on a site manager who never lifts a wrench. Whether that structure pays for itself depends entirely on the job, which is where the decision framework below comes in.</p></div>
+
+      <h2>Follow the meter through one run</h2>
+      <p>Watch the same delegation play out with the meter running. Track where the numbers jump:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The briefing">
+          <h3>1. The standing briefing loads</h3>
+          <div class="diagram">
+            <div class="d-box hot">System prompt<small>~2,600 tokens: planning + file tools + task tool</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Orchestrator LLM</div>
+          </div>
+          <p class="step-cap">Before any work happens, the deep agent's instruction manual is in place. Cost so far: nothing unusual — but this block will be re-sent with <em>every</em> turn that follows. Remember that.</p>
+        </div>
+        <div class="step" data-title="Planning turn">
+          <h3>2. A planning turn — coordination, not work</h3>
+          <div class="diagram">
+            <div class="d-box dim">System prompt</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">write_todos<small>plan written: ~250 tokens out</small></div>
+          </div>
+          <p class="step-cap">Full round trip: 2,600 tokens in, a plan out, and the plan joins the history — where it will be re-billed on every later turn. No evidence gathered yet.</p>
+        </div>
+        <div class="step" data-title="Filing">
+          <h3>3. Notes go to the file system</h3>
+          <div class="diagram">
+            <div class="d-box dim">Orchestrator</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">write_file<small>brief.md saved off-context</small></div>
+          </div>
+          <p class="step-cap">Smart move: bulk parked in a file keeps future turns lean. But the write itself was a metered round trip, and reading it back later will be another.</p>
+        </div>
+        <div class="step" data-title="Subagent spawns">
+          <h3>4. task() — a second agent boots, off-screen</h3>
+          <div class="diagram">
+            <div class="d-box">Orchestrator<small>task("research X") — 90 tokens</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box hot">Subagent<small>own 2,600-token system prompt</small></div>
+              <div class="d-box hot">Own loop<small>6 tool calls, own growing history</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The orchestrator's transcript shows one small tool call. The meter shows a whole hidden conversation — tens of thousands of tokens — running to completion behind it. This is the biggest line on the receipt.</p>
+        </div>
+        <div class="step" data-title="Summary returns">
+          <h3>5. Only the summary comes home</h3>
+          <div class="diagram">
+            <div class="d-box dim">Subagent<small>full transcript discarded</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Orchestrator<small>receives ~350-token summary</small></div>
+          </div>
+          <p class="step-cap">Context quarantine at work: the orchestrator's history grows by 350 tokens, not 30,000. You already paid for the 30,000 — but you will not keep re-paying for them on every future orchestrator turn. That is the trade.</p>
+        </div>
+        <div class="step" data-title="The invoice">
+          <h3>6. Final answer — and the itemised total</h3>
+          <div class="diagram">
+            <div class="d-box good">Answer<small>same as the plain loop's</small></div>
+            <div class="d-box hot">Meter<small>~2x the plain loop's tokens</small></div>
+          </div>
+          <p class="step-cap">Same deliverable, double the meter: bigger prompt re-sent every turn, planning turns, file traffic, and one or more hidden loops. Nothing was wasted — everything bought structure.</p>
+        </div>
+      </div>
+
+      <h2>Run the meter yourself</h2>
+      <p>Below is a token meter you can play with. It pushes the <em>same</em> task — gather twelve pieces of evidence, write a briefing — through both architectures and counts every token that crosses the wire. The per-event numbers are round figures in the spirit of the ~4-characters-per-token rule of thumb from <a href="ch041-tokens-and-cost.html">chapter 41</a>. The LLM is simulated — scripted event lists stand in for model turns, exactly the <code>fake_llm</code> trick from <a href="ch045-react-loop-by-hand.html">chapter 45</a> — which is why it can run entirely in your browser. Press <strong>Run</strong> and read the receipt.</p>
+
+      <div class="pyrun" data-title="The token meter — one task, two architectures">
+<textarea class="py-src" spellcheck="false">
+# Token meter: the SAME research task through two architectures.
+# All numbers are round, illustrative figures -- not a benchmark.
+# Task: gather 12 pieces of evidence, then write a briefing note.
+
+def run(label, system, events, indent="  "):
+    history, tin, tout = 0, 0, 0
+    print(label)
+    for name, out, obs in events:
+        inp = system + history        # the WHOLE transcript, re-sent
+        tin += inp
+        tout += out
+        history += out + obs          # reply + tool result join history
+        print(f"{indent}{name:22} sends {inp:&gt;7,}   gets back {out:&gt;5,}")
+    print(f"{indent}{'-- subtotal':22} in {tin:&gt;10,}   out {tout:&gt;8,}")
+    return tin, tout
+
+def gather(n):
+    """n evidence-gathering turns: short tool call, chunky result."""
+    return [(f"tool call {i+1}", 80, 400) for i in range(n)]
+
+# ---- Architecture 1: plain ReAct loop -------------------------
+plain_in, plain_out = run(
+    "PLAIN LOOP  (system prompt: 400 tokens)", 400,
+    gather(12) + [("final answer", 900, 0)])
+
+# ---- Architecture 2: deep agent -------------------------------
+# Orchestrator: big system prompt (planning + files + task tool),
+# planning turns, file traffic, and two delegations.
+orch = [
+    ("write_todos (plan)", 250, 40),
+    ("write_file (brief)", 150, 20),
+    ("task: researcher A", 90, 350),   # obs = A's summary
+    ("task: researcher B", 90, 350),   # obs = B's summary
+    ("read_file (brief)", 40, 170),
+    ("write_todos (done)", 120, 40),
+    ("final answer", 900, 0),
+]
+d_in, d_out = run("\nDEEP AGENT ORCHESTRATOR  (system prompt: 2,600 tokens)",
+                  2600, orch)
+
+# Each subagent is a WHOLE second loop with its own system prompt.
+for name in ("A", "B"):
+    s_in, s_out = run(f"\n  SUBAGENT {name}  (its own 2,600-token prompt)",
+                      2600, gather(6) + [("summary back", 350, 0)], "    ")
+    d_in += s_in
+    d_out += s_out
+
+plain = plain_in + plain_out
+deep = d_in + d_out
+print()
+print(f"PLAIN LOOP total : {plain:&gt;8,} tokens")
+print(f"DEEP AGENT total : {deep:&gt;8,} tokens")
+print(f"RATIO            : {deep/plain:.1f}x")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now interrogate it. Change <code>gather(12)</code> to <code>gather(3)</code> for the plain loop and <code>gather(6)</code> to <code>gather(2)</code> for the subagents — the ratio balloons well past 2x, because on a tiny task the fixed overhead never amortises. Then try a big job: <code>gather(40)</code> for the plain loop against subagents doing ten calls each — the gap narrows, because the plain loop's ever-growing history costs more per turn while each subagent keeps restarting from a clean, cheap context. The 2x folk number lives in the middle, and now you know why the extremes bend away from it.</p></div>
+
+      <h2>So when is double a bargain?</h2>
+      <p>Two properties of a task decide almost everything: how <em>long</em> it is (how many turns of real work) and how <em>unpredictable</em> it is (whether you can write the steps down in advance). Cross them and you get the whole decision framework:</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>Predictable steps</th><th>Unpredictable steps</th></tr>
+        <tr><td><strong>Short task</strong> (a few turns)</td><td>No agent at all — a fixed pipeline or a single prompt. Cheapest and most reliable.</td><td>Plain ReAct loop. The 2x overhead would dwarf the work, like hiring the renovation firm for the tap.</td></tr>
+        <tr><td><strong>Long task</strong> (tens of turns, hours)</td><td>A <a href="ch057-why-graphs.html">workflow graph</a> — you know the steps, so wire them explicitly and skip paying for improvisation.</td><td><strong>Deep agent territory.</strong> Research, multi-file builds, open-ended investigations. Here the coordination pays for itself.</td></tr>
+      </table></div>
+
+      <p>This is the same instinct as <a href="ch049-building-effective-agents.html">"build the simplest thing that works"</a>, now with a price tag attached. And there is a second-order effect the table hides: <em>the cost of failure</em>. A plain loop that loses the plot at turn 40 — forgets the goal, repeats work, drowns in its own history (<a href="ch048-failure-modes.html">chapter 48</a>'s greatest hits) — does not bill you 1x. It bills you 1x for the failed run, then 1x again for the retry, plus your time diagnosing it. A deep agent that finishes correctly the first time at 2x is cheaper than a plain loop that finishes on the second attempt. On long, messy tasks, reliability <em>is</em> the cost optimisation.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The framework cuts both ways. If your task reliably completes in six turns of a plain loop, moving it to a deep agent because deep agents are fashionable does not make it better — it makes it slower and twice the price. Overhead you do not need is just overhead. Audit what your agents actually do before upgrading their architecture.</p></div>
+
+      <h2>Four dials that pull the bill back down</h2>
+      <p>Choosing the deep agent does not mean accepting the full 2x forever. Production teams routinely claw back a large share of the premium with four dials:</p>
+      <p><strong>Dial 1 — prompt caching.</strong> The deep agent's biggest recurring cost is that huge, <em>identical</em> system prompt re-sent every turn. Provider APIs can cache a stable prompt prefix and bill subsequent sends of it at a steep discount — <dfn>prompt caching</dfn>, meaning the provider stores the unchanged opening of your request and charges a fraction (commonly around a tenth) of the normal input price when it repeats; check your provider's current pricing page for exact numbers. Because the prompt is fixed and the history only ever appends, agent traffic is close to the ideal caching customer. This one dial can quietly remove most of Bucket 1.</p>
+      <p><strong>Dial 2 — model tiering.</strong> Nothing says every loop must run on the same brain. <dfn>Model tiering</dfn> means matching each loop to the cheapest model that does its job well: keep the frontier model where judgement lives — the orchestrator — and run subagents on a cheaper, faster tier when their work is mechanical (fetching, extracting, formatting, summarising). Since subagent spawning is the other dominant bucket, paying a fraction of the per-token rate inside those hidden loops takes a real bite out of the bill. Reserve same-tier subagents for delegated work that genuinely needs deep judgement.</p>
+      <p><strong>Dial 3 — budgets.</strong> Your hand-built loop in <a href="ch045-react-loop-by-hand.html">chapter 45</a> had <code>max_turns</code>; a deep agent needs the grown-up version, at every level. Cap the orchestrator's turns, cap each subagent's turns, cap tokens per run, and alert when a run blows past its typical spend. A budget does not make the average run cheaper — it makes the <em>worst</em> run survivable, and in cost incidents it is always the worst run that writes the story.</p>
+      <p><strong>Dial 4 — lean returns.</strong> Enforce the discipline that makes quarantine pay: subagents return short, structured summaries — never their transcripts; bulk results go to files, and the orchestrator reads files only when it must (every read pours the contents back into the metered history). The cheapest token in any agent system is the one that never enters the context.</p>
+
+      <p>One vocabulary lap before the quiz — flip until instant:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">per-turn tax</span><span class="flip-back">Anything sitting in the context — system prompt, plan, file contents — is re-sent and re-billed on every turn. Overhead is never a one-time fee.</span></button>
+        <button class="flip" type="button"><span class="flip-front">hidden loop</span><span class="flip-back">The full agent run behind a task() call: own system prompt, own history, own tool calls. You see one summary; you pay for the whole conversation.</span></button>
+        <button class="flip" type="button"><span class="flip-front">prompt caching</span><span class="flip-back">Provider feature that bills repeated sends of an identical prompt prefix at a steep discount. Tailor-made for an agent's fixed system prompt.</span></button>
+        <button class="flip" type="button"><span class="flip-front">model tiering</span><span class="flip-back">Frontier model for the orchestrator's judgement, cheaper models for mechanical subagent work. Cuts the cost inside the hidden loops.</span></button>
+        <button class="flip" type="button"><span class="flip-front">token budget</span><span class="flip-back">Hard caps on turns and tokens per run and per subagent. Does not lower the average bill — it caps the catastrophic one.</span></button>
+        <button class="flip" type="button"><span class="flip-front">fixed-overhead amortisation</span><span class="flip-back">Why the 2x ratio bends: on tiny tasks the setup cost dominates (worse than 2x); on huge ones it fades and quarantine savings kick in (better than 2x).</span></button>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This chapter is the decoder ring for cost conversations. When a usage dashboard shows one agent run at 40x the median, the trace almost always reveals a subagent that spun in a hidden loop until a budget — or the absence of one — decided the outcome. When a merge request says "moved the tool schemas into the cached prefix" or "downgraded the extraction subagent to the small model", those are Dials 1 and 2 verbatim. In observability tools you will see per-run token columns where deep-agent runs sit at roughly double their plain siblings on the same workload — and now, instead of asking "why is this so expensive?", you can read the receipt: prompt re-sends, planning turns, file traffic, hidden loops.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. A deep agent's system prompt is 2,600 tokens instead of 400. Why does that difference multiply instead of being a one-time cost?</p>
+          <div class="q-opts">
+            <button data-opt="a">Big prompts force the model to produce longer answers, doubling output cost</button>
+            <button data-opt="b">Providers charge a surcharge on prompts above a size threshold</button>
+            <button data-opt="c">The model is stateless, so the full prompt is re-sent — and re-billed — on every single turn of the run</button>
+          </div>
+          <p class="q-explain">Statelessness is the multiplier. A 2,600-token prompt over a 40-turn run is over 100,000 input tokens of pure instructions. This is also exactly why prompt caching (Dial 1) works so well — the re-sent prefix is identical every time.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. In the orchestrator's transcript, a task() call looks like one small tool call and one tidy 350-token summary. Where did the real cost go?</p>
+          <div class="q-opts">
+            <button data-opt="a">Into the summary — condensing text is the expensive part of LLM inference</button>
+            <button data-opt="b">Into a hidden second loop: the subagent's own system prompt, own history, and own tool calls, all fully billed</button>
+            <button data-opt="c">Nowhere — subagent turns are billed to a separate free tier</button>
+          </div>
+          <p class="q-explain">Every subagent is a complete agent: its own big prompt, its own growing transcript, its own metered turns. You pay for the entire hidden conversation and only the summary comes home — that is why subagent spawning is typically the largest line on the receipt.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">3. Which task profile most clearly justifies paying the deep-agent premium?</p>
+          <div class="q-opts">
+            <button data-opt="a">Short and predictable — the overhead is small in absolute terms</button>
+            <button data-opt="b">Long and predictable — more turns means more value from planning</button>
+            <button data-opt="c">Long and unpredictable — you cannot pre-wire the steps, and a plain loop tends to lose the plot and force expensive retries</button>
+          </div>
+          <p class="q-explain">Short tasks do not amortise the fixed overhead, and predictable long tasks are better served by an explicit workflow graph. Long plus unpredictable is where coordination pays: a 2x run that finishes once beats a 1x run that fails and runs twice.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. Which cost dial most directly attacks the re-sent-system-prompt bucket?</p>
+          <div class="q-opts">
+            <button data-opt="a">Prompt caching — the identical prefix gets billed at a steep discount after the first send</button>
+            <button data-opt="b">Token budgets — capping turns shrinks the prompt</button>
+            <button data-opt="c">Lean returns — shorter summaries mean a shorter system prompt</button>
+          </div>
+          <p class="q-explain">Budgets cap the worst-case run and lean returns keep the history slim, but neither touches the fixed prompt. Caching does: the prompt never changes between turns, which makes agent traffic nearly the perfect caching workload.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. In the token-meter simulation, shrinking the task to three evidence calls pushed the ratio well past 2x. Why?</p>
+          <div class="q-opts">
+            <button data-opt="a">Small tasks confuse the planning tool into writing longer plans</button>
+            <button data-opt="b">The deep agent's overhead is largely fixed, so on a tiny task it dwarfs the actual work instead of amortising across many turns</button>
+            <button data-opt="c">The simulation rounds small numbers up, inflating short runs</button>
+          </div>
+          <p class="q-explain">Plans, file setup, and subagent briefings cost roughly the same whether the job is tiny or huge. Spread over three working turns, that fixed cost dominates; spread over sixty, it fades — which is why the 2x folk number describes mid-size tasks and bends at both extremes.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Deep agents cost roughly double a plain loop on the same task — not from waste, but from coordination: a bigger system prompt, planning turns, file traffic, and subagent spawning.</li>
+          <li>Because the model is stateless, every token in context is a per-turn tax: the big prompt and the plan are re-sent and re-billed on every turn of the run.</li>
+          <li>Subagent spawning is usually the largest line item — each task() call runs a complete hidden loop with its own prompt and history, and you pay for all of it while seeing only the summary.</li>
+          <li>Decide by task shape: short or predictable work belongs to prompts, pipelines, or plain loops; long <em>and</em> unpredictable work is where the 2x premium buys reliability — and a first-time finish at 2x beats a failed 1x run plus a retry.</li>
+          <li>Four dials claw the premium back: prompt caching for the fixed prefix, model tiering inside subagents, hard turn/token budgets against the catastrophic run, and lean summaries that keep bulk out of the metered context.</li>
+          <li>The ratio bends at the extremes — worse than 2x on tiny tasks (fixed overhead dominates), better on huge ones (fresh subagent contexts beat one ever-growing history).</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

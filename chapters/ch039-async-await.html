@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Async: why agent code says await — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch039">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IV · Talking to the Model</div>
+        <h1>Async: why agent code says await</h1>
+        <p class="ch-tagline">Every agent codebase is littered with the words async and await. By the end of this chapter they will read like plain English — because they describe something you have watched a good cook do a thousand times.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 40 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Watch the lone chef at a busy dhaba on a Sunday morning. Three orders come in at once: dal, rice, and an omelette. A bad chef would cook them one at a time — put the rice on, then stand there staring at the pot for ten minutes while it boils, then start the dal. The queue outside would riot.</p>
+        <p>The real chef does something smarter. Rice goes on the flame — and the moment the water is doing the work, she turns away and starts chopping onions for the omelette. Dal goes into the pressure cooker — and while it hisses, she cracks the eggs. When the cooker whistles, she comes back to it, exactly where she left off. One pair of hands, three dishes in flight, and not one second spent watching water boil.</p>
+        <p>Notice what she is <em>not</em> doing: she has not hired two more chefs, and she is never doing two things with her hands at the same instant. She is simply refusing to be idle while she waits. That refusal has a name in Python: <strong>async</strong>. The pot of boiling water is a network call to an LLM. The chef is the event loop. And the moment she says "this pot needs ten minutes on its own — I'm free until it whistles"? That is the word <strong>await</strong>.</p>
+      </section>
+
+      <h2>You already know a function that can pause</h2>
+      <p>The <a href="ch038-generators-and-yield.html">previous chapter</a> gave you the strangest idea in Python so far: a generator is a function that can <em>pause</em> mid-execution at a <code>yield</code>, hand something out, and later resume from exactly that line with all its local variables intact. A normal function is a sprint from top to bottom; a generator is a walk with benches along the way. If that idea has settled in, this chapter is downhill: <strong>an async function is the same pausable machinery, plus a scheduler that decides who runs while somebody is sitting on a bench.</strong> Under the hood, Python's async system was literally built out of generator plumbing. You are not learning a new trick — you are meeting the same trick wearing a chef's apron.</p>
+      <p>Here is the whole chapter in one sentence: <em>async lets one Python program keep many slow operations in flight at once, by pausing whichever function is waiting and running another one in the meantime.</em> Everything else is vocabulary and syntax.</p>
+
+      <h2>Two kinds of slow: waiting versus working</h2>
+      <p>Before the syntax, one distinction that decides whether async helps you at all. Programs are slow for two very different reasons.</p>
+      <p>A task is <dfn>I/O-bound</dfn> when the computer spends its time <em>waiting on the outside world</em> — a network reply, a disk read, a database answer. I/O stands for input/output, and the defining feature is that your CPU is doing essentially nothing during the wait. This is the pot of rice: once it is on the flame, standing next to it adds no value.</p>
+      <p>A task is <dfn>CPU-bound</dfn> when the computer spends its time <em>actually computing</em> — crunching a spreadsheet of a million rows, resizing images, training a model. This is chopping onions: it needs the chef's hands the whole time, and no amount of clever scheduling makes one pair of hands chop faster.</p>
+      <p>Async helps with waiting, not with working. It does not add chefs; it stops the chef standing idle. Now look at where the time in an LLM call actually goes — the numbers below are round and illustrative, but the proportions are honest:</p>
+
+      <div data-bars data-title="Where 10 seconds of an LLM API call goes" data-unit="ms"
+           data-note="Your machine's actual work is a sliver. Almost the entire call is waiting for the network and for GPUs in someone else's data centre — which is exactly the kind of slow that async rescues.">
+        <div class="bar" data-label="Your CPU: building and parsing the request" data-value="50"></div>
+        <div class="bar" data-label="Waiting: network + the model thinking" data-value="9950"></div>
+      </div>
+
+      <p>This is why LLM calls are the textbook case for async. Your machine sends a few kilobytes of <a href="ch033-first-api-call.html">JSON</a>, then sits on its hands for two, ten, sometimes thirty seconds while distant GPUs do the heavy lifting. Make three independent model calls one at a time and you are the bad chef staring at the pot — thirty seconds of doing nothing, in instalments.</p>
+
+      <h2>The event loop is the chef</h2>
+      <p>So who decides which paused function resumes, and when? A small piece of machinery called the <dfn>event loop</dfn> — a scheduler that keeps a list of paused functions, watches for their waits to finish (a network reply arriving, a timer expiring), and resumes whichever one is ready. It is the chef's brain: one worker, a mental list of dishes in flight, and a rule — <em>never stand idle while a pot is boiling</em>.</p>
+      <p>The functions the event loop juggles are called <dfn>coroutines</dfn> — functions declared with <code>async def</code> that can pause at every <code>await</code> and resume later, exactly like a generator pausing at <code>yield</code>. Step through one Sunday-morning service to see the whole system move:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Orders arrive">
+          <h3>1. Three orders arrive</h3>
+          <div class="diagram">
+            <div class="d-box hot">Event loop<small>the chef — one worker</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Dish A<small>rice — coroutine</small></div>
+            <div class="d-box dim">Dish B<small>dal — coroutine</small></div>
+            <div class="d-box dim">Dish C<small>omelette — coroutine</small></div>
+          </div>
+          <p class="step-cap">Three coroutines are created and handed to the event loop. Nothing is cooking yet — a coroutine, like a generator, does nothing until someone starts it.</p>
+        </div>
+        <div class="step" data-title="Start A, hit a wait">
+          <h3>2. Dish A runs — until it hits await</h3>
+          <div class="diagram">
+            <div class="d-box">Event loop</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Dish A<small>rice on the flame — await 10 min</small></div>
+            <div class="d-box dim">Dish B</div>
+            <div class="d-box dim">Dish C</div>
+          </div>
+          <p class="step-cap">The loop runs dish A's code line by line — fill pot, add rice, light flame — until it reaches <code>await</code>: "this now needs unattended time". A is parked with a bookmark at that exact line.</p>
+        </div>
+        <div class="step" data-title="Switch to B">
+          <h3>3. The chef switches — only at the await</h3>
+          <div class="diagram">
+            <div class="d-box">Event loop</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Dish A<small>boiling, timer set</small></div>
+            <div class="d-box hot">Dish B<small>dal in the cooker — await</small></div>
+            <div class="d-box dim">Dish C</div>
+          </div>
+          <p class="step-cap">With A parked, the loop picks up dish B and runs it to <em>its</em> await. This is the crucial rule: switches happen only at await points, never mid-line. The chef finishes a motion before turning away.</p>
+        </div>
+        <div class="step" data-title="A timer rings">
+          <h3>4. A wait finishes — the coroutine resumes</h3>
+          <div class="diagram">
+            <div class="d-box">Event loop<small>hears the whistle</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Dish A<small>resumes at its bookmark</small></div>
+            <div class="d-box dim">Dish B<small>still cooking</small></div>
+            <div class="d-box">Dish C<small>eggs whisked — await pan</small></div>
+          </div>
+          <p class="step-cap">The rice timer rings. The event loop resumes dish A from the exact line it paused on, local variables intact — the same resume-where-you-left-off magic you saw with generators.</p>
+        </div>
+        <div class="step" data-title="Service">
+          <h3>5. All three go out — in the time of the longest dish</h3>
+          <div class="diagram">
+            <div class="d-box good">Dish A<small>served</small></div>
+            <div class="d-box good">Dish B<small>served</small></div>
+            <div class="d-box good">Dish C<small>served</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Total time<small>= the slowest dish, not the sum</small></div>
+          </div>
+          <p class="step-cap">Because all the waiting overlapped, three dishes took roughly as long as the slowest one alone. Three ten-second LLM calls: thirty seconds sequentially, about ten with async. Same hands, same flame.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Async is <strong>concurrency, not parallelism</strong>. There is still exactly one chef — one thread, doing one thing at any instant. The speed-up comes entirely from overlapping the <em>waiting</em>. That is also why async does nothing for CPU-bound work: if all three dishes were pure chopping, one pair of hands would take just as long in any order. (For genuinely parallel computation Python offers processes and threads — a different tool for a different problem, and rarely needed in agent code.)</p></div>
+
+      <p>Six words carry the rest of this chapter. Flip until they feel obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">coroutine</span><span class="flip-back">A pausable function, declared with async def. Runs until an await, parks with a bookmark, resumes later with all its variables intact.</span></button>
+        <button class="flip" type="button"><span class="flip-front">event loop</span><span class="flip-back">The scheduler — the chef. One worker that runs whichever coroutine is ready and parks whichever one is waiting.</span></button>
+        <button class="flip" type="button"><span class="flip-front">await</span><span class="flip-back">"This will take a while on its own — park me here, let others run, wake me with the result." Also the only place a switch can happen.</span></button>
+        <button class="flip" type="button"><span class="flip-front">asyncio.gather</span><span class="flip-back">"Start all of these at once and give me every result, in order, when the last one finishes." The fan-out tool.</span></button>
+        <button class="flip" type="button"><span class="flip-front">I/O-bound</span><span class="flip-back">Slow because of waiting on the outside world — network, disk, an LLM. The CPU is idle. Async's home turf.</span></button>
+        <button class="flip" type="button"><span class="flip-front">blocking call</span><span class="flip-back">A slow call with no await — the chef staring at the pot. It freezes the whole event loop; every other coroutine stalls with it.</span></button>
+      </div>
+
+      <h2>The syntax: three rules and you can read anything</h2>
+      <p>Here is the smallest complete async program, in the shape you will see in real repositories:</p>
+
+      <div class="code-title">smallest_async.py</div>
+      <pre><code class="language-python">import asyncio
+
+async def main():
+    print("kitchen open")
+    await asyncio.sleep(1)     # a stand-in for any slow wait
+    print("kitchen closed")
+
+asyncio.run(main())            # opens the kitchen: starts the event loop</code></pre>
+
+      <p>Three rules govern everything you just read:</p>
+      <p><strong>Rule 1 — <code>async def</code> declares, it does not hurry.</strong> Writing <code>async def main():</code> makes <code>main</code> a coroutine function. Nothing about it is faster; it has simply been given permission to pause.</p>
+      <p><strong>Rule 2 — calling it does not run it.</strong> This is the rule that trips everyone, so prove it to yourself right now. Just as calling a <a href="ch038-generators-and-yield.html">generator function</a> hands you a generator object without running any code, calling a coroutine function hands you a coroutine object — a dish ticket, not a dish. Only <code>await</code> (or the event loop) actually cooks it:</p>
+
+      <div class="pyrun" data-title="Rule 2, live: calling is not running">
+<textarea class="py-src" spellcheck="false">
+import asyncio
+
+async def make_tea():
+    await asyncio.sleep(0.1)   # the kettle takes a moment
+    return "tea is ready"
+
+# Calling the async function does NOT run it...
+order = make_tea()
+print("calling it gives you: ", order)
+
+# ...await is what actually runs it and hands back the return value.
+result = await make_tea()
+print("awaiting it gives you:", result)
+
+# Tidy up the never-awaited ticket, or Python will warn about it.
+order.close()
+</textarea>
+      </div>
+
+      <p><strong>Rule 3 — <code>await</code> only lives inside <code>async def</code>, and someone must start the loop.</strong> A plain script cannot pause at top level, so the entry point is always the one synchronous line <code>asyncio.run(main())</code> — it builds the event loop, runs <code>main</code> to completion, and shuts the kitchen. Every async program you will ever read is a pyramid: one <code>asyncio.run</code> at the bottom, <code>async def</code> functions awaiting each other above it.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Sharp-eyed readers will notice the runnable box above awaited at top level with no <code>asyncio.run</code> in sight. That works here because this page — like a Jupyter notebook — already has an event loop running, so top-level <code>await</code> is allowed. In a plain <code>.py</code> file it is a SyntaxError. If you have ever pasted agent code into a notebook and it worked, then failed as a script: this is why.</p></div>
+
+      <h2>asyncio.gather: the whole point in one function</h2>
+      <p>One coroutine awaiting one call gains you nothing — a chef with a single order might as well watch the pot. The payoff arrives when several independent waits can overlap, and the tool for that is <dfn>asyncio.gather</dfn> — give it several coroutines and it starts them all, overlaps their waits, and returns the results in the order you passed them in (not the order they finished).</p>
+      <p>The demo below is the heart of this chapter. The <code>fake_llm</code> function stands in for a real model call — and it is an honest stand-in, because like the real thing it does almost no local work, it just waits. Run it and read the two totals at the end:</p>
+
+      <div class="pyrun" data-title="Sequential vs gather — three model calls, timed">
+<textarea class="py-src" spellcheck="false">
+import asyncio, time
+
+async def fake_llm(task, seconds):
+    # Stand-in for a real LLM API call. Like the real thing,
+    # it is 99% waiting -- so asyncio.sleep is a fair imposter.
+    await asyncio.sleep(seconds)
+    return f"[{task}] answer ready ({seconds}s of model thinking)"
+
+async def one_by_one():
+    print("-- one by one: each await finishes before the next starts")
+    t0 = time.perf_counter()
+    print("  ", await fake_llm("summarise the meeting", 0.4))
+    print("  ", await fake_llm("draft the reply", 0.4))
+    print("  ", await fake_llm("label the priority", 0.4))
+    print(f"   total: {time.perf_counter() - t0:.2f}s")
+
+async def all_at_once():
+    print("-- all at once: asyncio.gather overlaps the waiting")
+    t0 = time.perf_counter()
+    results = await asyncio.gather(
+        fake_llm("summarise the meeting", 0.4),
+        fake_llm("draft the reply", 0.4),
+        fake_llm("label the priority", 0.4),
+    )
+    for r in results:
+        print("  ", r)
+    print(f"   total: {time.perf_counter() - t0:.2f}s")
+
+await one_by_one()
+await all_at_once()
+</textarea>
+      </div>
+
+      <p>Same three calls, same one chef: roughly 1.2 seconds sequentially, roughly 0.4 concurrently — the time of the slowest call, not the sum. Now scale the numbers up: an agent that fans a document out to five summarising calls at eight seconds each goes from forty seconds to eight. Nothing about the model got faster. You simply stopped queueing your waiting.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it on purpose. In <code>all_at_once</code>, change one call to <code>0.9</code> seconds and confirm the total tracks the slowest dish. Then delete the word <code>await</code> in front of <code>asyncio.gather(...)</code> and read the complaint — you will meet that exact message in real logs one day, and now it will be an old friend.</p></div>
+
+      <h2>Why LLM calls are async's favourite customer</h2>
+      <p>Every property of a model call is the property async was invented for. The waits are enormous — seconds, not milliseconds. The calls are often independent — judging five candidate answers, embedding a hundred chunks for <a href="ch042-rag.html">retrieval</a>, fanning a task out to subagents — so they can genuinely overlap. And agent servers must serve many users at once: while user A's request waits on a model, the same event loop serves users B and C. This is why the ecosystem went async from top to bottom.</p>
+      <p>Here is what the pattern looks like with a real SDK instead of a fake — the same fan-out shape, dressed for production. Click the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">clause_review.py — three independent model calls, concurrently</div>
+        <div class="wl-line"><code>import asyncio</code></div>
+        <div class="wl-line"><code>from anthropic import AsyncAnthropic</code>
+          <div class="wl-note">Every major LLM SDK ships two clients: a synchronous one and an async twin. Same methods, same arguments — the async one just returns awaitables. Seeing <code>Async</code> in an import is your first clue about how the whole file will read.</div></div>
+        <div class="wl-line"><code>client = AsyncAnthropic()</code>
+          <div class="wl-note">Identical setup to the sync client from <a href="ch033-first-api-call.html">your first API call</a> — it reads the API key from the environment. The client object is created synchronously; only its network methods are async.</div></div>
+        <div class="wl-line"><code>async def ask(question):</code>
+          <div class="wl-note">A coroutine function: one question in, one answer out. Small async functions like this are the bricks agent codebases are built from.</div></div>
+        <div class="wl-line"><code>    response = await client.messages.create(</code>
+          <div class="wl-note">The await marks the spot where this coroutine parks — the whole network round-trip and the model's thinking happen "off screen" while the event loop runs other work. The method and arguments are exactly the ones you already know; only the word await is new.</div></div>
+        <div class="wl-line"><code>        model="claude-opus-4-8",</code></div>
+        <div class="wl-line"><code>        max_tokens=400,</code></div>
+        <div class="wl-line"><code>        messages=[{"role": "user", "content": question}],</code></div>
+        <div class="wl-line"><code>    )</code></div>
+        <div class="wl-line"><code>    return response.content[0].text</code>
+          <div class="wl-note">After the await resolves, the coroutine resumes here with the response in hand and returns plain text. From the inside, an async function feels exactly like a normal one — do a thing, get a result, carry on.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>async def main():</code></div>
+        <div class="wl-line"><code>    questions = [</code></div>
+        <div class="wl-line"><code>        "Summarise this contract clause in one line: ...",</code></div>
+        <div class="wl-line"><code>        "List the risks hiding in this clause: ...",</code></div>
+        <div class="wl-line"><code>        "Suggest a friendlier rewording: ...",</code></div>
+        <div class="wl-line"><code>    ]</code></div>
+        <div class="wl-line"><code>    answers = await asyncio.gather(*(ask(q) for q in questions))</code>
+          <div class="wl-note">The fan-out. The generator expression builds three coroutine objects — three tickets — and the <code>*</code> unpacks them as separate arguments. gather starts all three; total time is the slowest call, not the sum. Results come back in question order, so the zip below is safe.</div></div>
+        <div class="wl-line"><code>    for q, a in zip(questions, answers):</code></div>
+        <div class="wl-line"><code>        print(q[:40], "-&gt;", a[:60])</code></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>asyncio.run(main())</code>
+          <div class="wl-note">The single synchronous line at the bottom of the pyramid: build the event loop, run main to completion, close the kitchen. In a web server or a notebook a loop already exists, so you await instead — but in a script, this line is the on switch.</div></div>
+      </div>
+
+      <h2>Reading async code without fear</h2>
+      <p>Now the promise in this chapter's title. When you open a real agent file and it bristles with async, use these three habits.</p>
+      <p><strong>Habit 1: mentally delete the keywords.</strong> Here is the secret nobody tells you — async code means <em>exactly the same thing</em> as the code with <code>async</code> and <code>await</code> deleted. Same order of steps, same values, same top-to-bottom logic; the keywords change only the <em>scheduling</em> — who else may run during the waits. So on a first read, ignore them and follow the logic. On a second pass, read each <code>await</code> as a pin saying "slow wait here — the loop serves others during this line".</p>
+      <p><strong>Habit 2: find the pyramid's base.</strong> Somewhere there is one <code>asyncio.run(...)</code> — or a framework (a web server, an MCP runtime) playing that role invisibly. Everything above it is coroutines awaiting coroutines. Once you spot the base, the file has a shape.</p>
+      <p><strong>Habit 3: know the three red flags.</strong> Nearly every async bug you will ever meet in an agent log is one of these:</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p><strong>The missing await.</strong> <code>result = ask(question)</code> without await gives you a coroutine object, not an answer — a dish ticket stapled to the order board, never cooked. Python whispers <code>RuntimeWarning: coroutine 'ask' was never awaited</code> in the logs and your "result" breaks downstream in confusing ways. <strong>The blocking call.</strong> <code>time.sleep(5)</code> — or any slow, plain synchronous call — inside an async function is the chef staring at the pot: it has no await, so the loop cannot switch away, and <em>every</em> coroutine in the program freezes for those five seconds. The async-aware twin (<code>await asyncio.sleep(5)</code>, an async HTTP client, an async database driver) is the fix. <strong>The CPU hog.</strong> Ten seconds of pure number-crunching inside a coroutine blocks the loop just as badly — async overlaps waiting, and chopping onions is not waiting.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any modern agent repository and async is everywhere. Web frameworks like FastAPI expect <code>async def</code> route handlers, so an agent's API endpoints nearly always are. The MCP Python SDK runs servers on async plumbing, and tool functions are routinely declared <code>async def</code>. LangChain names the async twin of every method by prefixing an <code>a</code> — <code>invoke</code> / <code>ainvoke</code>, <code>stream</code> / <code>astream</code> — so when a colleague's merge request "switches to ainvoke", they are moving a call onto the event loop. Fan-out code — judging candidates, embedding batches, parallel subagents — is where you will spot <code>asyncio.gather</code>. And in the logs, <code>RuntimeWarning: coroutine ... was never awaited</code> plus the review comment "this blocks the event loop" are the two async ailments you can now diagnose on sight. The <a href="ch040-streaming-responses.html">next chapter</a> adds the last construct you need — <code>async for</code>, which is how token-by-token streaming arrives — and the agent loop you will build in <a href="ch045-react-loop-by-hand.html">Act V</a> slots straight into this machinery.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A coroutine reaches <code>await client.messages.create(...)</code>. What happens at that instant?</p>
+          <div class="q-opts">
+            <button data-opt="a">The whole program freezes until the model replies</button>
+            <button data-opt="b">The event loop parks this coroutine and runs other ready coroutines until the reply arrives</button>
+            <button data-opt="c">Python spawns a new thread to handle the network call</button>
+          </div>
+          <p class="q-explain">await is the chef turning away from the boiling pot: this coroutine is bookmarked and parked, the loop serves whoever else is ready, and the coroutine resumes with the result when the wait completes. One thread, no freezing — that is the whole trick.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. You write <code>answer = ask("Summarise this")</code> where <code>ask</code> is an <code>async def</code> function — and forget the await. What lands in <code>answer</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">The answer, computed a little more slowly than usual</button>
+            <button data-opt="b">None, because the function never returns without await</button>
+            <button data-opt="c">A coroutine object — a ticket for work that never ran</button>
+          </div>
+          <p class="q-explain">Calling a coroutine function only creates the coroutine, exactly as calling a generator function only creates the generator. Nothing runs until it is awaited — hence the log line "coroutine 'ask' was never awaited" and a downstream crash when code expects text and finds a ticket.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Three independent LLM calls take about 10 seconds each. Roughly how long does <code>await asyncio.gather(call1, call2, call3)</code> take?</p>
+          <div class="q-opts">
+            <button data-opt="a">About 10 seconds — the waits overlap, so total time tracks the slowest call</button>
+            <button data-opt="b">About 30 seconds — they still run one after another underneath</button>
+            <button data-opt="c">About 3.3 seconds — the work is split three ways</button>
+          </div>
+          <p class="q-explain">gather starts all three and lets their waiting overlap, so the total is roughly the longest single call. It cannot beat the slowest call — async removes queued-up idleness, it does not make any individual pot boil faster.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Why is an LLM API call such a perfect fit for async?</p>
+          <div class="q-opts">
+            <button data-opt="a">Models respond faster when the request is sent asynchronously</button>
+            <button data-opt="b">The call is almost entirely waiting — your CPU is idle while distant GPUs think, and async reclaims that idle time</button>
+            <button data-opt="c">Async requests are given priority in the provider's queue</button>
+          </div>
+          <p class="q-explain">A model call is extreme I/O-bound work: a sliver of local effort, then seconds of pure waiting. Async changes nothing on the provider's side — it just lets your one thread do other useful things during the wait.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A tired developer puts <code>time.sleep(5)</code> inside an <code>async def</code> tool. What actually happens?</p>
+          <div class="q-opts">
+            <button data-opt="a">Only that coroutine sleeps; the others carry on normally</button>
+            <button data-opt="b">The event loop notices and quietly converts it to asyncio.sleep</button>
+            <button data-opt="c">The entire event loop stalls for 5 seconds — every coroutine in the program freezes</button>
+          </div>
+          <p class="q-explain">time.sleep has no await, so the loop never gets a chance to switch away — the chef stands staring at the pot while every other dish burns. Blocking calls inside async code are the classic "our agent server went unresponsive" bug; the fix is the async twin, await asyncio.sleep(5).</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Async is the dhaba chef's rule: one worker, many dishes, never idle while a pot boils. Concurrency by overlapping <em>waits</em> — not parallelism, and no extra chefs.</li>
+          <li>It only pays off for I/O-bound work — waiting on networks, disks, and above all LLM calls, which are seconds of idle waiting wrapped around a sliver of local work. CPU-bound chopping gains nothing.</li>
+          <li><code>async def</code> makes a pausable coroutine (generator machinery in an apron); calling it makes a ticket, only <code>await</code> cooks it; <code>asyncio.run(main())</code> is the one synchronous line that opens the kitchen.</li>
+          <li><code>asyncio.gather</code> is the payoff: start several independent calls, overlap their waits, get results in order — total time tracks the slowest call, not the sum.</li>
+          <li>To read async code fearlessly: mentally delete the keywords and the logic reads as ordinary top-to-bottom code; each <code>await</code> is just a pin marking "slow wait here, others may run".</li>
+          <li>The three bugs to spot in the wild: a missing await (ticket, never cooked), a blocking call in a coroutine (chef staring at the pot, whole loop frozen), and CPU-heavy work hogging the loop.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading real code: your first AI script — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch010">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act I · The Language</div>
+        <h1>Reading real code: your first AI script</h1>
+        <p class="ch-tagline">Nine chapters ago this page would have been hieroglyphics. Today you will read a real, production-shaped script that calls a live LLM — every line of it — and discover that nothing on it is new to you.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 10 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You are in a taxi from the airport, in a country whose alphabet you have been learning for two months. Flashcards over morning tea. Letter drills on the commute. Vowel marks that hang off consonants like earrings. It has felt, honestly, a little abstract — squiggles on cards, graded exercises, nothing real.</p>
+        <p>Then, at a red light, a glowing sign above a small shop. You do what learners do: you sound it out. First letter. Second. Third — and the sounds snap together into a word you already know: <em>coffee</em>. Nobody translated it for you. Nothing about that sign was designed for beginners. You read it because you spent two months collecting pieces, and at that traffic light the pieces quietly assembled themselves.</p>
+        <p>This chapter is that taxi ride. You have spent nine chapters on the alphabet of Python. Below is a real sign — an actual script that sends a question to a commercial AI model over the internet. Same drill: sound it out. You are about to discover you already read it.</p>
+      </section>
+
+      <h2>Nine chapters, and nothing new today</h2>
+      <p>First, a promise: this chapter introduces <strong>zero new syntax</strong>. Everything on the page comes from what you already own. From <a href="ch001-why-python-looks-like-that.html">chapter 1</a> you can see structure at a glance — indentation shows what belongs to what. From <a href="ch002-names-and-objects.html">chapter 2</a> you know a variable is a name stuck on an object. <a href="ch003-strings-and-fstrings.html">Chapter 3</a> gave you strings and the <code>f"..."</code> trick for stitching values into text, and <a href="ch004-collections.html">chapter 4</a> gave you the containers — above all the dict and the list, looked up with square brackets.</p>
+      <p>Then <a href="ch005-yaml-and-json.html">chapter 5</a> showed you that JSON is just dicts and lists in costume, <a href="ch006-control-flow.html">chapter 6</a> taught the program's three decision moves, <a href="ch007-functions.html">chapter 7</a> made every <code>def</code> line readable, <a href="ch008-comprehensions.html">chapter 8</a> unfolded the one-line loop, and <a href="ch009-errors-and-tracebacks.html">chapter 9</a> — just last chapter — taught you to read a traceback calmly, bottom-up. Nine tools on the belt. Today we use all of them at once, on the real thing.</p>
+      <p>The script you are about to read is not a teaching toy. It is the standard shape of "call an LLM from Python over raw HTTP" — the shape you will find in provider quick-start guides, in gists, and in a thousand utility scripts sitting in real repositories. If you can read this, you can read the first AI script anyone at work will ever show you.</p>
+
+      <h2>Meet the script</h2>
+      <p>Here it is: about twenty lines that send one question to a hosted language model and print the answer. Do not study it yet. Just <em>look</em> at it the way chapter 1 taught you — let your eyes find the shapes. Try to spot: exactly one function definition, two dicts, one list, one f-string, and the single line where anything actually leaves your computer.</p>
+
+      <div class="code-title">ask.py — a real script that asks an LLM one question</div>
+      <pre><code class="language-python">import os
+import requests
+
+API_KEY = os.environ["OPENAI_API_KEY"]
+URL = "https://api.openai.com/v1/chat/completions"
+
+def ask(question):
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": "Answer in one short paragraph."},
+            {"role": "user", "content": question},
+        ],
+    }
+    response = requests.post(URL, headers=headers, json=payload, timeout=30)
+    response.raise_for_status()
+    data = response.json()
+    return data["choices"][0]["message"]["content"]
+
+answer = ask("Why is the sky blue?")
+print(answer)</code></pre>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The two <code>import</code> lines at the top are the one thing we have not formally covered — they are the star of the <a href="ch011-imports-and-modules.html">very next chapter</a>. For today, read <code>import os</code> as "bring me the toolbox named <code>os</code>". The second toolbox, <code>requests</code>, is the most popular Python library for talking to the web. Also: the model name is just a string, and providers rotate model names every few months — swap that one string and the rest of the script does not change.</p></div>
+
+      <h2>What actually happens when you press Enter</h2>
+      <p>Before the line-by-line reading, watch the whole journey once from above. You type <code>python3 ask.py</code> in a terminal, and this happens:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Top to bottom">
+          <h3>1. Python reads the file top to bottom</h3>
+          <div class="diagram">
+            <div class="d-box hot">Terminal<small>python3 ask.py</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Python<small>runs the script</small></div>
+            <div class="d-box dim">Internet</div>
+            <div class="d-box dim">Provider<small>the model</small></div>
+          </div>
+          <p class="step-cap">Exactly as <a href="ch001-why-python-looks-like-that.html">chapter 1</a> promised: the file is executed from the first line to the last. The <code>def</code> block is read and remembered, but its body does not run until someone calls it.</p>
+        </div>
+        <div class="step" data-title="Setup">
+          <h3>2. The setup lines run: key and address</h3>
+          <div class="diagram">
+            <div class="d-box dim">Terminal</div>
+            <div class="d-box hot">Python<small>API_KEY = ..., URL = ...</small></div>
+            <div class="d-box dim">Internet</div>
+            <div class="d-box dim">Provider</div>
+          </div>
+          <p class="step-cap">Two names get stuck on two values: the secret key, fetched from the environment where you exported it earlier, and the web address of the model provider. Nothing has left the machine yet.</p>
+        </div>
+        <div class="step" data-title="Build the parcel">
+          <h3>3. ask() is called and builds the parcel</h3>
+          <div class="diagram">
+            <div class="d-box dim">Terminal</div>
+            <div class="d-box hot">Python<small>headers + payload dicts built</small></div>
+            <div class="d-box dim">Internet</div>
+            <div class="d-box dim">Provider</div>
+          </div>
+          <p class="step-cap">Inside the function, two dicts are assembled — plain <a href="ch004-collections.html">chapter 4 containers</a>. One is the envelope (who is asking), one is the contents (which model, what conversation). Still no internet.</p>
+        </div>
+        <div class="step" data-title="The flight">
+          <h3>4. One line makes the trip</h3>
+          <div class="diagram">
+            <div class="d-box dim">Terminal</div>
+            <div class="d-box">Python</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Internet<small>HTTPS POST, payload as JSON</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Provider</div>
+          </div>
+          <p class="step-cap"><code>requests.post</code> converts the payload dict into JSON text — the costume change from <a href="ch005-yaml-and-json.html">chapter 5</a> — and sends it, encrypted, to the provider's address. This is the only line in the whole file that touches the network.</p>
+        </div>
+        <div class="step" data-title="The model answers">
+          <h3>5. The model generates, and JSON flies back</h3>
+          <div class="diagram">
+            <div class="d-box dim">Terminal</div>
+            <div class="d-box">Python</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box">Internet</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Provider<small>generates a reply, returns JSON + status code</small></div>
+          </div>
+          <p class="step-cap">On the provider's servers, the model reads the messages and writes a reply. It comes back as JSON text, stamped with a status code — 200 for "all good", or an error number if something went wrong.</p>
+        </div>
+        <div class="step" data-title="Unpack and print">
+          <h3>6. Unpack the reply, print the answer</h3>
+          <div class="diagram">
+            <div class="d-box good">Terminal<small>the answer appears</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box good">Python<small>JSON to dict, dig, print</small></div>
+            <div class="d-box dim">Internet</div>
+            <div class="d-box dim">Provider</div>
+          </div>
+          <p class="step-cap">The script checks the status, parses the JSON back into dicts and lists, digs the answer out with square brackets, and prints it. From step 5 onwards it is pure chapter 4 again — containers all the way down.</p>
+        </div>
+      </div>
+
+      <h2>Six words from the internet half</h2>
+      <p>Half of this script is Python you know. The other half is web plumbing, and it needs only six words. Flip each card until they feel obvious — they will follow you through the whole course:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">API key</span><span class="flip-back">A long secret string that proves to the provider who is calling (and whose card to bill). Treated like a password: kept out of files, passed in via the environment.</span></button>
+        <button class="flip" type="button"><span class="flip-front">endpoint</span><span class="flip-back">The specific web address you send a request to — the door you knock on. Here it is the provider's chat endpoint, stored in the URL variable.</span></button>
+        <button class="flip" type="button"><span class="flip-front">POST</span><span class="flip-back">The kind of web request that carries a parcel of data with it. Fetching a page is a GET; sending a payload to be processed is a POST.</span></button>
+        <button class="flip" type="button"><span class="flip-front">header</span><span class="flip-back">A label on the envelope of a request — metadata like "here is my key". Travels alongside the payload, not inside it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">payload</span><span class="flip-back">The body of the request: the actual data you are sending. In Python it is a dict; on the wire it becomes JSON text.</span></button>
+        <button class="flip" type="button"><span class="flip-front">status code</span><span class="flip-back">A three-digit number stamped on every reply. 200 means success. 401 means bad key, 429 means slow down, 500 means the server itself broke.</span></button>
+      </div>
+
+      <p>One of those six deserves a second look: the <dfn>messages list</dfn> — the list of dicts inside the payload, where each dict is one turn of a conversation with a <code>"role"</code> and a <code>"content"</code>. This exact shape appears in every provider's API and every framework you will ever meet. A <code>system</code> turn carries the standing instructions; a <code>user</code> turn carries the question. Learn this shape once and you will recognise it for the rest of your career.</p>
+
+      <h2>Every line, one at a time</h2>
+      <p>Now the slow tour. Click each line and check that the note matches what you already expected — the goal is not to learn the lines but to notice that every single one is built from chapters 1 to 9. Boring is the target. Boring means fluent.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">ask.py — read with nine chapters of Python</div>
+        <div class="wl-line"><code>import os</code>
+          <div class="wl-note">Bring in the toolbox named <code>os</code> — Python's operating-system tools. How importing really works is <a href="ch011-imports-and-modules.html">the next chapter's</a> whole business; for now, "fetch that toolbox" is a perfectly good reading.</div></div>
+        <div class="wl-line"><code>import requests</code>
+          <div class="wl-note">A second toolbox: <code>requests</code>, the de-facto standard library for web calls. It is not built into Python — someone installed it — which is exactly why this line can fail with an error you now know how to read (<a href="ch009-errors-and-tracebacks.html">chapter 9</a>).</div></div>
+        <div class="wl-line"><code>API_KEY = os.environ["OPENAI_API_KEY"]</code>
+          <div class="wl-note">A name stuck on a value (<a href="ch002-names-and-objects.html">chapter 2</a>). The value comes from <code>os.environ</code>, which behaves like a dict of the terminal's environment variables — so the square-bracket lookup is pure <a href="ch004-collections.html">chapter 4</a>. The secret was exported in the terminal before the run; it never appears in the file. If the variable is missing, this raises a <code>KeyError</code> and the run dies with a traceback on line 4.</div></div>
+        <div class="wl-line"><code>URL = "https://api.openai.com/v1/chat/completions"</code>
+          <div class="wl-note">Just a string (<a href="ch003-strings-and-fstrings.html">chapter 3</a>) holding the endpoint address. The ALL-CAPS names are a convention, not a rule: "set once at the top, treat as fixed".</div></div>
+        <div class="wl-line"><code>def ask(question):</code>
+          <div class="wl-note">A signature you can read in your sleep after <a href="ch007-functions.html">chapter 7</a>: define a function called <code>ask</code> with one required parameter, colon, body indented below. Nothing inside runs yet — this is a recipe being filed, not cooked.</div></div>
+        <div class="wl-line"><code>    headers = {"Authorization": f"Bearer {API_KEY}"}</code>
+          <div class="wl-note">A one-entry dict whose value is an f-string (<a href="ch003-strings-and-fstrings.html">chapter 3</a>) stitching the key after the word Bearer — the exact wording this provider's door expects. This is the envelope label: "here is who I am".</div></div>
+        <div class="wl-line"><code>    payload = {</code>
+          <div class="wl-note">An opening brace with nothing after it: this dict is split across several lines for readability. Multi-line dicts read exactly like one-line dicts — just match the braces, as you practised in <a href="ch005-yaml-and-json.html">chapter 5</a>.</div></div>
+        <div class="wl-line"><code>        "model": "gpt-4o-mini",</code>
+          <div class="wl-note">First key-value pair: which model should answer. A plain string. Swapping models is editing this one value.</div></div>
+        <div class="wl-line"><code>        "messages": [</code>
+          <div class="wl-note">Second key: the conversation itself. Its value is a list — the bracket opens here and closes three lines down (<a href="ch004-collections.html">chapter 4</a>).</div></div>
+        <div class="wl-line"><code>            {"role": "system", "content": "Answer in one short paragraph."},</code>
+          <div class="wl-note">One dict per conversation turn. The <code>system</code> role carries the standing instructions — the model's briefing before the user says anything.</div></div>
+        <div class="wl-line"><code>            {"role": "user", "content": question},</code>
+          <div class="wl-note">The user's turn. Look closely: <code>question</code> has no quotes. It is the function's parameter (<a href="ch007-functions.html">chapter 7</a>) — whatever text the caller passed in lands here. This is the exact spot where your words enter the payload.</div></div>
+        <div class="wl-line"><code>        ],</code>
+          <div class="wl-note">The list of messages closes.</div></div>
+        <div class="wl-line"><code>    }</code>
+          <div class="wl-note">And the payload dict closes. Read the structure back: a dict holding a string and a list of dicts. That is precisely the JSON shape from <a href="ch005-yaml-and-json.html">chapter 5</a>, still wearing its Python clothes.</div></div>
+        <div class="wl-line"><code>    response = requests.post(URL, headers=headers, json=payload, timeout=30)</code>
+          <div class="wl-note">The only line that touches the internet. A function call with one positional and three keyword arguments (<a href="ch007-functions.html">chapter 7</a>). <code>json=payload</code> converts the dict to JSON text and sends it; <code>timeout=30</code> means "give up after 30 seconds rather than hang forever". Every line before this was packing luggage. This line is the flight.</div></div>
+        <div class="wl-line"><code>    response.raise_for_status()</code>
+          <div class="wl-note">Checks the status code on the reply. If the provider said 401 (bad key), 429 (slow down) or 500 (their side broke), this raises an exception and the <a href="ch009-errors-and-tracebacks.html">chapter 9</a> traceback machinery takes over. If the status is 200 it does nothing at all — a silent guard.</div></div>
+        <div class="wl-line"><code>    data = response.json()</code>
+          <div class="wl-note">The reply arrived as JSON text; <code>.json()</code> parses it back into Python dicts and lists (<a href="ch005-yaml-and-json.html">chapter 5</a>, in reverse). From here on there is no more network — just containers.</div></div>
+        <div class="wl-line"><code>    return data["choices"][0]["message"]["content"]</code>
+          <div class="wl-note">Four hops of digging, all <a href="ch004-collections.html">chapter 4</a>: the key <code>"choices"</code> holds a list; <code>[0]</code> takes its first item; inside that, <code>"message"</code>, then <code>"content"</code> — the model's actual words. <code>return</code> hands them back to whoever called.</div></div>
+        <div class="wl-line"><code>answer = ask("Why is the sky blue?")</code>
+          <div class="wl-note">Back at zero indentation, so this runs at the top level (<a href="ch001-why-python-looks-like-that.html">chapter 1</a>). The recipe finally gets cooked: <code>ask</code> is called with a literal question, and the name <code>answer</code> is stuck on whatever comes back (<a href="ch002-names-and-objects.html">chapter 2</a>).</div></div>
+        <div class="wl-line"><code>print(answer)</code>
+          <div class="wl-note">The model's words land on your screen. That is the whole script.</div></div>
+      </div>
+
+      <p>Count what just happened. Nineteen lines of production-shaped code, and the notes needed nothing beyond chapters 1 to 9 plus six words of web vocabulary. That foreign sign at the traffic light? You just read it.</p>
+
+      <h2>Run it — with a stunt double for the internet</h2>
+      <p>Reading is good; running is better. This page cannot call a paid API — there is no network here and no real key — so the internet is played by a stunt double: a function called <code>fake_post</code> that stands in for <code>requests.post</code> and returns a canned reply in the provider's exact JSON shape. Everything else — the key from the environment, the headers, the payload, the digging — is identical to the real script. Notice one more honest touch: <code>raise_for_status()</code> is unmasked into the plain <code>if</code> + <code>raise</code> it secretly is (<a href="ch006-control-flow.html">chapter 6</a> meets <a href="ch009-errors-and-tracebacks.html">chapter 9</a>). Press Run.</p>
+
+      <div class="pyrun" data-title="ask.py, browser edition — the internet played by a stunt double">
+<textarea class="py-src" spellcheck="false">
+import os
+
+# In a real terminal you would first run:
+#   export OPENAI_API_KEY="sk-..."
+# Here we plant the variable ourselves so the script can find it.
+os.environ["OPENAI_API_KEY"] = "sk-demo-key-for-practice"
+
+API_KEY = os.environ["OPENAI_API_KEY"]
+URL = "https://api.openai.com/v1/chat/completions"
+
+# ---- the stunt double: stands in for requests.post ---------
+def fake_post(url, headers, json):
+    auth = headers.get("Authorization", "")
+    if not auth.startswith("Bearer sk-"):
+        return 401, {"error": {"message": "invalid API key"}}
+    question = json["messages"][-1]["content"]
+    if "sky" in question.lower():
+        reply = ("Sunlight scatters off air molecules, and blue "
+                 "light scatters the most, so the sky looks blue.")
+    else:
+        reply = f"A thoughtful canned answer to: {question}"
+    return 200, {"choices": [{"message": {"content": reply}}]}
+
+# ---- the script itself: same logic as the real one ---------
+def ask(question):
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": "Answer in one short paragraph."},
+            {"role": "user", "content": question},
+        ],
+    }
+    status, data = fake_post(URL, headers=headers, json=payload)
+    if status != 200:   # raise_for_status(), unmasked
+        raise RuntimeError(f"API error {status}: {data['error']['message']}")
+    return data["choices"][0]["message"]["content"]
+
+answer = ask("Why is the sky blue?")
+print("MODEL SAYS:", answer)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now sabotage it — that is where the learning lives. First, change the planted key to <code>"wrong-key"</code> and run: you get a 401, the <code>RuntimeError</code> fires, and you read the traceback bottom-up exactly as <a href="ch009-errors-and-tracebacks.html">chapter 9</a> drilled. Second, change the question and watch the stunt double improvise. Third, ask two questions by calling <code>ask</code> inside a <code>for</code> loop over a list of questions (<a href="ch006-control-flow.html">chapter 6</a>). Every break you cause here is one you will recognise in real logs later.</p></div>
+
+      <h2>Change the provider, keep the skeleton</h2>
+      <p>Here is the quiet superpower you just earned: this skeleton barely changes between providers. Point the same twenty lines at a different company's model and only the labels move — the dict-building, the POST, the status check, and the digging are identical. Compare the two most common raw-HTTP shapes:</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>OpenAI-style</th><th>Anthropic-style</th></tr>
+        <tr><td>Endpoint</td><td><code>/v1/chat/completions</code></td><td><code>/v1/messages</code></td></tr>
+        <tr><td>Key travels as</td><td><code>Authorization: Bearer ...</code> header</td><td><code>x-api-key</code> header, plus a version header</td></tr>
+        <tr><td>Must also send</td><td>model + messages</td><td>model + messages + a required <code>max_tokens</code></td></tr>
+        <tr><td>System prompt</td><td>first message, role <code>"system"</code></td><td>separate top-level <code>"system"</code> field</td></tr>
+        <tr><td>Answer lives at</td><td><code>data["choices"][0]["message"]["content"]</code></td><td><code>data["content"][0]["text"]</code></td></tr>
+      </table></div>
+
+      <p>Different door, different envelope label, same parcel: a dict with a messages list goes out, JSON comes back, square brackets dig the answer out. When you later meet the official SDKs — <code>client.chat.completions.create(...)</code> on one side, <code>client.messages.create(...)</code> on the other — you will know they are this same script with the URL and headers tucked out of sight.</p>
+
+      <h2>The victory lap</h2>
+      <p>Stop and take stock, because this is the milestone the last nine chapters were quietly building towards:</p>
+
+      <div class="viz-tiles">
+        <div class="tile"><div class="tile-label">Lines in the script</div>
+          <div class="tile-value">19</div><div class="tile-delta">counting code, not blanks</div></div>
+        <div class="tile"><div class="tile-label">New syntax needed today</div>
+          <div class="tile-value">0</div><div class="tile-delta">everything came from chapters 1 to 9</div></div>
+        <div class="tile"><div class="tile-label">New vocabulary</div>
+          <div class="tile-value">6</div><div class="tile-delta">all web plumbing, none of it Python</div></div>
+      </div>
+
+      <p>You did not skim that script. You accounted for every line: what it does, which chapter taught it, and how it fails. That is what reading code fluently feels like — not memorising, just recognising. The systems you operate every day are made of files exactly like this one, stacked higher.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this exact shape constantly: it is the first code block in every model provider's quick-start guide, the bottom of countless READMEs, and the entire contents of little utility files named <code>ask.py</code>, <code>llm.py</code> or <code>chat.py</code> in real repositories. In larger codebases the skeleton hides inside an SDK call, but the messages list inside is byte-for-byte the shape you read today. And when a script wants all the candidate answers instead of just the first, you will spot a <a href="ch008-comprehensions.html">chapter 8 comprehension</a> doing the digging: <code>[c["message"]["content"] for c in data["choices"]]</code>. In a merge request, "the key is hardcoded, move it to an env var" is a reviewer pointing at line 4 of this very pattern.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Why does the script read the API key from <code>os.environ</code> instead of typing the key directly into the file?</p>
+          <div class="q-opts">
+            <button data-opt="a">Environment variables make the request run faster</button>
+            <button data-opt="b">Secrets typed into files end up committed, shared, and leaked — the environment keeps them out of the code</button>
+            <button data-opt="c">The provider rejects keys that are not sent from the environment</button>
+          </div>
+          <p class="q-explain">A key in the file travels everywhere the file travels — into git history, code reviews, and backups. The environment keeps the secret on the machine and out of the code. The provider cannot tell the difference; your security team certainly can.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. In pure chapter-4 terms, what is the <code>payload</code> the script sends?</p>
+          <div class="q-opts">
+            <button data-opt="a">A string that happens to contain JSON</button>
+            <button data-opt="b">A list of dicts</button>
+            <button data-opt="c">A dict, one of whose values is a list of dicts</button>
+          </div>
+          <p class="q-explain">The outer braces make a dict with two keys: <code>"model"</code> (a string) and <code>"messages"</code> (a list of dicts, one per conversation turn). It only becomes JSON text at the moment <code>requests.post</code> sends it — chapter 5's costume change.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What does <code>response.raise_for_status()</code> do when the call succeeded with a 200?</p>
+          <div class="q-opts">
+            <button data-opt="a">Nothing at all — it only acts when the status code signals an error</button>
+            <button data-opt="b">It prints a success message to the terminal</button>
+            <button data-opt="c">It parses the JSON and returns the data</button>
+          </div>
+          <p class="q-explain">It is a silent guard: on an error status it raises an exception (cue the chapter-9 traceback), and on success it steps aside and does nothing. Parsing happens on the next line, in <code>response.json()</code>.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. In <code>data["choices"][0]["message"]["content"]</code>, what is the <code>[0]</code> doing?</p>
+          <div class="q-opts">
+            <button data-opt="a">Looking up the dict key named 0</button>
+            <button data-opt="b">List indexing — taking the first item of the choices list</button>
+            <button data-opt="c">Calling a function with the argument 0</button>
+          </div>
+          <p class="q-explain"><code>"choices"</code> holds a list because the API can return several candidate answers. <code>[0]</code> takes the first one — plain chapter-4 list indexing, sandwiched between two dict lookups.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. Which single line of ask.py actually touches the internet?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>API_KEY = os.environ["OPENAI_API_KEY"]</code></button>
+            <button data-opt="b"><code>data = response.json()</code></button>
+            <button data-opt="c"><code>response = requests.post(URL, headers=headers, json=payload, timeout=30)</code></button>
+          </div>
+          <p class="q-explain">Everything before it builds local containers; everything after it unpacks local containers. The POST is the one and only flight — which is why timeouts, retries, and network errors all concentrate on that line.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A real LLM call is about twenty lines: fetch a key, name an endpoint, build a dict, POST it, check the status, dig the answer out of the reply.</li>
+          <li>The API key lives in the environment, never in the file — secrets in code get committed and leaked, and reviewers will flag it on sight.</li>
+          <li>The messages list — dicts with a <code>"role"</code> and a <code>"content"</code>, one per turn — is the universal conversation shape; every provider and framework you will ever meet uses it.</li>
+          <li>The payload is a dict that becomes JSON on the way out; the reply is JSON that becomes a dict on the way in. Reading API code is mostly reading containers.</li>
+          <li>Exactly one line touches the network; <code>raise_for_status()</code> is an <code>if</code> + <code>raise</code> in a trench coat, and its failures arrive as the tracebacks chapter 9 taught you to read.</li>
+          <li>You read every line with nine chapters of Python and six words of web vocabulary — no new syntax. That is the proof this is working.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

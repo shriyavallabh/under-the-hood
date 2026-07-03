@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Temperature and friends — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch034">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IV · Talking to the Model</div>
+        <h1>Temperature and friends</h1>
+        <p class="ch-tagline">Every reply an LLM has ever given you was built one dice roll at a time. Temperature, top_p, max_tokens and stop are the four house rules of that dice game — and once you can see what each one actually does, the mystery knobs on every API call become tools you set on purpose.</p>
+        <div class="ch-meta"><span>~20 min</span><span>Chapter 35 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your favourite ice-cream parlour has a <em>Surprise Me</em> counter. The kitchen keeps a popularity sheet — vanilla 50%, chocolate 30%, mango 12%, pistachio 7%, plus one experimental "roasted chilli" tub almost nobody orders — and the server picks your flavour by drawing from a raffle drum where popular flavours get more tickets.</p>
+        <p>On the counter sits a dial. Turned all the way down, the server ignores the drum and hands you the bestseller, every time. In the middle, tickets match the popularity sheet. Cranked up, extra tickets go in for the unpopular tubs — and one day in fifty, you get roasted chilli. A house rule is taped to the till: <em>"never draw from flavours outside the top sellers"</em>. Your cup has a fixed size, so scooping stops when it is full, finished sundae or not. And the moment the scoop hits the wafer, everything stops.</p>
+        <p>That dial is <strong>temperature</strong>. The house rule is <strong>top_p</strong>. The cup is <strong>max_tokens</strong>. The wafer is a <strong>stop sequence</strong>. This chapter is that counter, in Python.</p>
+      </section>
+
+      <h2>The machine you met last chapter is a dice game</h2>
+      <p>In <a href="ch033-first-api-call.html">your first API call</a> you sent a list of messages to a model and got text back — one request, one response, plus a usage receipt counting tokens in and out. What that chapter treated as a black box, this one opens up: the parameters you passed alongside your messages all act on one specific moment inside the model, and it is a moment you already understand.</p>
+      <p>Recall from <a href="ch029-transformers-plainly.html">the transformers chapter</a> that an LLM does exactly one thing: given the text so far, it predicts the next <a href="ch030-tokens-embeddings-context.html">token</a>. The detail that matters today: it does not output <em>a</em> token. It outputs a <em>score for every token it knows</em> — all hundred-thousand-ish at once. "tea" scores high, "coffee" slightly lower, "gravel" deeply negative. Those raw scores are called <dfn>logits</dfn> — numbers meaning "how much the model likes each candidate". A bit of maths called <dfn>softmax</dfn> converts the scores into probabilities summing to 100%, turning the score sheet into a weighted dice. Then a separate, dumb-as-rocks piece of code called the <dfn>sampler</dfn> rolls that dice, picks one token, appends it, and the cycle repeats.</p>
+      <p>Every knob in this chapter lives in the gap between "scores are ready" and "dice gets rolled" — or in the loop around it. None of them make the model smarter or dumber. The kitchen never changes; only the picking rules do.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Score everything">
+          <h3>1. The model scores every candidate</h3>
+          <div class="diagram">
+            <div class="d-box">Text so far<small>"a cup of hot"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Model<small>scores ~100,000 tokens</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Sampler</div>
+          </div>
+          <p class="step-cap">One forward pass produces a score for every token in the vocabulary. This is the expensive part — and the only part that is actually "AI".</p>
+        </div>
+        <div class="step" data-title="Temperature reshapes">
+          <h3>2. Temperature reshapes the dice</h3>
+          <div class="diagram">
+            <div class="d-box dim">Model</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Temperature<small>low = sharpen, high = flatten</small></div>
+            <div class="d-box dim">tea 50% &#8594; 89%<small>at temperature 0.3</small></div>
+          </div>
+          <p class="step-cap">Scores are divided by the temperature before becoming probabilities. Low values exaggerate the gaps between candidates; high values shrink them.</p>
+        </div>
+        <div class="step" data-title="top_p trims">
+          <h3>3. top_p trims the tail</h3>
+          <div class="diagram">
+            <div class="d-box good">tea, coffee<small>kept: adds up to 80%</small></div>
+            <div class="d-box hot">cut here<small>top_p = 0.8</small></div>
+            <div class="d-box dim">water, cocoa, gravel<small>the tail: deleted</small></div>
+          </div>
+          <p class="step-cap">Candidates are sorted by probability; the smallest top group that covers the top_p share survives, everything below it is removed, and the survivors are rescaled to 100%.</p>
+        </div>
+        <div class="step" data-title="Roll">
+          <h3>4. The dice roll</h3>
+          <div class="diagram">
+            <div class="d-box dim">Reshaped, trimmed dice</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Sampler picks ONE<small>" tea"</small></div>
+          </div>
+          <p class="step-cap">A random draw, weighted by the final probabilities. This single line of code is the entire source of an LLM's "creativity".</p>
+        </div>
+        <div class="step" data-title="Check and repeat">
+          <h3>5. Append, check, repeat</h3>
+          <div class="diagram">
+            <div class="d-box">Natural end?<small>stop_reason: end_turn</small></div>
+            <div class="d-box">Stop text hit?<small>stop_reason: stop_sequence</small></div>
+            <div class="d-box hot">Budget spent?<small>stop_reason: max_tokens</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">else: loop to step 1</div>
+          </div>
+          <p class="step-cap">The token joins the text and three exit conditions are checked. If none fires, we go around again — one roll per token, hundreds of times per reply.</p>
+        </div>
+      </div>
+
+      <h2>The vocabulary you need</h2>
+      <p>Six terms carry the rest of the chapter. Flip until boring:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">logits</span><span class="flip-back">The model's raw scores, one per token in its vocabulary, produced fresh at every step. Bigger score = stronger preference. Not yet probabilities.</span></button>
+        <button class="flip" type="button"><span class="flip-front">softmax</span><span class="flip-back">The maths that converts a score sheet into probabilities summing to 100%. Temperature sneaks in here: scores are divided by it first.</span></button>
+        <button class="flip" type="button"><span class="flip-front">sampler</span><span class="flip-back">The plain code that rolls the weighted dice and picks one token. It contains no intelligence at all — it is a raffle drum.</span></button>
+        <button class="flip" type="button"><span class="flip-front">greedy decoding</span><span class="flip-back">Skipping the dice entirely and always taking the top-scored token. This is what temperature 0 means. Fast, repeatable-ish, sometimes bland.</span></button>
+        <button class="flip" type="button"><span class="flip-front">top_p (nucleus) sampling</span><span class="flip-back">Keep only the smallest set of top candidates whose probabilities add up to p (say 0.9), delete the long tail of unlikely tokens, rescale, then roll.</span></button>
+        <button class="flip" type="button"><span class="flip-front">stop_reason</span><span class="flip-back">The response field telling you WHY generation ended: end_turn (natural finish), max_tokens (budget ran out), stop_sequence (your tripwire fired), tool_use (next chapter).</span></button>
+      </div>
+
+      <h2>Temperature: reshaping the dice</h2>
+      <p>The mechanism in one sentence: <strong>before the scores become probabilities, every score is divided by the temperature.</strong> That is genuinely all it is. Dividing by a small number widens the gaps between candidates, so after softmax the favourite hogs almost all the probability. Dividing by a large number squashes the scores together, so the underdogs get real chances. At temperature 0, providers skip the dice altogether and take the top score outright (dividing by zero is illegal, so zero means "greedy": no randomness requested).</p>
+      <p>Watch it happen to our hot-drink dice. Suppose the scores for the next word after <em>"She poured herself a cup of hot"</em> convert to these probabilities at temperature 1.0 (illustrative round numbers):</p>
+
+      <div data-bars data-title="Temperature 1.0 — the dice as the model made it" data-unit="%"
+           data-note="A weighted raffle: tea usually wins, but coffee wins nearly a third of the time, and gravel gets one draw in a hundred.">
+        <div class="bar" data-label="tea" data-value="50"></div>
+        <div class="bar" data-label="coffee" data-value="30"></div>
+        <div class="bar" data-label="water" data-value="12"></div>
+        <div class="bar" data-label="cocoa" data-value="7"></div>
+        <div class="bar" data-label="gravel" data-value="1"></div>
+      </div>
+
+      <div data-bars data-title="Temperature 0.3 — the SAME scores, sharpened" data-unit="%"
+           data-note="Nothing about the model changed. The gaps between scores were exaggerated before the dice was built, so the favourite now dominates.">
+        <div class="bar" data-label="tea" data-value="89"></div>
+        <div class="bar" data-label="coffee" data-value="10"></div>
+        <div class="bar" data-label="water" data-value="0.7"></div>
+        <div class="bar" data-label="cocoa" data-value="0.2"></div>
+        <div class="bar" data-label="gravel" data-value="0.01"></div>
+      </div>
+
+      <p>Now stop taking my word for it. The runner below is the real computation — the same maths every provider runs, on a five-token vocabulary small enough to watch. Press <strong>Run</strong>, then try your own temperatures.</p>
+
+      <div class="pyrun" data-title="Temperature reshapes the dice — run me">
+<textarea class="py-src" spellcheck="false">
+import math, random
+from collections import Counter
+
+# The model just scored five candidates for the token after:
+#   "She poured herself a cup of hot ___"
+# Bigger score = the model likes it more. (Real name: logits.)
+scores = {"tea": 4.0, "coffee": 3.5, "water": 2.2,
+          "cocoa": 1.8, "gravel": -2.0}
+
+def dice(temperature):
+    """Turn raw scores into a probability dice, reshaped by temperature."""
+    if temperature == 0:                    # temperature 0 = no dice at all:
+        best = max(scores, key=scores.get)  # the top score simply wins
+        return {t: (1.0 if t == best else 0.0) for t in scores}
+    weights = {t: math.exp(s / temperature) for t, s in scores.items()}
+    total = sum(weights.values())
+    return {t: w / total for t, w in weights.items()}
+
+def show(temperature):
+    probs = dice(temperature)
+    print(f"temperature = {temperature}")
+    for tok, p in sorted(probs.items(), key=lambda kv: -kv[1]):
+        print(f"  {tok:8s} {p:7.2%}  {'#' * round(p * 50)}")
+    random.seed(7)
+    rolls = Counter(random.choices(list(probs),
+                                   weights=list(probs.values()), k=1000))
+    print("  1000 rolls:", dict(rolls.most_common(3)), "\n")
+
+for t in (0, 0.4, 1.0, 2.0):
+    show(t)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it on purpose. Set the loop to <code>(0, 0.1, 5, 50)</code> and watch temperature 50 turn the dice almost uniform — gravel gets served nearly one time in five. Then change the score of <code>"gravel"</code> to <code>3.9</code> and see that even a low temperature cannot save you when the model itself thinks gravel is a good drink. Temperature reshapes preferences; it cannot invent better ones.</p></div>
+
+      <h2>top_p: trimming the tail</h2>
+      <p>Temperature has an awkward side effect. Raise it for livelier writing and you do not just boost the interesting mid-ranked candidates — you also boost the genuine garbage in the far tail. In a hundred-thousand-token vocabulary, thousands of tokens are each individually near-impossible but <em>collectively</em> add up to a real slice of probability. High temperature widens exactly that slice, which is where word salad comes from.</p>
+      <p><dfn>top_p</dfn> — also called <dfn>nucleus sampling</dfn>, "sampling from the core" — deletes the tail before the roll. Sort candidates by probability, keep candidates from the top until the kept pile covers <code>top_p</code> of the total (0.9 means "the top 90% worth"), throw away the rest, rescale the survivors to 100%, roll among them only. It is the manager's rule at the counter: <em>whatever the dial says, never draw a flavour outside the top sellers.</em></p>
+      <p>Notice what this is <em>not</em>: it is not "keep 90% of the tokens". When the model is confident, two candidates might cover 90% on their own; when it is torn, thirty survive. The cut adapts to how sure the model is — which is why top_p aged better than its simpler cousin <dfn>top_k</dfn>, which keeps a fixed count of k candidates no matter what.</p>
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Temperature and top_p both shape the same dice, so providers advise tuning <strong>one or the other, not both</strong> — on Claude 4-generation models, sending both is actually rejected as an error. A common pairing you will see in configs: default temperature with <code>top_p: 0.9</code>, or a tuned temperature with top_p left alone at 1.0 (1.0 keeps everything — the rule switched off).</p></div>
+
+      <h2>max_tokens: a budget, not a target</h2>
+      <p>The loop runs once per token, and each turn costs real money — you saw the per-token billing in <a href="ch033-first-api-call.html">your first API call</a>. <dfn>max_tokens</dfn> is the hard ceiling on how many turns the loop may take: the cup size at the counter. Scooping stops when the cup is full, mid-sundae if necessary — no warning, no graceful wrap-up. The reply is simply cut, often mid-sentence, and arrives with <code>stop_reason: "max_tokens"</code> so you can tell.</p>
+      <p>The word people trip over is <em>target</em>. Setting <code>max_tokens=4000</code> does <strong>not</strong> make replies longer — the model never writes towards the number. A one-word answer under a 4,000-token budget is still one word; the budget only decides where the axe falls if the model rambles. That is why Anthropic makes it a <em>required</em> parameter: an unbounded token loop is an unbounded bill, so you must state your worst case. Two symptoms say it is set too low: replies ending mid-thought, and JSON that fails to parse because the closing braces got axed — check <code>stop_reason</code> before you blame the model.</p>
+
+      <h2>stop: the tripwire</h2>
+      <p>Sometimes you know the exact text that means "we are done" better than the model does. <dfn>Stop sequences</dfn> are strings you hand over with the request — <code>stop_sequences=["\n\nCustomer:"]</code> on Anthropic's API, <code>stop</code> on OpenAI's — and the loop watches for them on every token. The instant the text would contain one, generation halts, you get everything <em>up to but not including</em> the match, and <code>stop_reason</code> is <code>"stop_sequence"</code> (Anthropic even tells you which one fired). It is the wafer at the bottom of the cup: hit it, stop scooping.</p>
+      <p>Classic uses: simulating one side of a dialogue and cutting the model off the moment it starts writing the <em>other</em> speaker's turn; forcing single-line answers by stopping at <code>"\n"</code>; ending at a delimiter like <code>"---"</code> in a templated document. The tokens you never generate are tokens you never pay for — a stop sequence is the cheapest guardrail on the menu.</p>
+
+      <h2>All four knobs in one running machine</h2>
+      <p>Time to put the whole counter together. The runner below is a complete miniature text generator. Because this page cannot call a paid model, the "model" is a scripted stand-in — a table of scores per step, exactly the shape a real model produces, just three candidates per step instead of a hundred thousand. Everything else — temperature, tail-trimming, the budget, the tripwire, the <code>stop_reason</code> — is the real logic. Run it, then twist the knobs in the demo lines at the bottom.</p>
+
+      <div class="pyrun" data-title="A generator with all four knobs — run me">
+<textarea class="py-src" spellcheck="false">
+import math, random
+
+# A scripted stand-in for a real model: at each step it scores a
+# handful of candidates for the next token. A real model scores
+# ~100,000. "[END]" plays the model's natural end-of-turn token.
+SCRIPT = [
+    {"Chai": 3.0, "Coffee": 2.1, "Kombucha": 0.3},
+    {" is": 3.5, " remains": 1.4, " was": 0.8},
+    {" the": 3.2, " my": 1.7, " a": 1.1},
+    {" best": 2.9, " safest": 1.5, " loudest": -0.5},
+    {" monsoon": 2.7, " morning": 2.4, " office": 1.2},
+    {" drink": 3.0, " ritual": 1.9, " hug": 0.6},
+    {".": 3.6, "!": 1.7, " ever": 1.0},
+    {"[END]": 4.0, " Also": 1.2, " And": 1.0},
+    {" chai": 2.0, " tea": 1.6, "[END]": 1.9},
+    {"[END]": 3.5, "!!": 0.4},
+]
+
+def dice(scores, temperature):                    # knob 1: temperature
+    if temperature == 0:
+        return {max(scores, key=scores.get): 1.0}
+    w = {t: math.exp(s / temperature) for t, s in scores.items()}
+    total = sum(w.values())
+    return {t: x / total for t, x in w.items()}
+
+def trim_tail(probs, top_p):                      # knob 2: top_p
+    kept, cum = {}, 0.0
+    for tok, p in sorted(probs.items(), key=lambda kv: -kv[1]):
+        kept[tok] = p
+        cum += p
+        if cum &gt;= top_p:
+            break
+    total = sum(kept.values())
+    return {t: p / total for t, p in kept.items()}
+
+def generate(temperature=0.8, top_p=1.0, max_tokens=16, stop=None):
+    text = ""
+    for step in range(max_tokens):                # knob 3: max_tokens
+        scores = SCRIPT[min(step, len(SCRIPT) - 1)]
+        probs = trim_tail(dice(scores, temperature), top_p)
+        token = random.choices(list(probs),
+                               weights=list(probs.values()))[0]
+        if token == "[END]":
+            return text, "end_turn"
+        text += token
+        if stop and stop in text:                 # knob 4: stop sequence
+            return text.split(stop)[0], "stop_sequence"
+    return text, "max_tokens"
+
+random.seed(12)
+demos = [
+    ("temperature=0  (play it safe)", dict(temperature=0)),
+    ("temperature=1.5  (get weird)", dict(temperature=1.5)),
+    ("max_tokens=5  (tiny budget)", dict(temperature=0, max_tokens=5)),
+    ("stop='.'  (cut at the period)", dict(temperature=0, stop=".")),
+    ("temp=1.5 + top_p=0.5 (trimmed)", dict(temperature=1.5, top_p=0.5)),
+]
+for label, knobs in demos:
+    text, reason = generate(**knobs)
+    print(f"{label:32s} -&gt; {text!r}")
+    print(f"{'':32s}    stop_reason = {reason}\n")
+</textarea>
+      </div>
+
+      <p>Read the output slowly — it is the whole chapter in five lines. Temperature 0 gives the safest sentence and a natural <code>end_turn</code>. Temperature 1.5 wanders. The tiny budget gets the axe mid-sentence with <code>max_tokens</code>. The stop sequence returns everything before the period — the period itself is gone — with <code>stop_sequence</code>. And the last line is the classic production pairing: high temperature for life, top_p to keep the tail from serving anyone kombucha at breakfast.</p>
+
+      <h2>The knobs on a real API call</h2>
+      <p>Here is where they sit in real code — the same Messages API shape you wrote in <a href="ch033-first-api-call.html">the last chapter</a>, with the knobs added. Click each annotated line:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">support_reply.py</div>
+        <div class="wl-line"><code>from anthropic import Anthropic</code></div>
+        <div class="wl-line"><code>client = Anthropic()</code>
+          <div class="wl-note">Same client as last chapter — it reads your API key from the environment.</div></div>
+        <div class="wl-line"><code>response = client.messages.create(</code></div>
+        <div class="wl-line"><code>    model="claude-sonnet-4-6",</code>
+          <div class="wl-note">Which kitchen you are ordering from. Note: the very newest reasoning-first models have removed the sampling knobs entirely — see the caution below.</div></div>
+        <div class="wl-line"><code>    max_tokens=400,</code>
+          <div class="wl-note">The budget. Required on every Anthropic call. A short reply will still be short — this only caps the worst case and, with it, the bill.</div></div>
+        <div class="wl-line"><code>    temperature=0.2,</code>
+          <div class="wl-note">A mostly-sharpened dice: reliable phrasing with a little life. Range is 0 to 1.0 here; OpenAI's scale runs 0 to 2. Tune this OR top_p, not both.</div></div>
+        <div class="wl-line"><code>    stop_sequences=["\n\nCustomer:"],</code>
+          <div class="wl-note">The tripwire. If the model starts hallucinating the customer's NEXT message, generation halts before it, and the matched text is not in what you get back.</div></div>
+        <div class="wl-line"><code>    messages=[</code></div>
+        <div class="wl-line"><code>        {"role": "user", "content": "Draft a reply to this ticket: ..."}</code>
+          <div class="wl-note">The conversation itself — knobs shape HOW the dice is rolled; messages decide what the dice is ABOUT.</div></div>
+        <div class="wl-line"><code>    ],</code></div>
+        <div class="wl-line"><code>)</code></div>
+        <div class="wl-line"><code>print(response.content[0].text)</code></div>
+        <div class="wl-line"><code>print(response.stop_reason)</code>
+          <div class="wl-note">Always check this in production: end_turn (finished naturally), max_tokens (axed — maybe raise the budget), stop_sequence (your tripwire), or tool_use (the model wants to call a tool — that is the next chapter).</div></div>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The knobs are quietly disappearing from the newest frontier models. Reasoning-first models (Claude's Opus 4.7 and later, Sonnet 5, and similar "thinking" models) have <strong>removed</strong> temperature, top_p and top_k — sending them returns a 400 error, because the model manages its own sampling while it reasons. On those models you steer with prompts and effort settings instead. Everything in this chapter still matters: max_tokens and stop sequences remain universal, most models in production today keep all four knobs, and understanding the dice roll is exactly what lets you read a migration note like "sampling parameters removed" without blinking.</p></div>
+
+      <h2>So — 0, 0.7, or 1?</h2>
+      <p>There is no magic number, but there are honest defaults. The question to ask is: <em>does this task have one right answer, or many good ones?</em></p>
+      <div class="tbl"><table>
+        <tr><th>Setting</th><th>Character of the dice</th><th>Reach for it when</th></tr>
+        <tr><td><code>0</code></td><td>No dice — top token always wins</td><td>Extraction, classification, yes/no decisions, <a href="ch036-structured-output.html">structured output</a>, agent tool-calling — anything where two runs should ideally agree</td></tr>
+        <tr><td><code>0.2 – 0.5</code></td><td>Sharpened, with a pulse</td><td>Support replies, summaries, business writing, code suggestions — reliable but not robotic</td></tr>
+        <tr><td><code>0.7 – 1.0</code></td><td>The model's own preferences, more or less honoured</td><td>Chat, marketing copy, storytelling, "give me ten ideas" — you WANT different answers on every run</td></tr>
+        <tr><td>Above <code>1.0</code> (where allowed)</td><td>Flattened — underdogs promoted</td><td>Brainstorming and name generators, usually with top_p as a seatbelt. Expect occasional gravel</td></tr>
+      </table></div>
+      <p>One production heuristic worth keeping: pipelines and agents run cold, humans-in-the-loop run warm. When a model's output feeds <em>another program</em>, surprise is a bug. When it feeds a <em>person</em>, a little surprise is the product.</p>
+
+      <h2>The temperature=0 myth</h2>
+      <p>Now for the caveat that catches nearly everyone. It is tempting to conclude: temperature 0 removes the dice, so the same prompt must give the same answer every time. <strong>In practice, it does not — not quite.</strong> Outputs become <em>far</em> more repeatable, but identical runs can still occasionally diverge, and the reasons live below the sampler.</p>
+      <p><strong>Floating-point maths is not perfectly orderly on parallel hardware.</strong> GPUs add thousands of numbers in whatever order finishes fastest, and floating-point addition gives minutely different results in different orders. When two tokens are in a near-tie, a rounding wobble can flip which one is "top" — and greedy decoding faithfully picks the flipped winner, changing every token after it. <strong>Your request shares a batch with strangers.</strong> Providers process many requests together, and the batch's shape changes the exact arithmetic your request goes through — the same prompt at 9 a.m. and 9 p.m. may not run the same numbers. Add routing differences inside mixture-of-experts models and routine infrastructure updates, and bit-for-bit determinism quietly evaporates.</p>
+      <p>Say it precisely: <em>temperature 0 removes the randomness you injected; it does not remove the noise of the machine.</em> This is one more instance of the theme from <a href="ch031-llms-vs-deterministic.html">LLMs versus deterministic code</a> — treat model output as likely-but-not-guaranteed, even at zero. If a workflow breaks when two runs differ, do not lean on temperature alone: pin model versions, log outputs, validate structure, and design the surrounding code to tolerate variation. Some providers offer a <code>seed</code> parameter — treat it as "best effort", not a contract.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet these knobs everywhere. In framework code: LangChain's <code>init_chat_model("...", temperature=0)</code> opens almost every agent example, because agents run cold. In config files: a YAML block with <code>temperature</code>, <code>max_tokens</code> and <code>stop</code> under a model name is the giveaway that a file configures LLM calls. In incident channels: "the JSON came back truncated" resolves to <code>stop_reason: max_tokens</code> and a one-line budget bump nine times out of ten. And in merge requests: a diff that <em>deletes</em> <code>temperature</code> lines during a model upgrade is not sloppiness — it is a migration to a reasoning model that rejects the parameter.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. You set <code>temperature=0</code>, run the identical prompt twice, and get two slightly different answers. What is the most likely explanation?</p>
+          <div class="q-opts">
+            <button data-opt="a">Your code has a bug — temperature 0 guarantees identical output</button>
+            <button data-opt="b">Temperature 0 removed the sampling randomness, but floating-point wobble and server-side batching can still flip near-tied tokens</button>
+            <button data-opt="c">The provider silently ignored the temperature setting</button>
+          </div>
+          <p class="q-explain">Temperature 0 means greedy decoding — no dice — but the scores themselves are computed on parallel hardware where arithmetic order varies with batching. A near-tie can flip, and one flipped token changes everything after it. Less variance, not zero variance.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. You set <code>max_tokens=2000</code> for a task whose answer is one sentence. What happens?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model pads its answer out to roughly 2,000 tokens</button>
+            <button data-opt="b">The model stops naturally after one sentence — max_tokens is only a ceiling, and you pay only for tokens actually generated</button>
+            <button data-opt="c">The request is rejected for wasting budget</button>
+          </div>
+          <p class="q-explain">A budget, not a target. The model never sees max_tokens as a goal; the loop just refuses to run more than 2,000 turns. Short answers stay short, and billing follows actual output.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. What does <code>top_p=0.9</code> actually keep in the draw?</p>
+          <div class="q-opts">
+            <button data-opt="a">The top 90% of tokens, counted by number of tokens</button>
+            <button data-opt="b">The smallest set of highest-probability tokens whose probabilities add up to 90%, rescaled and rolled among</button>
+            <button data-opt="c">It is a synonym for temperature 0.9</button>
+          </div>
+          <p class="q-explain">The nucleus rule cuts by cumulative probability mass, not count — so the surviving pile is tiny when the model is confident and larger when it is torn. That adaptive cut is the whole point.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. You pass <code>stop_sequences=["\n\nCustomer:"]</code> and the model's text reaches that string. What comes back?</p>
+          <div class="q-opts">
+            <button data-opt="a">The full text including "\n\nCustomer:", with stop_reason "end_turn"</button>
+            <button data-opt="b">An error, because the model violated your constraint</button>
+            <button data-opt="c">The text up to but not including the matched string, with stop_reason "stop_sequence"</button>
+          </div>
+          <p class="q-explain">Stop sequences halt generation the moment the match would appear; the matched text is excluded from the reply, and stop_reason tells you the tripwire fired rather than a natural finish.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">5. You are extracting invoice fields into JSON for an automated pipeline. Which dial?</p>
+          <div class="q-opts">
+            <button data-opt="a">Temperature 0 — one right answer exists, and downstream code needs runs to agree</button>
+            <button data-opt="b">Temperature 1.0 — flexibility helps with messy invoices</button>
+            <button data-opt="c">It makes no difference for extraction tasks</button>
+          </div>
+          <p class="q-explain">When output feeds another program, surprise is a bug. Extraction has a correct answer, so you want the sharpest dice available — plus structure validation, because as question 1 showed, even zero is not a guarantee.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>An LLM builds every reply one token at a time: score all candidates, convert to a dice, roll, append, repeat. All four knobs act on that loop — none change the model itself.</li>
+          <li><strong>Temperature</strong> reshapes the dice by dividing the scores: low sharpens towards the favourite, high flattens towards the underdogs, 0 skips the dice entirely (greedy decoding).</li>
+          <li><strong>top_p</strong> trims the tail — keep the smallest top group covering p of the probability, delete the rest, rescale, roll. Tune temperature or top_p, not both.</li>
+          <li><strong>max_tokens</strong> is a budget, not a target: it never lengthens a reply, only caps the loop (and the bill), cutting mid-sentence with <code>stop_reason: "max_tokens"</code>.</li>
+          <li><strong>Stop sequences</strong> are tripwires: generation halts before your string, the match is excluded, and tokens you never generate are tokens you never pay for.</li>
+          <li>Temperature 0 reduces variance but does not guarantee identical outputs — floating-point order, batching and infrastructure still wobble near-ties. Design pipelines to tolerate it.</li>
+          <li>Cold for pipelines and agents, warm for humans — and always read <code>stop_reason</code>. One of its values, <code>tool_use</code>, is <a href="ch035-tool-calling.html">the whole next chapter</a>.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

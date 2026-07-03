@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tools: giving the model hands — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch046">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act V · Agents From Scratch</div>
+        <h1>Tools: giving the model hands</h1>
+        <p class="ch-tagline">The model chooses tools by reading their labels, never their code. In this chapter you write a tool, label it so well the model cannot misuse it, and execute it so safely that a mistake becomes a printout instead of an incident.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 47 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Down the road from your flat is a tool-lending library — a basement full of drills, saws, ladders and one glorious cement mixer. Members never walk the shelves. You stand at a counter, flip through a ring-binder of catalogue cards, and fill in a request slip. The card that just says <em>"DRILL"</em> gets requested for every job, including several it ruins. The card that says <em>"Cordless drill — wood and drywall only, bits up to 10 mm, not for concrete"</em> almost never comes back with a burnt-out motor. Same drill. Different card.</p>
+        <p>Behind the counter sits the librarian, and she is the other half of the system. She checks that the tool on your slip actually exists in the catalogue, that the slip is filled in properly, and that you have done the safety course before the chainsaw comes out. For anything truly destructive she hands you a practice piece first: <em>"show me on this; the real one comes out after."</em></p>
+        <p>The borrower is the model. The catalogue cards are your tool descriptions. The librarian is the code you are about to write.</p>
+      </section>
+
+      <h2>Where we left off — and where it was weakest</h2>
+      <p>In <a href="ch045-react-loop-by-hand.html">the previous chapter</a> you built a complete ReAct agent in fifty lines: a history list, a loop, a scripted stand-in model, and a <code>TOOLS</code> dictionary holding exactly one function — a calculator. The model wrote <code>ACTION: calculate(...)</code>, your loop looked the name up in the dict and ran the real function, and the result went back into the history as an observation. That loop is the skeleton of every agent you operate.</p>
+      <p>This chapter zooms in on the part of that skeleton we rushed past: the tools themselves. Three questions, in order. What makes a function a <em>good</em> tool? How does the model — which never sees a single line of your code — decide which tool to call and what to pass it? And how do you execute the model's requests without letting a confused sentence become a real-world disaster? The answers turn out to be one part writing, one part typing discipline, and one part healthy paranoia.</p>
+
+      <h2>Anatomy of a tool worth having</h2>
+      <p>A tool is nothing exotic: a plain Python function (<a href="ch007-functions.html">chapter 7</a>) plus two pieces of packaging — a <strong>name</strong> the model can request it by, and a <strong>description</strong> telling the model what it does. Here is a second tool for our agent, a GST rate lookup:</p>
+
+      <div class="code-title">tools.py — a small, honest tool</div>
+      <pre><code class="language-python">def gst_rate(category):
+    """Look up the GST rate (in percent) for a spending
+    category. Known categories: restaurant, electronics,
+    gold, cinema. Returns just the number, e.g. '5'."""
+    rates = {"restaurant": 5, "electronics": 18,
+             "gold": 3, "cinema": 12}
+    category = category.strip().lower()
+    if category not in rates:
+        return (f"ERROR: unknown category {category!r}. "
+                f"Known: {sorted(rates)}")
+    return str(rates[category])</code></pre>
+
+      <p>Four habits make this a good citizen of an agent loop, and they generalise to every tool you will ever write:</p>
+      <p><strong>One job.</strong> It looks up a rate. It does not also calculate the tax, format a message, or send an email. Small tools compose; Swiss-army tools confuse the model about when to reach for them.</p>
+      <p><strong>An obvious name.</strong> <code>gst_rate</code> says what it returns. A model choosing between tools reads names first — <code>helper2</code> and <code>do_stuff</code> are how agents end up calling the wrong thing.</p>
+      <p><strong>Text in, text out.</strong> The result must travel back through the observation channel as text the model can read. Return strings, or short JSON-ish summaries — not live objects.</p>
+      <p><strong>Errors are answers, not explosions.</strong> Notice the unknown-category branch <em>returns</em> a readable message instead of raising an exception. Remember from <a href="ch009-errors-and-tracebacks.html">chapter 9</a> what an unhandled exception does — it tears down the whole program, loop included. But a returned <code>ERROR: unknown category 'spa'. Known: [...]</code> becomes an observation, the model reads it, and on the very next turn it can correct itself. A good error message is a teaching aid for the model. This one habit fixes more "the agent got stuck" tickets than any clever prompt.</p>
+
+      <h2>The description is the real prompt engineering</h2>
+      <p>Now the idea this chapter exists for. When your loop (or the API doing native <a href="ch035-tool-calling.html">tool calling</a>) advertises tools to the model, it does not send your source code. It sends a menu: each tool's name, its description, and a note of what parameters it takes. That menu is pasted straight into the model's context, right next to the system prompt. The model chooses tools the way you chose a drill at the lending library — by reading the card.</p>
+      <p>Which means the description is not documentation. Documentation is for humans who read it optionally, later. The description is <em>a prompt</em>: instructions the model follows, literally, on every turn. Every word in it steers behaviour. Anthropic's published guidance on writing tools for agents makes exactly this point, and reports that refining tool descriptions alone — no model change, no new tools — lifted an earlier Claude model to state-of-the-art on a public software-engineering benchmark. The cheapest, highest-leverage tuning knob in your whole agent is a paragraph of prose.</p>
+      <p>The distilled guidance, card by card:</p>
+      <p><strong>Write for a new hire.</strong> Describe the tool as you would to a smart colleague on their first day: what it does, when to use it, when <em>not</em> to use it, what the inputs look like, what comes back. All the context you carry implicitly — quirky formats, niche terms, which of two similar tools wins — must be made explicit, because the model has none of it.</p>
+      <p><strong>Name parameters unambiguously.</strong> A parameter called <code>user</code> invites an email address, a name, or an id, depending on the model's mood. Call it <code>user_id</code> and say in the description "the numeric customer id, e.g. 48291", and the ambiguity dies.</p>
+      <p><strong>Make results meaningful.</strong> What a tool returns lands in the context too — tool results are also prompts. Return human-readable summaries with the fields that matter, not a dump of raw ids and internal codes the model must guess at.</p>
+      <p><strong>Spend tokens like money.</strong> A search tool that returns 400 results floods the context (and your bill). Default to the top few, paginate, truncate long fields, and say in the description how to ask for more.</p>
+      <p><strong>Prefer a few workflow-shaped tools over many thin wrappers.</strong> One <code>schedule_meeting</code> tool beats five separate calendar-API endpoints the model must choreograph itself. Fewer, better-labelled cards; less to choose wrongly between.</p>
+
+      <div class="tbl"><table>
+        <tr><th>The card that fails</th><th>The card that works</th></tr>
+        <tr><td><code>search(q)</code> — "Searches."</td><td><code>search_orders(query)</code> — "Find customer orders by order id, email, or phone. Returns the 5 most recent matches with id, date, amount and status. For a single known order id, use lookup_order instead."</td></tr>
+        <tr><td><code>refund(user, amt)</code> — "Does a refund."</td><td><code>issue_refund(order_id, amount_inr)</code> — "Refund an order, capped at 5,000 INR. order_id looks like ORD-123456. Use only after lookup_order confirms the order exists."</td></tr>
+      </table></div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>When an agent keeps misusing a tool, resist the urge to rewrite the system prompt. Nine times out of ten the fix is on the card: sharpen the tool's description, rename an ambiguous parameter, or state explicitly which sibling tool to prefer. You are debugging prose, and it is the most cost-effective debugging you will ever do.</p></div>
+
+      <p>Six words carry the rest of this chapter. Flip until fluent:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">description</span><span class="flip-back">The prose card advertised to the model for each tool. Injected into context every turn — a prompt wearing a documentation costume.</span></button>
+        <button class="flip" type="button"><span class="flip-front">schema</span><span class="flip-back">The machine-readable contract for a tool's inputs — parameter names, types, required fields — generated from your type hints and sent along with the description.</span></button>
+        <button class="flip" type="button"><span class="flip-front">allow-list</span><span class="flip-back">The registry of tools your loop is willing to run. A name not on the list executes nothing, no matter how confidently the model asks.</span></button>
+        <button class="flip" type="button"><span class="flip-front">dry run</span><span class="flip-back">A mode where a destructive tool only reports what it WOULD do. The safe default; the real action needs an explicit opt-in.</span></button>
+        <button class="flip" type="button"><span class="flip-front">timeout</span><span class="flip-back">A hard cap on how long one tool may run before the loop gives up and reports failure. One hung tool must never freeze the whole agent.</span></button>
+        <button class="flip" type="button"><span class="flip-front">side effect</span><span class="flip-back">Anything a tool changes in the real world — files, emails, money. Read-only tools have none; write tools deserve every guard in this chapter.</span></button>
+      </div>
+
+      <h2>Schemas from type hints: the card writes itself</h2>
+      <p>In our hand-rolled loop the "menu" is plain text we glue together from docstrings. Production systems use something sturdier: a <dfn>schema</dfn> — a machine-readable description of the tool's parameters, their types, and which are required, usually in JSON Schema format (the same idea you met with <a href="ch036-structured-output.html">structured output</a>). Here is a destructive tool written properly, and the schema it becomes:</p>
+
+      <div class="code-title">refunds.py — a dangerous tool, dressed correctly</div>
+      <pre><code class="language-python">def issue_refund(order_id: str, amount_inr: float,
+                 dry_run: bool = True) -&gt; str:
+    """Refund a customer order, capped at 5,000 INR.
+    order_id looks like ORD-123456. Use only after
+    lookup_order confirms the order exists. With
+    dry_run=True (the default) nothing moves: it
+    reports what WOULD happen for review."""
+    ...</code></pre>
+
+      <div class="code-title">What the API is actually sent (Anthropic tool format)</div>
+      <pre><code class="language-json">{
+  "name": "issue_refund",
+  "description": "Refund a customer order, capped at 5,000 INR. order_id looks like ORD-123456. Use only after lookup_order confirms the order exists. With dry_run=True (the default) nothing moves: it reports what WOULD happen for review.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "order_id":   {"type": "string"},
+      "amount_inr": {"type": "number"},
+      "dry_run":    {"type": "boolean", "default": true}
+    },
+    "required": ["order_id", "amount_inr"]
+  }
+}</code></pre>
+
+      <p>Look at where every part of that JSON came from. The parameter names and types came from the <a href="ch016-type-hints-and-pydantic.html">type hints</a> — <code>order_id: str</code> became <code>"type": "string"</code>. The <code>required</code> list came from which parameters lack defaults. And the description came word-for-word from the <dfn>docstring</dfn>, the string sitting directly under the <code>def</code> line. You do not write this JSON by hand: frameworks generate it. LangChain's <code>@tool</code> decorator and the MCP Python SDK's <code>@mcp.tool()</code> (from <code>mcp.server.fastmcp</code>) both read your signature and docstring and build the schema for you — a <a href="ch017-decorators.html">decorator</a> quietly doing paperwork, exactly as chapter 17 promised they would.</p>
+      <p>This is why sloppy docstrings produce sloppy agents. The docstring you were told was "just good practice" back in Act I is now literally the interface: the one paragraph of your code the model actually reads.</p>
+
+      <h2>Safe execution: the librarian's rules</h2>
+      <p>The model has now chosen a tool and produced arguments. Everything the model sends you is best treated the way a web developer treats a form submitted from the internet: probably fine, occasionally malformed, and never, ever trusted blindly. Four rules, in the order they fire:</p>
+      <p><strong>Rule 1 — the allow-list.</strong> The <code>TOOLS</code> dict from chapter 45 is not a convenience; it is the security boundary of the entire agent. The loop runs a function only if the requested name is a key in that dict (an <dfn>allow-list</dfn> — a closed list of what is permitted, everything else refused). Never resolve tool names dynamically with <code>getattr</code> or — please — <code>eval</code>: that would let the model reach any function in your process. Our chapter 45 loop actually had a bug here: an unknown name crashed the loop with a <code>KeyError</code>. The hardened version replies with an error observation instead, and the model recovers.</p>
+      <p><strong>Rule 2 — validate the inputs.</strong> Check shape and range before anything runs: the regex for <code>ORD-123456</code>, the 1-to-5,000 cap on the amount, the character whitelist in our calculator. Reject bad input with a message that says what valid input looks like.</p>
+      <p><strong>Rule 3 — bound the run with a timeout.</strong> A tool that calls a slow database or a dead network endpoint can hang forever, and with it the whole agent. Give every tool a time budget; when it blows, return "timed out after 10s" as the observation and let the model decide what to do next.</p>
+      <p><strong>Rule 4 — default to harmless.</strong> Separate read tools from write tools, and make anything with a <dfn>side effect</dfn> — a change to the real world — default to <dfn>dry run</dfn>: report what would happen, do nothing. The real action requires an explicit, deliberate elevation, often by a human. This is precisely why your coding agent pauses to ask before running a shell command: that permission prompt is Rule 4, rendered as a dialog box, at exactly the boundary this chapter drew.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Request arrives">
+          <h3>1. The request arrives</h3>
+          <div class="diagram">
+            <div class="d-box hot">LLM<small>"ACTION: issue_refund(ORD-000123, 900)"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Loop</div>
+            <div class="d-box dim">Tool</div>
+          </div>
+          <p class="step-cap">The model asks in text (or a structured tool call). Nothing has happened yet — this is a wish, not an action.</p>
+        </div>
+        <div class="step" data-title="Allow-list">
+          <h3>2. Allow-list check</h3>
+          <div class="diagram">
+            <div class="d-box dim">LLM</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Loop<small>is "issue_refund" a registered tool?</small></div>
+            <div class="d-box dim">Tool</div>
+          </div>
+          <p class="step-cap">Unknown name? No lookup tricks, no guessing — an ERROR observation goes straight back. The registry is the security boundary.</p>
+        </div>
+        <div class="step" data-title="Validate">
+          <h3>3. Validate the arguments</h3>
+          <div class="diagram">
+            <div class="d-box dim">LLM</div>
+            <div class="d-box hot">Loop<small>ORD-000123 matches the pattern; 900 is within the 5,000 cap</small></div>
+            <div class="d-box dim">Tool</div>
+          </div>
+          <p class="step-cap">Model-typed arguments are untrusted input — checked like a web form. Bad input gets a readable ERROR back, never a crash.</p>
+        </div>
+        <div class="step" data-title="Safety default">
+          <h3>4. Safety defaults hold</h3>
+          <div class="diagram">
+            <div class="d-box dim">LLM</div>
+            <div class="d-box hot">Loop<small>dry_run is still True — no elevation given</small></div>
+            <div class="d-box dim">Tool</div>
+          </div>
+          <p class="step-cap">Destructive tools run in rehearsal mode unless a policy — or a human at a permission prompt — explicitly turns the key.</p>
+        </div>
+        <div class="step" data-title="Execute bounded">
+          <h3>5. Execute, with a timeout</h3>
+          <div class="diagram">
+            <div class="d-box dim">LLM</div>
+            <div class="d-box">Loop</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Tool<small>runs; budget: 10 seconds</small></div>
+          </div>
+          <p class="step-cap">The only step where anything real can happen — and it happens on a leash. A hang becomes "timed out", not a frozen agent.</p>
+        </div>
+        <div class="step" data-title="Report back">
+          <h3>6. The observation returns</h3>
+          <div class="diagram">
+            <div class="d-box good">LLM<small>reads "DRY RUN: would refund 900 INR to ORD-000123"</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box good">Loop<small>formats, truncates, appends to history</small></div>
+          </div>
+          <p class="step-cap">The result — success, dry-run report, or a helpful error — re-enters the transcript, and the loop turns again.</p>
+        </div>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Never pass model-written text into <code>eval</code>, <code>exec</code>, or a shell without a strict whitelist. Our calculator's innocent-looking character check — only digits and arithmetic symbols allowed — is what stands between "compute 20% GST" and the model accidentally (or an attacker deliberately, via a poisoned document) running arbitrary code on your machine. That one line is load-bearing.</p></div>
+
+      <p>Now read a dangerous tool the way a reviewer would — click each annotated line:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">refunds.py — every guard in its place</div>
+        <div class="wl-line"><code>def issue_refund(order_id: str, amount_inr: float, dry_run: bool = True) -&gt; str:</code>
+          <div class="wl-note">The type hints are not decoration — they become the schema the model sees. And <code>dry_run: bool = True</code> is a safety default disguised as a default argument: whoever forgets to think gets the rehearsal, not the real thing.</div></div>
+        <div class="wl-line"><code>    """Refund a customer order, capped at 5,000 INR.</code>
+          <div class="wl-note">This docstring is sent to the model verbatim. It states the cap, the id format, and when to use the tool — the "new hire briefing". Editing this line changes agent behaviour as surely as editing the system prompt.</div></div>
+        <div class="wl-line"><code>    order_id looks like ORD-123456. Use only after</code></div>
+        <div class="wl-line"><code>    lookup_order confirms the order exists."""</code>
+          <div class="wl-note">Cross-referencing the sibling tool ("use only after lookup_order") steers the model's tool ORDER, not just its tool choice. Sequencing hints belong on the card.</div></div>
+        <div class="wl-line"><code>    if not re.fullmatch(r"ORD-\d{6}", order_id):</code>
+          <div class="wl-note">Validation, rule 2. The model typed this argument, so it gets checked like untrusted form input. <code>re.fullmatch</code> insists the WHOLE string matches the pattern — no sneaky prefixes or suffixes.</div></div>
+        <div class="wl-line"><code>        return "ERROR: order_id must look like ORD-123456"</code>
+          <div class="wl-note">Returned, not raised. The message teaches the model what valid input looks like, so the next turn can succeed. Errors are answers.</div></div>
+        <div class="wl-line"><code>    if not 0 &lt; amount_inr &lt;= 5000:</code>
+          <div class="wl-note">The range check enforces the cap the docstring promised. Business rules live in code, not in hope — the description informs the model; the validation constrains it.</div></div>
+        <div class="wl-line"><code>        return "ERROR: amount_inr must be between 1 and 5000"</code></div>
+        <div class="wl-line"><code>    if dry_run:</code>
+          <div class="wl-note">Rule 4. Unless someone explicitly passed <code>dry_run=False</code>, the tool only describes the action. A confused model's mistake becomes a sentence a human can read, not money that moved.</div></div>
+        <div class="wl-line"><code>        return f"DRY RUN: would refund {amount_inr} INR to {order_id}"</code></div>
+        <div class="wl-line"><code>    return payments.refund(order_id, amount_inr, timeout=10)</code>
+          <div class="wl-note">The single line with a real side effect — and it carries a timeout (rule 3). <code>payments</code> here stands for your actual payment client. One line of consequence, guarded by five lines of scepticism: that ratio is correct.</div></div>
+      </div>
+
+      <h2>Run it: the two-tool agent</h2>
+      <p>Time to extend chapter 45's agent for real. Below is the same loop with three upgrades: a second tool (<code>gst_rate</code>), a menu built automatically from the tools' names and docstrings — so you can see exactly what the model would read — and the hardened allow-list branch that turns an unknown tool name into an error observation instead of a crash. The "model" is again a scripted <code>fake_llm</code>, but watch what it does: it must now <em>choose between tools</em>, and it chooses the way a real model does — off the menu. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="Two tools, one menu — the agent must choose">
+<textarea class="py-src" spellcheck="false">
+# ---- Tool 1: the calculator from last chapter -------------
+def calculate(expression):
+    """Evaluate simple arithmetic, e.g. '1500 * 5 / 100'.
+    Digits and + - * / ( ) only."""
+    allowed = set("0123456789+-*/(). ")
+    if not set(expression) &lt;= allowed:
+        return "ERROR: only digits and + - * / ( ) allowed"
+    return str(eval(expression))
+
+# ---- Tool 2: NEW — a GST rate lookup -----------------------
+def gst_rate(category):
+    """Look up the GST rate (in percent) for a spending
+    category. Known: restaurant, electronics, gold, cinema."""
+    rates = {"restaurant": 5, "electronics": 18,
+             "gold": 3, "cinema": 12}
+    category = category.strip().lower().strip("'\"")
+    if category not in rates:
+        return (f"ERROR: unknown category {category!r}. "
+                f"Known: {sorted(rates)}")
+    return str(rates[category])
+
+TOOLS = {"calculate": calculate, "gst_rate": gst_rate}
+
+# The menu = names + docstrings. This is ALL the model sees.
+MENU = "\n".join(f"- {n}: {f.__doc__}" for n, f in TOOLS.items())
+print("TOOL MENU SENT TO THE MODEL:")
+print(MENU)
+print()
+
+# ---- Scripted stand-in for a real LLM ----------------------
+def fake_llm(history):
+    seen = "\n".join(history)
+    if "OBSERVATION" not in seen:
+        return ("THOUGHT: The menu says gst_rate knows rates. "
+                "I need the restaurant rate first.\n"
+                "ACTION: gst_rate(restaurant)")
+    if seen.count("OBSERVATION") == 1:
+        return ("THOUGHT: Rate is 5 percent. Now 5% of 1500.\n"
+                "ACTION: calculate(1500 * 5 / 100)")
+    return ("THOUGHT: The maths says 75.0.\n"
+            "FINAL ANSWER: GST on a 1,500 rupee restaurant "
+            "bill is 75 rupees (at 5%).")
+
+# ---- The loop, hardened with an allow-list check -----------
+def run_agent(task, max_turns=6):
+    history = [f"TASK: {task}", f"TOOLS:\n{MENU}"]
+    for turn in range(1, max_turns + 1):
+        reply = fake_llm(history)
+        history.append(reply)
+        print(f"--- turn {turn} ---")
+        print(reply)
+
+        if "FINAL ANSWER:" in reply:
+            return reply.split("FINAL ANSWER:")[1].strip()
+
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            name = call.split("(")[0].strip()
+            arg = call[call.index("(") + 1 : call.rindex(")")]
+            if name not in TOOLS:   # the allow-list guard
+                result = f"ERROR: no tool named {name!r}"
+            else:
+                result = TOOLS[name](arg.strip())
+            observation = f"OBSERVATION: {result}"
+            history.append(observation)
+            print(observation)
+
+    return "Gave up: hit the max-turns limit."
+
+answer = run_agent("How much GST on a 1500 rupee restaurant bill?")
+print()
+print("AGENT RETURNED:", answer)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it, deliberately. Change <code>gst_rate(restaurant)</code> in <code>fake_llm</code> to <code>gst_rate(spa)</code> and watch the tool answer with a helpful error listing the known categories. Change it to <code>tax_lookup(restaurant)</code> — a tool that does not exist — and watch the allow-list catch it. Then imagine a real model reading each of those error observations: in both cases it has exactly what it needs to fix its own mistake on the next turn. That is what "designed for recovery" feels like.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any MCP server on GitHub and read the docstrings under its <code>@mcp.tool()</code> functions — every one of those paragraphs is shipped into a model's context, which is why the good ones read like briefings, not comments. In merge requests you will meet one-line diffs that change only a docstring, with a message like "agent kept using search for exact id lookups" — that is agent behaviour being engineered in prose, exactly as this chapter promised. And in your daily life as an operator: the permission dialog before a coding agent runs a shell command, the read-only mode on a database tool, the <code>--dry-run</code> flag in a deploy script — all of them are the librarian's rules, deployed at the same boundary you just built.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Your registry offers <code>search_orders</code> and <code>lookup_order</code>. What does the model use to decide which one to call?</p>
+          <div class="q-opts">
+            <button data-opt="a">The functions' source code, which the API shares with the model</button>
+            <button data-opt="b">The names, descriptions and parameter schemas advertised in its context</button>
+            <button data-opt="c">Runtime statistics about which tool succeeded most often before</button>
+          </div>
+          <p class="q-explain">The function bodies never leave your machine. The model sees only the menu — name, description, schema — which is exactly why the description is the real prompt engineering.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. An agent keeps passing an email address into a parameter named <code>user</code> that expects a numeric id. Per Anthropic's tool-writing guidance, the cheapest effective fix is:</p>
+          <div class="q-opts">
+            <button data-opt="a">Fine-tune the model on correct examples</button>
+            <button data-opt="b">Wrap the tool in retries until an id happens to arrive</button>
+            <button data-opt="c">Rename the parameter to <code>user_id</code> and state in the description what it looks like</button>
+          </div>
+          <p class="q-explain">Parameter names and descriptions are prompts. Removing the ambiguity at its source fixes the behaviour for every future call — no retraining, no retry tax.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Mid-run, the model requests <code>ACTION: drop_all_tables()</code> — a tool you never registered. In a well-built loop, what happens?</p>
+          <div class="q-opts">
+            <button data-opt="a">The allow-list check finds no such tool and an ERROR observation goes back to the model</button>
+            <button data-opt="b">The loop searches your codebase for a function with that name and runs it</button>
+            <button data-opt="c">The API provider blocks the request on their servers</button>
+          </div>
+          <p class="q-explain">The registry is the security boundary: nothing outside it can execute, however confidently the model asks. (The naive chapter 45 loop would have crashed with a KeyError here — returning a readable error instead lets the model recover.)</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Why should a destructive tool like <code>issue_refund</code> default to <code>dry_run=True</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">Dry runs are faster, so the agent finishes sooner</button>
+            <button data-opt="b">A confused model's mistake becomes a reviewable printout instead of an irreversible side effect</button>
+            <button data-opt="c">The Anthropic API rejects tools without a dry_run parameter</button>
+          </div>
+          <p class="q-explain">Defaults decide what happens when nobody is paying attention. With dry-run as the default, the real action requires a deliberate opt-in — often by a human at a permission prompt.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A tool receives an invalid argument. What is the best behaviour?</p>
+          <div class="q-opts">
+            <button data-opt="a">Raise an exception so the problem is visible in the stack trace</button>
+            <button data-opt="b">Return an empty string and let the model move on</button>
+            <button data-opt="c">Return a short readable message saying what was wrong and what valid input looks like</button>
+          </div>
+          <p class="q-explain">Observations are prompts too. An exception kills or derails the loop and an empty string teaches nothing — but "ERROR: unknown category 'spa'. Known: [cinema, electronics, gold, restaurant]" lets the model fix itself on the very next turn.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A tool is a plain function plus a name and a description — and the description, not the body, is what the model reads. Tool descriptions are prompts: the real prompt engineering.</li>
+          <li>Write each description like a briefing for a new hire: when to use it, when not to, what inputs look like, what comes back — with unambiguous parameter names (<code>user_id</code>, never <code>user</code>).</li>
+          <li>Type hints plus docstrings become the JSON schema the API advertises; framework decorators generate it automatically, which is why sloppy docstrings produce sloppy agents.</li>
+          <li>The tool registry is an allow-list and the agent's security boundary: the model can only ever reach functions you registered, and unknown requests become error observations, not executions.</li>
+          <li>Treat model-typed arguments as untrusted input — validate shape and range, bound every run with a timeout, and default anything destructive to dry-run or read-only.</li>
+          <li>Results and error messages are prompts too: return meaningful, concise text — a good error message is how an agent recovers instead of getting stuck.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

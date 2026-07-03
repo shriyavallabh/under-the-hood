@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The model landscape — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch032">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act III · The Data Scientist's World</div>
+        <h1>The model landscape</h1>
+        <p class="ch-tagline">Six names, four questions, one map. After this chapter, every model announcement lands in a slot you already have — instead of on the guilty pile of things you meant to look up.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 32 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>You have just moved to a new city, and a colleague asks the only question that matters: <em>"So — where do we eat?"</em> A fool tries to memorise every restaurant. A local learns the shape of the food scene instead. There are three famous kitchen houses downtown; you can only eat at their counters, because their recipes are locked in a safe. Across town there is a marvellous open shelf: kitchens that publish their full recipes, so anyone with a decent stove can cook the dish at home, tweak the spices, even serve it commercially. And within every kitchen there are tiers — the twelve-chef tasting-menu experience for the anniversary, and the fast, reliable counter meal for an ordinary Tuesday.</p>
+        <p>Nobody sane eats the tasting menu daily, and nobody proposes marriage over a counter snack. Knowing the city means knowing the houses, knowing which recipes are public, and matching the occasion to the tier. The LLM market is exactly this city. The kitchen houses are OpenAI, Anthropic, and Google. The open shelf holds Llama, Mistral, and Qwen. And you are about to become a local.</p>
+      </section>
+
+      <h2>Where we are on the map</h2>
+      <p>A quick recap, because this chapter stands on the last two. In <a href="ch024-what-is-a-model.html">what is a model</a> you learned that a model is not code — it is a big file of learned numbers, produced by training and loaded at prediction time. In <a href="ch031-llms-vs-deterministic.html">LLMs vs deterministic models</a> you split the word "model" in two: the deterministic kind (a fraud scorer that gives the same answer every time) and the generative kind (an LLM that writes). This chapter zooms into the LLM half only and answers the question your colleagues answer with brand names: <em>who actually makes these things, and how do the offerings differ?</em></p>
+      <p>Here is the liberating secret: you do not need to track individual models. Version numbers churn every few months and any list would be stale before you finished reading it. What stays stable — for years now — is the <em>structure</em> of the market. Learn the structure once and every future announcement just updates one cell of a table you already own.</p>
+
+      <h2>Four questions beat a hundred names</h2>
+      <p>Every model that exists, or will exist, is located by four questions:</p>
+      <p><strong>1. Which house made it?</strong> A handful of organisations train serious LLMs, because training one costs somewhere between a nice house and a small airport. Each house has a recognisable style, a naming scheme, and a product line — like car makers.</p>
+      <p><strong>2. Can you download the weights?</strong> The <dfn>weights</dfn> are the learned numbers themselves — the modern, giant cousin of the PKL file your data-science colleagues pickle to disk. If the maker publishes that file for anyone to download and run, the model has <dfn>open weights</dfn>. If the file never leaves the maker's servers and you may only talk to it over the internet, the weights are <dfn>closed</dfn> — you rent conversation, you never hold the recipe.</p>
+      <p><strong>3. Which tier is it?</strong> Every house sells a range, from small-and-cheap to what the industry calls a <dfn>frontier model</dfn> — the most capable model anyone can offer at that moment, priced accordingly. Same brand, very different machinery under the badge.</p>
+      <p><strong>4. How does it reach you?</strong> Either as an <dfn>API</dfn> — you send a web request to the maker's computers and the answer comes back, which is what <a href="ch033-first-api-call.html">the next chapter</a> has you doing yourself — or by <dfn>self-hosting</dfn>: downloading open weights and running them on hardware you control.</p>
+      <p>Hold those four questions and the vocabulary below, and the rest of the chapter is a guided walk.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">weights</span><span class="flip-back">The learned numbers that ARE the model — billions of them, saved in files. Training produces them; answering questions just reads them.</span></button>
+        <button class="flip" type="button"><span class="flip-front">open weights</span><span class="flip-back">The weights file is published for download. You can run it, modify it, host it yourself — within its licence. Not the same as open source: training data and code usually stay private.</span></button>
+        <button class="flip" type="button"><span class="flip-front">closed weights</span><span class="flip-back">The weights never leave the maker's servers. You interact only through their API, at their prices, under their terms.</span></button>
+        <button class="flip" type="button"><span class="flip-front">frontier model</span><span class="flip-back">The biggest, most capable tier a house offers right now. The definition moves every year — today's frontier is next year's mid-tier.</span></button>
+        <button class="flip" type="button"><span class="flip-front">small model</span><span class="flip-back">A cheaper, faster model — often 10 to 100 times cheaper than frontier. Ideal for narrow, high-volume jobs like classification, routing, and summaries.</span></button>
+        <button class="flip" type="button"><span class="flip-front">inference</span><span class="flip-back">Running a trained model to get answers, as opposed to training it. When you pay per token, you are paying for inference.</span></button>
+        <button class="flip" type="button"><span class="flip-front">self-hosting</span><span class="flip-back">Running open weights on hardware you control — your servers, your cloud account, your rules. You gain privacy and control; you inherit the ops work.</span></button>
+        <button class="flip" type="button"><span class="flip-front">model card</span><span class="flip-back">The maker's one-page datasheet for a model: sizes, context window, licence, intended use, known limits. The first thing to read when a release actually matters to you.</span></button>
+      </div>
+
+      <h2>A guided walk through the houses</h2>
+      <p>Step through the map. Each stop is one house or one region; the highlighted box is where you are standing.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The whole map">
+          <h3>1. The city at a glance</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">Closed counters<small>OpenAI · Anthropic · Google</small></div>
+              <div class="d-box hot">Open shelf<small>Llama · Mistral · Qwen …</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">You<small>choose by the four questions</small></div>
+          </div>
+          <p class="step-cap">Two districts. On the closed side you rent conversation through an API. On the open side you can take the weights home. Every model you will ever hear of lives in one of these two districts.</p>
+        </div>
+        <div class="step" data-title="OpenAI">
+          <h3>2. OpenAI — the GPT and o-series lines</h3>
+          <div class="diagram">
+            <div class="d-box hot">OpenAI<small>closed weights, API</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">GPT line<small>general-purpose, tiered mini to full</small></div>
+              <div class="d-box">o-series<small>reasoning models: think longer, cost more</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The house that made the whole field famous. ChatGPT is the consumer product; GPT is the model family behind it, sold in tiers. The o-series introduced a second idea: reasoning models that deliberately spend extra tokens thinking through hard problems before answering — slower and dearer, sharper on maths, code, and multi-step logic. Every house now ships some version of this fast-line/thinking-line split.</p>
+        </div>
+        <div class="step" data-title="Anthropic">
+          <h3>3. Anthropic — the Claude family</h3>
+          <div class="diagram">
+            <div class="d-box hot">Anthropic<small>closed weights, API</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">Haiku<small>small, fast, cheap</small></div>
+              <div class="d-box">Sonnet<small>the workhorse middle</small></div>
+              <div class="d-box">Opus<small>frontier tier</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Anthropic names its tiers after poem lengths, which is the most honest naming in the industry: Haiku is short and quick, Opus is the grand work. Claude models have a strong reputation for long documents, careful instruction-following, and agentic coding — Claude Code, the tool many teams run all day, is this family with a loop and a toolbox around it.</p>
+        </div>
+        <div class="step" data-title="Google">
+          <h3>4. Google — Gemini, plus an open-weight cousin</h3>
+          <div class="diagram">
+            <div class="d-box hot">Google<small>Gemini: closed, API</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">Flash<small>fast tier</small></div>
+              <div class="d-box">Pro<small>frontier tier, huge context</small></div>
+              <div class="d-box">Gemma<small>small OPEN-weight siblings</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Gemini's signature strengths are enormous context windows (remember <a href="ch030-tokens-embeddings-context.html">tokens and context</a>? — Gemini stretched that limit hardest) and native multimodality across text, images, audio, and video. Note the plot twist: Google also publishes Gemma, a family of small open-weight models. Houses are not purely one district or the other.</p>
+        </div>
+        <div class="step" data-title="The open shelf">
+          <h3>5. The open shelf — Llama, Mistral, Qwen</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">Llama<small>Meta — made open weights mainstream</small></div>
+              <div class="d-box hot">Mistral<small>French lab — efficient, permissive licences</small></div>
+              <div class="d-box hot">Qwen<small>Alibaba — huge size range, strong multilingual</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Your hardware<small>download and run</small></div>
+          </div>
+          <p class="step-cap">Meta's Llama proved a frontier-class lab would hand out weights, and an ecosystem exploded around it. Mistral pairs downloadable models with a hosted API of its own. Qwen ships everything from tiny models for a laptop to near-frontier giants. Newer names — DeepSeek's open reasoning models startled the whole market in early 2025 — keep landing on this same shelf. Even OpenAI has placed a small open-weight line (gpt-oss) here.</p>
+        </div>
+        <div class="step" data-title="How it reaches you">
+          <h3>6. Two roads from model to product</h3>
+          <div class="diagram">
+            <div class="d-box">Closed model</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">API call<small>their servers, per-token billing</small></div>
+            <div class="d-box">Open weights</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Self-host<small>your GPUs, your ops team</small></div>
+          </div>
+          <p class="step-cap">Closed models arrive only by API. Open models give you a choice: call someone's hosted version, or download the weights and serve them yourself with an engine like vLLM (server-grade) or Ollama (laptop-grade). The next chapter walks the API road; keep the self-host road in your pocket for compliance conversations.</p>
+        </div>
+      </div>
+
+      <h2>Open vs closed: what you are actually trading</h2>
+      <p>The open/closed split sounds ideological, but for a working professional it is a plain commercial trade. Closed weights buy you the strongest models with zero infrastructure: the frontier tiers from the big three houses have led most capability benchmarks most of the time, and using them is one HTTPS request. The costs are dependence — their prices, their outages, their deprecation schedule — and the fact that your prompts travel to someone else's computer, which some regulated data simply may not do.</p>
+      <p>Open weights buy you control. The file is on your disk; nobody can raise the price of running it, retire it while your product depends on it, or read the customer records you feed it. A large bank that must keep client data on premises is not choosing open weights for the vibes — it is often the only lawful option. The bill: you provide the GPUs, the serving stack, the monitoring, and you accept that the very best open model usually trails the very best closed one by some months.</p>
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>"Open weights" is not "open source", and it is not "do whatever you like". Most open releases publish the weights but not the training data or full training code, and each carries its own licence — some truly permissive (Apache 2.0), some with acceptable-use terms or scale thresholds. Before anyone builds a product on an open model, someone must actually read its licence. In a bank, that someone has a legal team on speed dial.</p></div>
+
+      <h2>Small vs frontier: the tier ladder</h2>
+      <p>Inside every house, the same ladder: a small tier, a middle tier, a frontier tier. The names differ — mini and full, Flash and Pro, Haiku, Sonnet, Opus — but the trade is identical: capability against cost and speed. And the gap is not subtle. It is not 20 percent; it is one to two <em>orders of magnitude</em> in price between the bottom and top of a ladder.</p>
+
+      <div data-bars data-title="Price of one million output tokens, by tier" data-unit="USD (illustrative)"
+           data-note="Deliberately round, illustrative numbers — real prices shift quarterly. The durable fact is the ratio: frontier costs 10 to 100 times more than small.">
+        <div class="bar" data-label="Small tier" data-value="1"></div>
+        <div class="bar" data-label="Middle tier" data-value="10"></div>
+        <div class="bar" data-label="Frontier tier" data-value="60"></div>
+      </div>
+
+      <p>That ratio drives one of the most common patterns in production systems, one you have almost certainly operated without naming it: <strong>tiering</strong>. Route the flood of easy, repetitive work — classify this ticket, extract these fields, summarise this thread — to a small model, and reserve the frontier tier for the genuinely hard calls: multi-step reasoning, delicate writing, agent orchestration. The working rule is worth memorising: <em>use the smallest model that passes your quality check, and let evidence, not brand anxiety, push you up the ladder.</em></p>
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>When someone says "just use the best model for everything", translate it to the restaurant version: "let's cater the office canteen from the tasting-menu kitchen". The food would be wonderful. The invoice would end the experiment within a month.</p></div>
+
+      <h2>Try the four questions as code</h2>
+      <p>The whole chapter compresses into a filter: take the candidates, apply your constraints, see who survives. Here it is as a tiny Python program — the catalogue is simplified and the prices are round pretend-numbers, but the <em>logic</em> is exactly the conversation architecture teams have on whiteboards. Press Run, then change the requirements and watch the decision flip.</p>
+
+      <div class="pyrun" data-title="The model picker — change the requirements and re-run">
+<textarea class="py-src" spellcheck="false">
+# Your constraints -- edit these and run again.
+requirements = {
+    "data_must_stay_in_house": True,   # regulator says data cannot leave?
+    "task": "medium",                  # "easy", "medium", or "hard"
+    "calls_per_day": 20000,
+    "monthly_budget_usd": 2000,
+}
+
+# A toy catalogue: four archetypes, illustrative prices.
+CATALOG = [
+    {"name": "frontier closed model (API)",     "hosting": "api",
+     "handles": "hard",   "usd_per_1k_calls": 40},
+    {"name": "mid-tier closed model (API)",     "hosting": "api",
+     "handles": "medium", "usd_per_1k_calls": 8},
+    {"name": "small closed model (API)",        "hosting": "api",
+     "handles": "easy",   "usd_per_1k_calls": 1},
+    {"name": "open-weights model, self-hosted", "hosting": "self",
+     "handles": "medium", "usd_per_1k_calls": 3},
+]
+
+RANK = {"easy": 0, "medium": 1, "hard": 2}
+
+def pick(req):
+    print(f"Need: {req['task']} tasks, "
+          f"{req['calls_per_day']:,} calls/day, "
+          f"budget ${req['monthly_budget_usd']:,}/month, "
+          f"data locked in-house: {req['data_must_stay_in_house']}")
+    print()
+    for m in CATALOG:
+        label = m["name"].ljust(36)
+        if req["data_must_stay_in_house"] and m["hosting"] == "api":
+            print(f"  drop  {label} data may not leave the building")
+            continue
+        if RANK[m["handles"]] &lt; RANK[req["task"]]:
+            print(f"  drop  {label} not capable enough for this task")
+            continue
+        monthly = m["usd_per_1k_calls"] * req["calls_per_day"] / 1000 * 30
+        if monthly &gt; req["monthly_budget_usd"]:
+            print(f"  drop  {label} ~${monthly:,.0f}/month is over budget")
+            continue
+        print(f"  KEEP  {label} ~${monthly:,.0f}/month -- fits")
+        return m["name"]
+    return "nothing fits -- a requirement has to give"
+
+print()
+print("DECISION:", pick(requirements))
+</textarea>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Now make it hurt, the way real projects do: set <code>"task": "hard"</code> while keeping <code>data_must_stay_in_house</code> as <code>True</code>, and run it. Nothing fits — the frontier models are API-only and the self-hostable option is not capable enough. That empty result is not a bug; it is the exact tension behind half the "should we self-host?" meetings in regulated industries, and why open-weight releases that close the capability gap make headlines.</p></div>
+
+      <h2>Fine-tuning vs prompting, in one paragraph</h2>
+      <p>One more fork you will hear debated: should we <em>prompt</em> the model or <em>fine-tune</em> it? Prompting changes only the instructions you send — the weights stay untouched, so it is instant, reversible, and free to iterate; everything you have built as an operator so far is prompting. <dfn>Fine-tuning</dfn> is additional training that actually nudges the weights using your own examples — it needs curated data, compute, and evaluation, and it produces a new model variant you must then version and maintain. The professional rule of thumb: exhaust prompting first (and retrieval — giving the model your documents at ask-time — which a later act covers properly), because it solves most problems at a fraction of the effort; reach for fine-tuning when you need consistent <em>form</em> rather than new <em>facts</em> — a house style, a strict output format, a specialised tone — or when you must make a small cheap model perform a narrow job that currently needs an expensive one. Fine-tune for form, prompt for facts, and be suspicious of anyone who proposes fine-tuning before showing you the prompt they gave up on.</p>
+
+      <h2>Keeping the map without chasing every release</h2>
+      <p>Model launches now arrive weekly, each with a triumphant chart. Trying to follow all of them is a hobby, not a job skill. Here is the low-effort maintenance plan.</p>
+      <p><strong>Track houses, not models.</strong> The six or so names in this chapter change slowly — years, not weeks. When a headline lands, first ask "which house, which district?" and most of the meaning arrives free of charge.</p>
+      <p><strong>Only re-open a decision when an answer changes.</strong> A release deserves your attention only if it changes an answer to one of the four questions <em>for a system you run</em>: a tier gets dramatically cheaper, an open model reaches a capability class that was closed-only, a licence changes, a model you depend on is deprecated. Everything else is spectator sport.</p>
+      <p><strong>Read the model card, not the launch thread.</strong> When a release does matter, the model card gives you sizes, context window, licence, and intended use in five minutes of primary-source reading — better information than an hour of commentary.</p>
+      <p><strong>Treat leaderboards as weather, not law.</strong> Public benchmark rankings are useful for spotting the rough capability class and nothing more; models can be tuned to shine on famous tests. The only leaderboard that matters for your system is your own quality check on your own tasks — a discipline this course builds up later, and the true final answer to "which model should we use?".</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>The entire landscape usually condenses to a single string in a config file. Skim any agent repository and you will find it: <code>model: "gpt-…"</code> or <code>claude-sonnet-…</code> or <code>gemini-…-flash</code> in a YAML or <code>.env</code> file, or a Hugging Face repo path like <code>meta-llama/…</code> in a <code>vllm serve</code> command — that last shape is the tell that a team is self-hosting open weights. When a merge request changes just that one line, the diff is one line but the decision is this whole chapter: house, weights, tier, and road all at once. You are now equipped to review it.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A colleague says a new model is "open weights". What exactly is being offered?</p>
+          <div class="q-opts">
+            <button data-opt="a">The training data and code are public, so anyone can rebuild it from scratch</button>
+            <button data-opt="b">The file of learned numbers is downloadable, so you can run the model on your own hardware — within its licence</button>
+            <button data-opt="c">The model is free of any licence and may be used for anything</button>
+          </div>
+          <p class="q-explain">Open weights means the weights file itself is published. Training data and code usually stay private, and a licence still applies — which is why "open weights" and "open source" are not the same claim.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. A regulator rules that customer data may never leave your organisation's own servers. Which question of the map does that settle first?</p>
+          <div class="q-opts">
+            <button data-opt="a">Small vs frontier — you must now use the largest model</button>
+            <button data-opt="b">Which house — you must switch brands</button>
+            <button data-opt="c">API vs self-hosted — API calls send data to someone else's computers, so self-hosting open weights becomes the lawful path</button>
+          </div>
+          <p class="q-explain">An API call, by definition, transmits your prompt to the maker's servers. If data cannot leave the building, the delivery road is decided before any debate about brands or tiers begins.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What distinguishes a "reasoning" model line, like OpenAI's o-series?</p>
+          <div class="q-opts">
+            <button data-opt="a">It deliberately spends extra tokens working through a problem before answering — slower and costlier, stronger on multi-step logic</button>
+            <button data-opt="b">It runs without any training data</button>
+            <button data-opt="c">It is the only kind of model that can call tools</button>
+          </div>
+          <p class="q-explain">Reasoning models trade time and tokens for depth: they think through hard problems step by step before producing the answer. Every major house now offers some version of this fast-line/thinking-line split.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Your team's summariser works, but the frontier-tier bill is climbing. What does this chapter's working rule suggest first?</p>
+          <div class="q-opts">
+            <button data-opt="a">Fine-tune the frontier model so it answers faster</button>
+            <button data-opt="b">Test a small tier on the same task with your own quality check, and keep the smallest model that passes</button>
+            <button data-opt="c">Switch to a different house's frontier model</button>
+          </div>
+          <p class="q-explain">Summarising is exactly the narrow, high-volume work the small tiers exist for, at 10 to 100 times lower cost. The rule: smallest model that passes your check — and let evidence, not brand anxiety, push you up the ladder.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A splashy new model launches tomorrow. When does it deserve more than a headline's worth of your attention?</p>
+          <div class="q-opts">
+            <button data-opt="a">Always — staying current means studying every release</button>
+            <button data-opt="b">Never — the landscape is stable enough to ignore</button>
+            <button data-opt="c">When it changes an answer to one of the four questions for a system you actually run — price tier, capability class, licence, or availability</button>
+          </div>
+          <p class="q-explain">Track houses, not models. A release matters when it flips a decision you own: a tier gets far cheaper, an open model reaches a formerly closed-only capability class, a licence shifts, or your current model is deprecated. Otherwise it is spectator sport.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>You do not track models; you track a structure. Four questions locate anything: which house, open or closed weights, which tier, API or self-hosted.</li>
+          <li>The closed counters are OpenAI (GPT line plus the o-series reasoning models), Anthropic (Claude: Haiku, Sonnet, Opus), and Google (Gemini Flash and Pro). The open shelf is led by Meta's Llama, Mistral, and Qwen — with crossovers like Google's Gemma and OpenAI's gpt-oss.</li>
+          <li>Open weights means the file of learned numbers is downloadable and self-hostable — it does not mean open training data, and a licence always still applies.</li>
+          <li>Tiers inside a house differ by 10 to 100 times in price. Use the smallest model that passes your own quality check, and route easy volume down the ladder.</li>
+          <li>Prompting changes instructions and costs nothing to iterate; fine-tuning changes the weights and costs data, compute, and maintenance. Fine-tune for form, prompt for facts — and exhaust prompting first.</li>
+          <li>A release earns your attention only when it changes an answer to one of the four questions for a system you run. When it does, read the model card, not the hype thread.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

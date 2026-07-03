@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Classes: objects with a job — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch013">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act II · The Engineering Layer</div>
+        <h1>Classes: objects with a job</h1>
+        <p class="ch-tagline">Every framework you operate is a box of classes. Half an hour from now, <code>class</code>, <code>__init__</code>, and <code>self</code> will read like plain English — and framework source code will stop looking like a wall.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 13 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your friend Meera turned one Pune chai stall into a franchise. At head office there is a binder: <em>the playbook</em>. It declares what every outlet must have — a city, a till with opening cash, a cups-sold counter — and what every outlet must be able to do: open in the morning, sell a cup, cash up at night. The binder itself sells nothing. You cannot buy tea from a document.</p>
+        <p>But each time Meera signs a new outlet, the same ritual runs: premises found, then the opening-day checklist — put the float in the till, set the counter to zero, paint the city's name on the board. From that moment the outlet lives its own life. Pune's till fills at its own pace; Indore's counter climbs on its own schedule. Same playbook, separate realities.</p>
+        <p>And notice one small word doing quiet, essential work. The playbook says "at closing, count <em>your</em> till" — and every outlet applies the rule to itself. The playbook is a <strong>class</strong>. Each outlet is an <strong>instance</strong>. The opening-day checklist is <strong><code>__init__</code></strong>. And that little word <em>your</em>? Python spells it <strong><code>self</code></strong>.</p>
+      </section>
+
+      <h2>You have been using objects all along</h2>
+      <p>Quick recap from earlier in the course, because this chapter stands on it. In <a href="ch002-names-and-objects.html">names and objects</a> you learned that everything in Python is an object — a value that carries both data and behaviour, with names merely pointing at it. In <a href="ch003-strings-and-fstrings.html">the strings chapter</a> you wrote <code>"invoice".upper()</code>, and in <a href="ch004-collections.html">collections</a> you wrote <code>history.append(reply)</code> — both times you were calling behaviour that lives <em>on the value itself</em>, reached through a dot. You have been a happy customer of objects for twelve chapters.</p>
+      <p>Here is the part nobody told you: <code>str</code> is a class. <code>list</code> is a class. <code>dict</code> is a class. Someone, once, wrote down the playbook for what every string has and can do — and every string you have ever created was an outlet opened from that playbook. A <dfn>class</dfn> is a blueprint that defines what data every object of a particular kind carries and what that object can do. This chapter, you stop being the customer and step behind the counter: you will write your own.</p>
+      <p>Why should an operator of AI systems care? Because frameworks are made of almost nothing else. When you write <code>client = Anthropic()</code> or <code>mcp = FastMCP("weather")</code>, you are instantiating classes. When you open framework source to see why something misbehaves, every second line starts with <code>self.</code> — and after today, that will read as effortlessly as <em>your till, your counter</em>.</p>
+
+      <h2>Writing the blueprint</h2>
+      <p>Here is Meera's playbook, translated. Read it slowly once — every piece gets unpacked below.</p>
+
+      <div class="code-title">outlet.py</div>
+      <pre><code class="language-python">class Outlet:
+    """One chai outlet in the franchise."""
+
+    def __init__(self, city, opening_float):
+        self.city = city
+        self.till = opening_float
+        self.cups_sold = 0
+
+    def sell(self, cups):
+        self.cups_sold += cups
+        self.till += cups * 15</code></pre>
+
+      <p>The anatomy: the <code>class</code> keyword, a name, a colon, and an indented body — the same block shape you know from <a href="ch007-functions.html">functions</a>. Two reading cues are worth locking in immediately. First, class names use <em>CapWords</em> by convention (<code>Outlet</code>, <code>ChatSession</code>, <code>StateGraph</code>) while functions and variables stay lowercase — so when you spot a capitalised name being called in unfamiliar code, you can bet it is a class being instantiated. Second, the body of a class is mostly <code>def</code> statements. A function defined inside a class gets a new job title: it becomes a <dfn>method</dfn> — behaviour that every object built from this class will carry around with it.</p>
+      <p>The blueprint alone brews no tea. To get a working outlet you <em>call the class as if it were a function</em>:</p>
+
+      <div class="code-title">opening two outlets</div>
+      <pre><code class="language-python">pune = Outlet("Pune", 500)
+indore = Outlet("Indore", 200)</code></pre>
+
+      <p>That call is <dfn>instantiation</dfn> — asking the class to manufacture one fresh object, called an <dfn>instance</dfn>, built to the blueprint's specification. Two details that trip up every newcomer, settled now: you never call <code>__init__</code> yourself, and you never pass <code>self</code> yourself. Python handles both. Here is the full sequence of what actually happens when that first line runs — step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Blueprint exists">
+          <h3>1. The class statement has already run</h3>
+          <div class="diagram">
+            <div class="d-box hot">class Outlet<small>blueprint object in memory</small></div>
+            <div class="d-box dim">pune<small>does not exist yet</small></div>
+          </div>
+          <p class="step-cap">When Python first reads the <code>class</code> block — typically at import time, as you saw in the previous chapter on files and imports — it builds one blueprint object and binds the name <code>Outlet</code> to it. No outlets exist yet; only the playbook does.</p>
+        </div>
+        <div class="step" data-title="The call">
+          <h3>2. You call the class like a function</h3>
+          <div class="diagram">
+            <div class="d-box hot">Outlet("Pune", 500)<small>a call, with arguments</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">class Outlet</div>
+          </div>
+          <p class="step-cap">Round brackets after a class name mean "manufacture one". The arguments are the details this particular outlet needs — they are on their way to the opening-day checklist.</p>
+        </div>
+        <div class="step" data-title="Blank object">
+          <h3>3. Python creates a blank object</h3>
+          <div class="diagram">
+            <div class="d-box">class Outlet</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">(new empty object)<small>no attributes yet</small></div>
+          </div>
+          <p class="step-cap">A brand-new, empty object appears in memory — the freshly signed premises, keys in hand, nothing inside. It knows which class built it, and nothing else.</p>
+        </div>
+        <div class="step" data-title="__init__ runs">
+          <h3>4. __init__ runs, with self = that new object</h3>
+          <div class="diagram">
+            <div class="d-box hot">__init__(self, "Pune", 500)<small>self IS the blank object</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">self.city = "Pune"<small>self.till = 500, self.cups_sold = 0</small></div>
+          </div>
+          <p class="step-cap">Python calls <code>__init__</code> automatically, quietly passing the blank object as the first argument — that is <code>self</code>. Each <code>self.something = value</code> line bolts an attribute onto the new object: the opening-day checklist, executed.</p>
+        </div>
+        <div class="step" data-title="Name bound">
+          <h3>5. The finished object is handed back</h3>
+          <div class="diagram">
+            <div class="d-box good">pune<small>a name</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Outlet instance<small>city="Pune", till=500, cups_sold=0</small></div>
+          </div>
+          <p class="step-cap">The completed object is returned from the call, and the name <code>pune</code> is bound to it — ordinary name-binding, exactly as in <a href="ch002-names-and-objects.html">chapter 2</a>. Run the line again with different arguments and you get a second, fully independent object.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Those double underscores around <code>__init__</code> mark it as one of Python's special hook methods — pronounced "dunder init". The next chapter is entirely about these secret handshakes; for now, just know that the dunders are how <em>your</em> class plugs into machinery Python runs <em>for</em> you, and <code>__init__</code> is the one that runs at instantiation.</p></div>
+
+      <h2>self: the explicit "this"</h2>
+      <p>Look again at <code>def sell(self, cups):</code>. Two parameters — yet you call it as <code>pune.sell(3)</code>, passing one argument. Where does the other one come from?</p>
+      <p><dfn>self</dfn> is the particular instance a method is currently working on, and Python passes it for you, automatically, as the first argument of every method call. The dot-call is really a shorthand. These two lines do exactly the same thing:</p>
+
+      <div class="code-title">the shorthand, unfolded</div>
+      <pre><code class="language-python">pune.sell(3)          # what you write
+Outlet.sell(pune, 3)  # what Python actually does</code></pre>
+
+      <p>The method is written <em>once</em>, in the class. But when Pune sells tea, <code>self</code> is the Pune object, so <code>self.till += cups * 15</code> tops up <em>Pune's</em> till. When Indore sells tea a moment later, the very same lines of code run with <code>self</code> pointing at the Indore object, and Indore's till changes instead. One recipe, cooked in whichever kitchen invoked it. That is the entire trick of object-oriented programming, and you already understood it the moment the playbook said "count <em>your</em> till".</p>
+      <p>If you have brushed against JavaScript or Java, this is the same idea as their <code>this</code> — except those languages make it appear invisibly inside methods, while Python puts it right there in the parameter list where you can see it. Explicit beats magic: when you read framework source, every <code>self.history</code>, <code>self.model</code>, <code>self.tools</code> tells you plainly "this lives on the object, not in a local variable". One more demystification: <code>self</code> is not a keyword. It is only an unbreakable convention for naming that first parameter — you <em>could</em> call it <code>outlet</code>, and the code would run, and every Python reader on Earth would frown. Never rename it.</p>
+
+      <p>Six words carry this chapter. Flip each card until the back feels obvious:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">class</span><span class="flip-back">The blueprint. Defines what data objects of this kind carry and what they can do. Sells no tea itself.</span></button>
+        <button class="flip" type="button"><span class="flip-front">instance</span><span class="flip-back">One concrete object manufactured from a class. Each instance has its own separate copy of the data. Also just called "an object".</span></button>
+        <button class="flip" type="button"><span class="flip-front">instantiation</span><span class="flip-back">Calling a class like a function — <em>Outlet("Pune", 500)</em> — to manufacture a new instance.</span></button>
+        <button class="flip" type="button"><span class="flip-front">__init__</span><span class="flip-back">The opening-day checklist. Runs automatically on every new instance, attaching its starting attributes. You never call it yourself.</span></button>
+        <button class="flip" type="button"><span class="flip-front">self</span><span class="flip-back">The instance this method call is working on — Python's explicit "this". Passed automatically as the first argument of every method.</span></button>
+        <button class="flip" type="button"><span class="flip-front">attribute</span><span class="flip-back">A piece of data living on an object, reached with a dot: <em>pune.till</em>. Nouns. Methods are the verbs.</span></button>
+      </div>
+
+      <h2>Run the whole franchise</h2>
+      <p>Enough theory — open some outlets. Press <strong>Run</strong>, then read the output against the code until every line of it is unsurprising.</p>
+
+      <div class="pyrun" data-title="The franchise, live — run me">
+<textarea class="py-src" spellcheck="false">
+class Outlet:
+    # Shared by EVERY outlet -- a class attribute
+    brand = "Cutting Chai Co."
+
+    def __init__(self, city, opening_float):
+        # The opening-day checklist. self IS the new outlet.
+        self.city = city              # instance attribute
+        self.till = opening_float     # instance attribute
+        self.cups_sold = 0            # instance attribute
+
+    def sell(self, cups):
+        self.cups_sold += cups
+        self.till += cups * 15
+        return f"{self.city}: +{cups} cups, till is now Rs.{self.till}"
+
+# Instantiation: calling the class like a function
+pune = Outlet("Pune", 500)
+indore = Outlet("Indore", 200)
+
+print(pune.sell(3))
+print(indore.sell(10))
+print(pune.sell(2))
+
+print()
+print("Same blueprint, separate state:")
+print("  Pune till:  ", pune.till, "| cups:", pune.cups_sold)
+print("  Indore till:", indore.till, "| cups:", indore.cups_sold)
+print("Both proudly branded:", Outlet.brand)
+
+# The self shorthand, proven: these are the same call
+print()
+print(Outlet.sell(pune, 1))   # what Python does under the hood
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now break it on purpose — the errors you cause here are ones you will meet in real logs for years. Delete <code>self</code> from <code>def sell(self, cups):</code> and run: you get <em>TypeError: sell() takes 1 positional argument but 2 were given</em>. Baffling until today; obvious now — Python invisibly passed <code>pune</code> as the first argument and found no parameter waiting for it. Then try misspelling an attribute (<code>pune.til</code>) and meet <em>AttributeError</em>, the "no such thing on this object" error you have seen a hundred times in agent stack traces.</p></div>
+
+      <h2>Attributes and methods: the nouns and the verbs</h2>
+      <p>Everything you reach through the dot falls into two families. An <dfn>attribute</dfn> is data parked on the object — a noun you look at. A method is behaviour the object can perform — a verb you invoke. The reading cue is the brackets:</p>
+
+      <div class="tbl"><table>
+        <tr><th>You read</th><th>What it is</th><th>In the franchise</th></tr>
+        <tr><td><code>pune.till</code></td><td>Attribute — data, no brackets</td><td>Glance at the till</td></tr>
+        <tr><td><code>pune.sell(3)</code></td><td>Method — behaviour, brackets</td><td>Ask the outlet to do work</td></tr>
+      </table></div>
+
+      <p>This tiny distinction is a superpower when skimming unfamiliar code. <code>agent.model</code> — reading a setting. <code>agent.invoke(state)</code> — making it do something. No brackets, no side effects (usually); brackets, work is happening.</p>
+      <p>There is one more split hiding in the pyrun above, and the franchise makes it intuitive. <code>self.till</code> was created inside <code>__init__</code>, so each outlet gets <em>its own</em> — an <dfn>instance attribute</dfn>, one copy per object, like each outlet's till. But <code>brand</code> was defined directly in the class body, outside any method — a <dfn>class attribute</dfn>, a single copy stored on the blueprint and shared by every instance, like the menu board design head office prints for everyone. When you ask <code>pune.brand</code>, Python looks on the <code>pune</code> object first, finds nothing, then checks the class and finds it there. Instance first, class second — that lookup order is the whole rule.</p>
+
+      <div class="code-title">shared vs. per-outlet</div>
+      <pre><code class="language-python">class Outlet:
+    brand = "Cutting Chai Co."   # class attribute: ONE copy, on the blueprint
+    price = 15                   # change it at HQ, every outlet sees it
+
+    def __init__(self, city):
+        self.city = city         # instance attribute: one per outlet</code></pre>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The classic trap: putting something <em>mutable</em> — a list or dict from <a href="ch004-collections.html">chapter 4</a> — in the class body. Write <code>history = []</code> at class level and every instance appends into the <em>same shared list</em>; session A suddenly "remembers" session B's messages. It is a famous, painful bug. The rule that prevents it: constants and settings may live on the class; anything an instance will <em>change</em> must be created in <code>__init__</code> as <code>self.history = []</code>, so each object starts with its own.</p></div>
+
+      <h2>When a class beats loose functions</h2>
+      <p>Now the judgement call the tagline promised. Nothing about classes is <em>required</em> — you could run the whole franchise with plain functions and dicts. Plenty of code does, and here is what it looks like:</p>
+
+      <div class="code-title">the loose-functions version</div>
+      <pre><code class="language-python">def make_session(name):
+    return {"name": name, "history": []}
+
+def ask(session, text):
+    session["history"].append(text)
+    # ...call the model, append the reply...
+
+def summary(session):
+    return f"{session['name']}: {len(session['history'])} messages"</code></pre>
+
+      <p>Notice the smell: three functions, and every single one takes <code>session</code> as its first parameter, because they all operate on the same bundle of state. The bundle and its behaviours clearly belong together — but the language is not being told that. Any code anywhere can reach into the dict and mangle it; the related functions drift apart across files; and every caller must remember to pass the right bundle to the right function.</p>
+      <p>That smell — <em>a bundle of data plus several functions that all take it as their first argument</em> — is precisely the signal that the bundle wants to be an object. A class fuses the state and the behaviour into one thing with a job. And look what happens to that first parameter when you convert: <code>session</code> becomes <code>self</code>. That is all <code>self</code> ever was — the bundle, given its permanent seat.</p>
+
+      <div class="pyrun" data-title="Loose functions, promoted to a class — run me">
+<textarea class="py-src" spellcheck="false">
+def fake_llm(history):
+    """Scripted stand-in for a real LLM API call."""
+    return (f"(model, having read {len(history)} messages) "
+            f"Noted: {history[-1]}")
+
+class ChatSession:
+    def __init__(self, name):
+        self.name = name
+        self.history = []     # fresh list PER session (see the trap above)
+
+    def ask(self, text):
+        self.history.append(text)
+        reply = fake_llm(self.history)
+        self.history.append(reply)
+        return reply
+
+    def summary(self):
+        return f"[{self.name}] {len(self.history)} messages so far"
+
+# Two independent sessions from one blueprint
+support = ChatSession("support")
+billing = ChatSession("billing")
+
+print(support.ask("My login is broken"))
+print(billing.ask("Where is invoice 42?"))
+print(support.ask("Still broken after reset!"))
+
+print()
+print(support.summary())
+print(billing.summary())
+</textarea>
+      </div>
+
+      <p>Two sessions, two histories, zero bookkeeping by the caller — each object guards its own state and carries its own behaviour. Run it, then read it once more the way a reviewer would, line by line:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">chat_session.py — read it like a reviewer</div>
+        <div class="wl-line"><code>class ChatSession:</code>
+          <div class="wl-note">CapWords name: the giveaway that this is a blueprint, not a function. Everything indented below belongs to it.</div></div>
+        <div class="wl-line"><code>    def __init__(self, name):</code>
+          <div class="wl-note">The opening-day checklist. Runs automatically on every <code>ChatSession(...)</code> call, with <code>self</code> already pointing at the brand-new blank object.</div></div>
+        <div class="wl-line"><code>        self.name = name</code>
+          <div class="wl-note">Read the two sides carefully: the right-hand <code>name</code> is the incoming argument, a temporary local; the left-hand <code>self.name</code> bolts it onto the object permanently. Parameter in, attribute out — the most common line in all of Python.</div></div>
+        <div class="wl-line"><code>        self.history = []</code>
+          <div class="wl-note">A fresh, private list for each session, created at instantiation time. This is the correct home for mutable state — putting <code>history = []</code> up at class level would make every session share one list.</div></div>
+        <div class="wl-line"><code>    def ask(self, text):</code>
+          <div class="wl-note">A method: a function that lives on the class and receives the instance first. Called as <code>support.ask("...")</code>; Python translates that to <code>ChatSession.ask(support, "...")</code>.</div></div>
+        <div class="wl-line"><code>        self.history.append(text)</code>
+          <div class="wl-note">The object updating its own state — no bundle passed in from outside, because the bundle IS <code>self</code>. Note this is <em>this session's</em> history; the other session is untouched.</div></div>
+        <div class="wl-line"><code>        reply = fake_llm(self.history)</code>
+          <div class="wl-note">In production this line is a real API call — <code>client.messages.create(...)</code>. The scripted stand-in keeps the example runnable in your browser; the shape is identical.</div></div>
+        <div class="wl-line"><code>        self.history.append(reply)</code></div>
+        <div class="wl-line"><code>        return reply</code>
+          <div class="wl-note">Methods return values exactly like ordinary <a href="ch007-functions.html">functions</a> — because that is what they are, plus a reserved front seat for the instance.</div></div>
+      </div>
+
+      <p>One caution to balance the enthusiasm: do not convert <em>everything</em> into classes. Python is not one of those languages where every line must live inside one. A one-off transformation with no state to guard is happiest as a plain function; a pipeline of steps is often just functions calling functions. Reach for a class when state and behaviour genuinely travel together — and keep this <code>ChatSession</code> in your pocket, because an object holding a conversation history with an <code>ask</code> method is the exact seed that grows into the full agent loop you will <a href="ch045-react-loop-by-hand.html">build by hand in Act V</a>.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Once you see instantiation, you cannot unsee it. <code>client = Anthropic()</code>, <code>mcp = FastMCP("weather")</code>, <code>graph = StateGraph(State)</code> — capitalised name, brackets, object back: classes being instantiated, and the keyword arguments you pass are riding straight into someone's <code>__init__</code>. Open any framework's source file and count the <code>self.</code>s — an agent class reads <code>self.model</code>, <code>self.tools</code>, <code>self.middleware</code>, which you can now translate as "this particular agent's model, tools, and middleware". Two error messages also just became legible: <em>TypeError: __init__() missing 1 required positional argument</em> means you instantiated a class without something its checklist needs, and <em>AttributeError: 'X' object has no attribute 'y'</em> means you asked an object for a noun that was never bolted on. Both point you straight at the class definition.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Inside <code>def sell(self, cups):</code>, what exactly is <code>self</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">A Python keyword that refers to the class</button>
+            <button data-opt="b">A copy of the object, made fresh for each call</button>
+            <button data-opt="c">The particular instance the method was called on, passed automatically by Python</button>
+          </div>
+          <p class="q-explain"><code>pune.sell(3)</code> is shorthand for <code>Outlet.sell(pune, 3)</code> — Python slides the instance in as the first argument. It is not even a keyword, just an ironclad naming convention for that first parameter.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. What does the line <code>session = ChatSession("billing")</code> actually do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Runs every method in the class once, top to bottom</button>
+            <button data-opt="b">Creates a new blank object, runs <code>__init__</code> on it with self pointing at it, and binds the name to the result</button>
+            <button data-opt="c">Makes a copy of the class so it can be edited safely</button>
+          </div>
+          <p class="q-explain">Instantiation is manufacture: blank object, opening-day checklist (<code>__init__</code>) attaches the starting attributes, finished object handed back and bound to the name. The other methods sit ready but do not run until called.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. <code>brand = "Cutting Chai Co."</code> sits in the class body; <code>self.till = 500</code> sits inside <code>__init__</code>. What is the difference?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>brand</code> is one shared copy on the blueprint; <code>till</code> is a separate copy on each instance</button>
+            <button data-opt="b">No real difference — both end up on every instance separately</button>
+            <button data-opt="c"><code>brand</code> is read-only; <code>till</code> is writable</button>
+          </div>
+          <p class="q-explain">Class attributes live once, on the class, shared by all instances (the printed menu from head office). Instance attributes are created per object in <code>__init__</code> (each outlet's own till). Lookup checks the instance first, then the class.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. A teammate writes <code>history = []</code> directly in the class body of <code>ChatSession</code>. What goes wrong?</p>
+          <div class="q-opts">
+            <button data-opt="a">Nothing — that is the recommended place for it</button>
+            <button data-opt="b">Python raises a SyntaxError, because lists cannot be class attributes</button>
+            <button data-opt="c">Every session shares one list, so messages from different sessions bleed into each other</button>
+          </div>
+          <p class="q-explain">A class attribute is a single shared object. Every instance appending to it appends to the <em>same list</em> — the classic mutable-class-attribute bug. Mutable state belongs in <code>__init__</code> as <code>self.history = []</code>, giving each instance its own.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. You find three functions that all take the same <code>session</code> dict as their first parameter. What is that a signal for?</p>
+          <div class="q-opts">
+            <button data-opt="a">The functions should be merged into one big function</button>
+            <button data-opt="b">The bundle of state and its behaviours belong together — a class, where that shared parameter becomes <code>self</code></button>
+            <button data-opt="c">The dict should be made a global variable so nothing needs passing</button>
+          </div>
+          <p class="q-explain">Data plus several functions that all operate on it is exactly what a class expresses: state and behaviour fused into one object with a job. The tell is beautiful — the parameter they all shared is literally what <code>self</code> becomes.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A class is a blueprint; an instance is one object manufactured from it by calling the class like a function. You have used them since chapter 1 — <code>str</code>, <code>list</code>, and <code>dict</code> are classes too.</li>
+          <li><code>__init__</code> is the opening-day checklist: it runs automatically on every new instance and bolts on its starting attributes. You never call it yourself.</li>
+          <li><code>self</code> is Python's explicit "this" — the instance a method is working on, passed automatically: <code>pune.sell(3)</code> is really <code>Outlet.sell(pune, 3)</code>.</li>
+          <li>Attributes are the nouns (data, no brackets); methods are the verbs (behaviour, brackets). A method is just a function with a reserved front seat for the instance.</li>
+          <li>Class attributes live once on the blueprint and are shared; instance attributes are created per object in <code>__init__</code>. Never put mutable state (lists, dicts) at class level.</li>
+          <li>Reach for a class when several functions keep passing the same bundle of state around — and not before. Plain functions remain excellent Python.</li>
+          <li>Framework code is classes all the way down: <code>Anthropic()</code>, <code>FastMCP("weather")</code>, <code>StateGraph(State)</code> are instantiations, and every <code>self.</code> in their source now reads as plain English.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

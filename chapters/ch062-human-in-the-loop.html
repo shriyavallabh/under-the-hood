@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Human-in-the-loop: interrupts — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch062">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VII · LangGraph</div>
+        <h1>Human-in-the-loop: interrupts</h1>
+        <p class="ch-tagline">A graph that can stop mid-step, wait a week for a human signature, and pick up exactly where it froze — this is the mechanism that lets agents touch money, production, and anything else you are not willing to let a model do alone.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 63 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Thursday afternoon at a bank branch. A clerk prepares an urgent transfer: 4,85,000 rupees to a supplier. The rulebook is blunt — anything above fifty thousand needs the branch manager's signature. But the clerk does not stand outside the manager's office holding the form. She writes <em>everything</em> onto it — payee, account, amount, the checks she already did — stamps it <strong>PENDING APPROVAL</strong>, drops it into the approvals tray, and gets on with her day. The manager, as it happens, is away until Monday.</p>
+        <p>Monday morning, the manager reads the form, signs it, and drops it back. A clerk — not even the same one — pulls it from the tray and continues from precisely where the work stopped. Nobody re-did the earlier steps. Nobody's memory mattered. The branch could have had a power cut all weekend and the process would still be intact, because the process lived on the form, not in anyone's head.</p>
+        <p>That tray is <code>interrupt()</code>. The form is a checkpoint. The signature is <code>Command(resume="yes")</code>. This chapter is about teaching your graph to use the tray.</p>
+      </section>
+
+      <h2>Where we left off — and the door it unlocks</h2>
+      <p>Quick recap of <a href="ch061-checkpointing.html">the checkpointing chapter</a>, because everything here stands on it. A <dfn>checkpointer</dfn> is a save-game system for a graph: after every node, LangGraph writes the full state to a store — memory, SQLite, Postgres, Redis — keyed by a <dfn>thread_id</dfn>, which is just a name for one ongoing run. Pass the same <code>config={"configurable": {"thread_id": ...}}</code> later and the graph reloads that saved state and carries on. We framed it as crash insurance and as conversation memory.</p>
+      <p>But there is a third use, and it is the most valuable one: <strong>if a graph can survive an accidental stop, it can afford to stop on purpose.</strong> Deliberately. Mid-task. To ask a human something. The pause costs nothing — no server thread sits blocked, no process waits in memory — because the run is not "waiting" anywhere. It is simply a row in a database, like the form in the tray, until somebody comes back with an answer. That deliberate pause is what LangGraph calls an <dfn>interrupt</dfn>: a point where the graph stops itself and hands a question up to whoever is operating it.</p>
+
+      <h2>What interrupt() actually does</h2>
+      <p>The API is one function and one class, both from <code>langgraph.types</code>: <code>interrupt()</code> and <code>Command</code>. You call <code>interrupt(payload)</code> <em>inside a node</em>, at the exact line where you want a human's input. The payload is whatever the human needs to see — a question, a draft, a payment object. Under the hood, <code>interrupt()</code> raises a special exception. The LangGraph runtime catches it, saves everything to the checkpointer, and ends the run — not with a crash, but with a polite report: the result you get back from <code>.invoke()</code> carries an <code>__interrupt__</code> entry containing your payload. Your application shows that payload to a human however it likes: a web form, a chat message, an approvals inbox.</p>
+      <p>Then — minutes, hours, or days later — someone answers. You call <code>.invoke()</code> again on the <em>same thread_id</em>, but instead of fresh input you pass <code>Command(resume=answer)</code>. The runtime reloads the checkpoint, re-enters the interrupted node, and this time the very same <code>interrupt()</code> call does not raise — it <strong>returns the human's answer</strong>, as if the function had simply taken a very long time to come back. Your node code reads the decision and carries on down the graph.</p>
+      <p>Watch the whole approval gate in motion — this is the exact flow the chapter's tagline promised, an agent that wants to send a payment:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Draft">
+          <h3>1. The agent drafts the payment</h3>
+          <div class="diagram">
+            <div class="d-box hot">draft node<small>builds the payment: 4,85,000 to a supplier</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">gate node</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">send node</div>
+          </div>
+          <p class="step-cap">The run starts normally. The draft node does its work and, thanks to the checkpointer, the state is saved as soon as the node finishes — same as any other run from the last chapter.</p>
+        </div>
+        <div class="step" data-title="interrupt()">
+          <h3>2. The gate node calls interrupt()</h3>
+          <div class="diagram">
+            <div class="d-box dim">draft node</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">gate node<small>interrupt({"approve?": payment})</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">send node<small>never reached</small></div>
+          </div>
+          <p class="step-cap">Execution reaches the gate node, hits the interrupt() line, and stops dead. The payload — the question plus the payment details — is what the human will see. The send node does not run.</p>
+        </div>
+        <div class="step" data-title="Freeze">
+          <h3>3. The run freezes into the checkpointer</h3>
+          <div class="diagram">
+            <div class="d-box">graph run<small>returns with __interrupt__</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">checkpointer<small>full state saved under thread_id</small></div>
+          </div>
+          <p class="step-cap">The invoke() call returns. The process is free — it can serve other users, or exit, or the whole server can reboot. The run now exists only as saved state, like the form in the tray.</p>
+        </div>
+        <div class="step" data-title="The wait">
+          <h3>4. The world takes its time</h3>
+          <div class="diagram">
+            <div class="d-box dim">agent<small>not running</small></div>
+            <div class="d-box hot">approvals inbox<small>"Payment of 4,85,000 — approve?"</small></div>
+            <div class="d-box dim">human<small>at lunch, in a meeting, on leave</small></div>
+          </div>
+          <p class="step-cap">This pause can last five seconds or five days. Nothing is consuming tokens, nothing is holding a connection open. Durable pauses are the point: real approvals happen on human timescales.</p>
+        </div>
+        <div class="step" data-title="Resume">
+          <h3>5. The human decides — Command(resume=...)</h3>
+          <div class="diagram">
+            <div class="d-box good">human<small>clicks Approve</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">invoke(Command(resume="yes"))<small>same thread_id</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">checkpointer<small>reloads the state</small></div>
+          </div>
+          <p class="step-cap">The approvals UI translates the click into a second invoke() on the same thread, carrying the answer. The runtime pulls the frozen state back out of the checkpointer.</p>
+        </div>
+        <div class="step" data-title="Continue">
+          <h3>6. The gate re-runs, interrupt() returns, money moves</h3>
+          <div class="diagram">
+            <div class="d-box dim">draft node<small>not re-run</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">gate node<small>interrupt() returns "yes"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">send node<small>payment executes</small></div>
+          </div>
+          <p class="step-cap">The interrupted node runs again from its top; this time interrupt() returns the human's answer instead of pausing. The graph flows on to the send node and finishes. One recorded human decision sits between the draft and the money.</p>
+        </div>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Step 6 hides the one real gotcha: on resume, the interrupted node is <strong>re-executed from its first line</strong>, not from the interrupt() call. LangGraph rewinds to the start of the node and replays it; the replayed interrupt() then returns the answer. So any code <em>before</em> interrupt() in that node runs twice. Keep it cheap and repeatable — and never put the irreversible action (the actual bank call) before the interrupt in the same node. Draft in one node, gate in another, act in a third.</p></div>
+
+      <h2>The vocabulary of a pause</h2>
+      <p>Six terms carry this chapter. Flip until none of them surprises you:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">interrupt()</span><span class="flip-back">Called inside a node: pause the whole run here and surface this payload to a human. On resume, the same call returns the human's answer.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Command(resume=...)</span><span class="flip-back">What you invoke the graph with to un-pause it. Carries the human's answer into the waiting interrupt() call. Same thread_id, or nothing reloads.</span></button>
+        <button class="flip" type="button"><span class="flip-front">__interrupt__</span><span class="flip-back">The entry in the invoke() result that holds the pending payload(s). Its presence is how your application knows the run paused rather than finished.</span></button>
+        <button class="flip" type="button"><span class="flip-front">thread_id</span><span class="flip-back">The name of one ongoing run, from the checkpointing chapter. The pause lives under this key; the resume must quote it exactly.</span></button>
+        <button class="flip" type="button"><span class="flip-front">approval gate</span><span class="flip-back">A node whose only job is to interrupt() before something consequential. The software version of "needs a second signature".</span></button>
+        <button class="flip" type="button"><span class="flip-front">four-eyes principle</span><span class="flip-back">The compliance rule — also called maker-checker — that the person (or agent) who prepares an action must not be the one who approves it. Interrupts implement it literally.</span></button>
+      </div>
+
+      <h2>The real LangGraph code</h2>
+      <p>Here is the payment graph for real — the same <code>StateGraph</code>, nodes, and edges you know from <a href="ch058-stategraph-anatomy.html">StateGraph anatomy</a>, plus one import and one line that changes everything. Click through the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">payment_graph.py — an approval gate in LangGraph</div>
+        <div class="wl-line"><code>from langgraph.graph import StateGraph, START, END</code></div>
+        <div class="wl-line"><code>from langgraph.checkpoint.memory import InMemorySaver</code>
+          <div class="wl-note">The simplest checkpointer, from <a href="ch061-checkpointing.html">last chapter</a>. Interrupts flatly require one — without a place to freeze the state, there is nothing to resume. In production you would use the Postgres or Redis checkpointer so pauses survive restarts.</div></div>
+        <div class="wl-line"><code>from langgraph.types import interrupt, Command</code>
+          <div class="wl-note">The whole human-in-the-loop API: one function to pause, one class to resume. Both live in <code>langgraph.types</code>.</div></div>
+        <div class="wl-line"><code>from typing import TypedDict</code></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>class PaymentState(TypedDict):</code>
+          <div class="wl-note">The state schema — a <a href="ch016-type-hints-and-pydantic.html">typed dictionary</a> declaring what flows between nodes: the drafted payment, the human's verdict, and a receipt.</div></div>
+        <div class="wl-line"><code>    payment: dict</code></div>
+        <div class="wl-line"><code>    approved: bool</code></div>
+        <div class="wl-line"><code>    receipt: str</code></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>def draft_payment(state: PaymentState):</code>
+          <div class="wl-note">Node one: prepare the action but do not perform it. In a real system an LLM would draft this from an invoice or an email thread; here it is hard-coded so the mechanism stays visible.</div></div>
+        <div class="wl-line"><code>    return {"payment": {"to": "Meridian Traders", "amount_inr": 485000}}</code></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>def approval_gate(state: PaymentState):</code>
+          <div class="wl-note">Node two: the gate. Notice it contains nothing but the pause — no side effects before the interrupt, exactly because this node will re-run on resume.</div></div>
+        <div class="wl-line"><code>    decision = interrupt({</code>
+          <div class="wl-note">The line that stops the world. First time through, this raises internally, the state freezes, and this dict becomes the <code>__interrupt__</code> payload. On resume, the same line returns whatever the human sent — into <code>decision</code>.</div></div>
+        <div class="wl-line"><code>        "question": "Approve this payment?",</code></div>
+        <div class="wl-line"><code>        "payment": state["payment"],</code>
+          <div class="wl-note">Show the human everything they need to judge. A bare "approve?" with no context trains approvers to click yes blindly — the payload should carry the evidence.</div></div>
+        <div class="wl-line"><code>    })</code></div>
+        <div class="wl-line"><code>    return {"approved": decision == "yes"}</code>
+          <div class="wl-note">The human's answer becomes ordinary state. Downstream nodes never talk to humans; they just read <code>approved</code> like any other field.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>def send_payment(state: PaymentState):</code>
+          <div class="wl-note">Node three: the irreversible bit, safely on the far side of the gate. It cannot execute unless the graph flowed through the interrupt and back.</div></div>
+        <div class="wl-line"><code>    if not state["approved"]:</code></div>
+        <div class="wl-line"><code>        return {"receipt": "cancelled by approver"}</code></div>
+        <div class="wl-line"><code>    return {"receipt": bank_api.transfer(**state["payment"])}</code>
+          <div class="wl-note"><code>bank_api</code> is a stand-in for whatever actually moves money. The point is its position in the graph, not its implementation.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>builder = StateGraph(PaymentState)</code></div>
+        <div class="wl-line"><code>builder.add_node("draft", draft_payment)</code></div>
+        <div class="wl-line"><code>builder.add_node("gate", approval_gate)</code></div>
+        <div class="wl-line"><code>builder.add_node("send", send_payment)</code></div>
+        <div class="wl-line"><code>builder.add_edge(START, "draft")</code></div>
+        <div class="wl-line"><code>builder.add_edge("draft", "gate")</code></div>
+        <div class="wl-line"><code>builder.add_edge("gate", "send")</code></div>
+        <div class="wl-line"><code>builder.add_edge("send", END)</code>
+          <div class="wl-note">Plain edges throughout — the gate is not a <a href="ch059-conditional-edges.html">conditional edge</a>. Routing decides <em>where</em> to go; an interrupt decides <em>whether the run may continue at all</em>. They compose nicely, but they are different tools.</div></div>
+        <div class="wl-line"><code>graph = builder.compile(checkpointer=InMemorySaver())</code>
+          <div class="wl-note">Compile with the checkpointer attached. Forget this and the first interrupt() raises an error at runtime — a pause with nowhere to save is a contradiction.</div></div>
+      </div>
+
+      <p>And here is what running it looks like — two invocations, possibly days apart, possibly from different processes:</p>
+
+      <div class="code-title">run_it.py — pause, then resume</div>
+      <pre><code class="language-python">config = {"configurable": {"thread_id": "payment-2026-0714"}}
+
+result = graph.invoke({}, config)
+print(result["__interrupt__"][0].value)
+# {'question': 'Approve this payment?',
+#  'payment': {'to': 'Meridian Traders', 'amount_inr': 485000}}
+
+# ... hours or days later, after a human clicks a button ...
+
+final = graph.invoke(Command(resume="yes"), config)
+print(final["receipt"])   # the transfer reference from bank_api
+</code></pre>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>You can also inspect a paused run without resuming it: <code>graph.get_state(config)</code> returns the saved state plus which node is up next — handy for building an approvals dashboard that lists every run currently waiting on a human. And LangGraph still supports an older, blunter mechanism — <code>compile(interrupt_before=["send"])</code> — which pauses before a named node with no payload. It is useful for debugging, but <code>interrupt()</code> is the one to build products on: it pauses at an exact line, carries a payload out, and carries an answer back in.</p></div>
+
+      <h2>Run the whole mechanism in your browser</h2>
+      <p>This page cannot install LangGraph, but it does not need to — the interrupt machinery is small enough to rebuild in plain Python, and doing so makes the real thing unmysterious. Below is a miniature graph runner with a checkpointer (a dict), an interrupt function, and a resume path, running the same payment flow. It is the same trick as the <code>fake_llm()</code> from <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a>: strip a mechanism to its skeleton and run it for real. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="interrupt() and Command(resume=...) rebuilt in 50 lines">
+<textarea class="py-src" spellcheck="false">
+# LangGraph's interrupt mechanism, in miniature.
+# Three nodes: draft, gate, send. The gate pauses for a human.
+
+class GraphPause(Exception):
+    """What interrupt() raises to freeze the run mid-node."""
+    def __init__(self, payload):
+        self.payload = payload
+
+checkpoints = {}       # thread_id: (saved state, index of next node)
+resume_box  = {}       # thread_id: the human's answer, once given
+current_thread = None
+
+def interrupt(payload):
+    if current_thread in resume_box:            # a human has answered:
+        return resume_box.pop(current_thread)   # hand the answer back
+    raise GraphPause(payload)                   # otherwise, freeze
+
+def draft(state):
+    state["payment"] = {"to": "Meridian Traders", "amount_inr": 485000}
+    print("  draft: prepared", state["payment"])
+    return state
+
+def gate(state):
+    print("  gate: consulting the human...")
+    answer = interrupt({"approve?": state["payment"]})
+    print("  gate: human said", repr(answer))
+    state["approved"] = (answer == "yes")
+    return state
+
+def send(state):
+    if state["approved"]:
+        print("  send: money moved:", state["payment"]["amount_inr"], "INR")
+    else:
+        print("  send: cancelled. Nothing left the account.")
+    return state
+
+NODES = [draft, gate, send]
+
+def invoke(thread_id, resume=None):
+    """graph.invoke(...) and graph.invoke(Command(resume=...)), in one."""
+    global current_thread
+    current_thread = thread_id
+    if resume is not None:
+        resume_box[thread_id] = resume
+    state, start = checkpoints.get(thread_id, ({}, 0))
+    for i in range(start, len(NODES)):
+        try:
+            state = NODES[i](state)
+        except GraphPause as pause:
+            checkpoints[thread_id] = (state, i)   # freeze BEFORE this node
+            print("PAUSED. Payload for the human:", pause.payload)
+            return
+        checkpoints[thread_id] = (state, i + 1)   # checkpoint after each node
+    print("DONE.")
+
+print("=== first call: runs until the gate ===")
+invoke("thread-42")
+print()
+print("(the process could exit here; the dicts above are the database)")
+print()
+print("=== later: the human answers, same thread resumes ===")
+invoke("thread-42", resume="yes")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Three experiments, each worth a minute. First, change the resume value to <code>"no"</code> and confirm the send node refuses politely. Second, look at the output closely: "consulting the human..." prints <em>twice</em> — that is the re-run-the-node-from-the-top behaviour, live, exactly as real LangGraph does it. Third, resume with a different thread_id, say <code>"thread-99"</code>, and watch it start a fresh run instead of resuming — the mistake behind many "my graph forgot everything" bug reports.</p></div>
+
+      <h2>Beyond yes and no: three shapes of human input</h2>
+      <p>Approve-or-reject is the headline pattern, but <code>Command(resume=...)</code> carries any Python value, which gives you three distinct conversations between graph and human:</p>
+      <p><strong>Approve or reject.</strong> Resume with <code>"yes"</code> or <code>"no"</code> (or a boolean). The gate node turns it into state; a later node — or a <a href="ch059-conditional-edges.html">conditional edge</a> — acts on it. This is the pattern for payments, deployments, sending emails to customers, and deleting anything.</p>
+      <p><strong>Edit, then continue.</strong> Resume with a modified version of the payload itself. The human does not just bless the draft — they fix it: correct the amount, soften the wording of an email, trim a tool call's arguments. The node receives the edited object from <code>interrupt()</code> and writes it into state as if the model had produced it. Human judgement becomes part of the pipeline's data, not just its permission slip.</p>
+      <p><strong>Answer a question.</strong> The agent hits a genuine unknown — "two customers share this name; which one?" — and interrupts with the question. The resume value is information the model could never have derived alone. This turns interrupts from a safety mechanism into a collaboration mechanism: the graph does the legwork, the human supplies the judgement calls, each exactly where they are strongest.</p>
+      <p>One more detail for completeness: if several branches of a graph pause at once — parallel nodes can each call <code>interrupt()</code> — the <code>__interrupt__</code> list carries one entry per pause, each with its own id, and you can resume them individually by mapping ids to answers in the resume payload. File it under "the docs have you covered when you get there".</p>
+
+      <h2>Why regulators love this</h2>
+      <p>Now step back from the code and look at what you have built, because this is the part your risk and compliance colleagues will actually care about.</p>
+      <p>Banks and regulated enterprises have run on the <dfn>four-eyes principle</dfn> — also called maker-checker — for a century: the person who prepares a transaction must not be the person who approves it. Every core banking system encodes it; auditors test for it. The uncomfortable question of the agent era is: if a model drafts <em>and</em> executes, where did the second pair of eyes go? An interrupt gate is the literal, code-level answer. The agent is the maker; the human at the interrupt is the checker; and the graph's topology <em>guarantees</em> the send node is unreachable except through the gate. That is not a policy document promising review happens — it is a structural property you can point at in the code.</p>
+      <p>Three more properties fall out for free. First, <strong>the audit trail</strong>: because every pause and resume flows through the checkpointer, the database holds the exact state the human saw, what they answered, and when — precisely the evidence an auditor asks for, produced as a side effect of the architecture rather than as extra logging work. Second, <strong>accountability lands at the right moment</strong>: the human decision is recorded at the instant of the irreversible action, not in a blanket "the team reviews outputs weekly" sense. Third, <strong>human timescales are respected</strong>: because a paused run is just stored state, approval can take a weekend without any process burning memory or tokens — which means nobody is ever tempted to weaken the control "because holding the run open is expensive". The cheap pause is what makes the strong control sustainable.</p>
+      <p>This is also why <a href="ch057-why-graphs.html">the argument for graphs</a> from the start of this act keeps paying off: a free-running agent loop can be <em>asked</em> to seek approval in its prompt; a graph can be <em>built</em> so that skipping approval is topologically impossible. Regulators, quite reasonably, prefer the second kind of promise.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet interrupts wherever an agent touches something irreversible. In LangGraph codebases, search for <code>interrupt(</code> or <code>Command(resume</code> — approval gates cluster around nodes named <code>send_*</code>, <code>execute_*</code>, <code>deploy_*</code>, or <code>apply_*</code>. Agent platforms surface the same idea as "approval policies" or "tool review" settings; coding assistants like Claude Code do it every time they stop to ask before running a shell command — that permission prompt is an interrupt with a nicer UI. And in a merge request, when someone writes "put a HITL gate on the refund tool" or "this needs to go through the approvals inbox", they are asking for exactly the three-node pattern you built in this chapter: draft, gate, act.</p></div>
+
+      <h2>Where this goes next</h2>
+      <p>Two chapters ahead build directly on this one. Next door, <a href="ch063-subgraphs-multi-agent.html">subgraphs and multi-agent patterns</a> composes graphs out of graphs — and gates travel well: a supervisor can wrap an entire team of agents behind a single approval before anything external happens. Then <a href="ch064-bring-your-own-graph.html">bring your own graph</a> takes the idea to its logical end: hand-built deterministic graphs where the LLM fills in specific boxes and explicit gates — interrupts among them — guard every consequential transition. That is the pattern enterprises reach for when a flow must never freestyle, and <code>interrupt()</code> is its load-bearing primitive. What you learned here is not a feature of LangGraph so much as a design stance: <em>the model proposes, the graph disposes, and a human signs.</em></p>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A graph hits <code>interrupt()</code> and pauses. What is happening on the server while it waits three days for an approval?</p>
+          <div class="q-opts">
+            <button data-opt="a">A background thread holds the run open in memory, polling for the answer</button>
+            <button data-opt="b">Nothing — the run exists only as saved state in the checkpointer until someone resumes it</button>
+            <button data-opt="c">The graph re-runs from the start every hour to check whether the approval arrived</button>
+          </div>
+          <p class="q-explain">The pause is durable, not busy. invoke() returned long ago; the run is a checkpoint row keyed by thread_id. The server can restart mid-wait and nothing is lost — that is why approvals can take a weekend for free.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. After a human approves, you call <code>graph.invoke(Command(resume="yes"), config)</code>. Where does that <code>"yes"</code> end up?</p>
+          <div class="q-opts">
+            <button data-opt="a">It replaces the graph's entire state dictionary</button>
+            <button data-opt="b">It is appended to the message history as a user turn</button>
+            <button data-opt="c">It becomes the return value of the interrupt() call inside the paused node</button>
+          </div>
+          <p class="q-explain">Command(resume=value) feeds the value back into the exact interrupt() that paused the run — the node re-executes, interrupt() returns "yes" instead of raising, and the node code carries on with the answer in hand.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. A colleague writes one node that charges a card and <em>then</em> calls <code>interrupt()</code> to confirm sending the receipt email. What goes wrong?</p>
+          <div class="q-opts">
+            <button data-opt="a">On resume the node re-runs from its first line, so the card is charged a second time</button>
+            <button data-opt="b">interrupt() raises an error because nodes may not contain side effects</button>
+            <button data-opt="c">Nothing — LangGraph resumes from the exact interrupted line</button>
+          </div>
+          <p class="q-explain">Resume replays the interrupted node from the top; only then does interrupt() return the answer. Any side effect placed before the interrupt runs twice. The fix is structural: irreversible actions live in their own node, after the gate.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Why does <code>interrupt()</code> refuse to work without a checkpointer attached at compile time?</p>
+          <div class="q-opts">
+            <button data-opt="a">The checkpointer is where the human's answer is validated against a schema</button>
+            <button data-opt="b">Pausing means freezing state for later — with nowhere to save it, there would be nothing to resume</button>
+            <button data-opt="c">It works fine; the checkpointer only adds an audit log</button>
+          </div>
+          <p class="q-explain">An interrupt is a deliberate stop that must survive until someone comes back — possibly after the process itself has exited. That only works if the full state is persisted somewhere, which is exactly the checkpointer's job.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. What makes an interrupt gate more convincing to an auditor than a prompt instructing the agent to "always ask before paying"?</p>
+          <div class="q-opts">
+            <button data-opt="a">Prompts are invisible to auditors, while graphs are open source</button>
+            <button data-opt="b">Interrupt gates are faster, so more transactions get reviewed</button>
+            <button data-opt="c">The graph's structure makes the payment node unreachable without a recorded human decision — a guarantee, not a request</button>
+          </div>
+          <p class="q-explain">A prompt is a polite request to a probabilistic system; the model might comply. A gate is topology: there is no edge to the send node except through the interrupt, and the checkpointer records who answered what, when. Structural controls beat behavioural promises.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li><code>interrupt(payload)</code>, called inside a node, pauses the entire run at that line and surfaces the payload to your application via the <code>__interrupt__</code> entry in the result.</li>
+          <li>The pause is durable because the checkpointer freezes the full state under a thread_id — no process waits, no tokens burn, and the approval can take days across restarts.</li>
+          <li><code>graph.invoke(Command(resume=value), config)</code> on the same thread reloads the state, re-runs the interrupted node from its top, and the replayed <code>interrupt()</code> returns the human's value.</li>
+          <li>Because the node re-executes on resume, keep everything before the interrupt cheap and repeatable — irreversible actions belong in their own node, on the far side of the gate.</li>
+          <li>The resume value can be a verdict, an edited draft, or an answer to a question — interrupts are a collaboration channel, not just a permission prompt.</li>
+          <li>Regulators love the pattern because it is maker-checker as topology: the consequential node is structurally unreachable without a recorded human decision — a theme <a href="ch064-bring-your-own-graph.html">bring your own graph</a> takes to its conclusion.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

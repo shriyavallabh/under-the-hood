@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kubectl fluency: checking anything — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch114">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XIII · The Deployment Platform</div>
+        <h1>kubectl fluency: checking anything</h1>
+        <p class="ch-tagline">Seven reading commands and four failure states. Learn them once and no pod will ever be a mystery to you again — not Pending, not ImagePullBackOff, not the dreaded CrashLoopBackOff.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 115 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>It is 2 a.m. and you are the duty doctor on an intensive-care ward. Twelve beds. You do not wake every patient to ask how they feel — you have a routine. First, the monitor wall at the nurses' station: twelve tiles, pulse and oxygen at a glance, and anyone flashing amber gets a visit. At that bed you pull the <em>chart</em> — admission notes, medication, and at the bottom the nurses' log of tonight's events, newest entry last. Still unsure? You listen to what the patient is <em>saying</em> — and, if they lost consciousness earlier, you ask what they said just before. Sometimes you go hands-on and examine them yourself. When a specialist across town needs to see one bed's monitor, you patch a private line to that single bed. And through the night, a vitals sheet and the ward diary quietly record everything.</p>
+        <p>One doctor, a handful of ways of looking, escalating from a glance to hands-on. <strong>kubectl is that ward round for your cluster</strong>, and this chapter is the routine — plus the triage guide for the four ways a pod goes amber.</p>
+      </section>
+
+      <h2>One tool, two jobs — today is the reading job</h2>
+      <p>Quick recap of where you stand. In <a href="ch111-kubernetes-plainly.html">Kubernetes, plainly</a> you learned that a cluster is a control plane holding a desired state, with nodes running pods to match it. In <a href="ch112-aks-from-scratch.html">AKS from scratch</a> you built one on Azure and ran <code>az aks get-credentials</code>, which wired <code>kubectl</code> — the command-line client that talks to your cluster's API server — to it. And in <a href="ch113-agent-in-a-pod.html">An agent in a pod</a> you saw what lives inside the pods you are about to inspect: your agent's container, its config, its secrets, its sidecars.</p>
+      <p>kubectl verbs split into two families. The <em>writing</em> verbs — <code>apply</code>, <code>rollout</code>, <code>scale</code>, <code>delete</code> — change the cluster, and they get their own treatment in the next two chapters. The <em>reading</em> verbs change nothing: you can run every command in this chapter a hundred times against production and the cluster will not notice. That safety is the point — fluency in the reading verbs means you can investigate any incident without fear of making it worse.</p>
+      <p>The reading verbs, in the order you reach for them: <code>get</code> (the monitor wall), <code>describe</code> (the chart), <code>logs</code> (the patient's own words), <code>exec</code> (hands-on examination), <code>port-forward</code> (the private line), <code>top</code> (the vitals sheet) and <code>get events</code> (the ward diary). Let's do the round.</p>
+
+      <h2>The glance: kubectl get</h2>
+      <p><code>kubectl get</code> lists resources, one line each. You will type it more than any other command, so read one real output slowly, once:</p>
+
+      <div class="code-title">terminal — the monitor wall</div>
+      <pre><code class="language-bash">kubectl get pods
+
+NAME                            READY   STATUS             RESTARTS       AGE
+agent-api-7d9f8b6c5d-2xkqm      1/1     Running            0              2d4h
+agent-api-7d9f8b6c5d-9wl7t      1/1     Running            0              2d4h
+agent-worker-6b7c9d4f8-p5jns    0/1     CrashLoopBackOff   6 (112s ago)   9m31s</code></pre>
+
+      <p>Five columns, each one earning its place:</p>
+      <ul>
+        <li><strong>NAME</strong> — you never name pods yourself (<a href="ch112-aks-from-scratch.html">ch112</a>): it is the Deployment name, plus a hash identifying the ReplicaSet, plus a random suffix per replica. Pods sharing a hash are twins from the same rollout.</li>
+        <li><strong>READY</strong> — containers ready over containers total. <code>1/1</code> is healthy; <code>0/1</code> means the pod exists but its container is not currently passing.</li>
+        <li><strong>STATUS</strong> — the pod's phase or, when things go wrong, a named failure state. The four you must recognise on sight fill the second half of this chapter.</li>
+        <li><strong>RESTARTS</strong> — how often Kubernetes has restarted a container here, and how recently. <code>0</code> is calm; <code>6 (112s ago)</code> is a pod being repeatedly resuscitated.</li>
+        <li><strong>AGE</strong> — time since creation. A nine-minute-old pod next to two-day-old siblings was just deployed — or is being repeatedly recreated.</li>
+      </ul>
+
+      <p>Two flags upgrade the glance. <code>-o wide</code> adds the pod's IP and, crucially, <em>which node it landed on</em> — the first question when you suspect one bad machine in the pool. <code>-w</code> (watch) keeps the command running and prints a new line whenever something changes — a live feed instead of a snapshot:</p>
+
+      <div class="code-title">terminal — wider, then live</div>
+      <pre><code class="language-bash">kubectl get pods -o wide     # adds IP and NODE columns
+kubectl get pods -w          # streams changes live; Ctrl-C to stop</code></pre>
+
+      <p>The same verb works for every resource type. The two you will check most, after pods:</p>
+
+      <div class="code-title">terminal — deployments and services</div>
+      <pre><code class="language-bash">kubectl get deployments
+
+NAME           READY   UP-TO-DATE   AVAILABLE   AGE
+agent-api      2/2     2            2           14d
+agent-worker   0/1     1            0           14d
+
+kubectl get services
+
+NAME         TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+agent-api    ClusterIP   10.0.113.42    &lt;none&gt;        80/TCP    14d</code></pre>
+
+      <p>Read the deployment line as a promise being kept or broken: <code>READY 2/2</code> means "I promised two replicas and two are serving"; <code>0/1</code> on <code>agent-worker</code> is the same amber tile one level up. The service line shows the stable internal address (<code>CLUSTER-IP</code>) other pods use to reach it — <code>EXTERNAL-IP &lt;none&gt;</code> just means a default ClusterIP service, private to the cluster.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>These commands look at one <dfn>namespace</dfn> — a named compartment inside the cluster — at a time, <code>default</code> unless you say otherwise. Add <code>-n somenamespace</code> to look elsewhere, or <code>-A</code> for all at once. "My pod vanished" is very often "my pod is in a different namespace".</p></div>
+
+      <h2>The chart: kubectl describe</h2>
+      <p>The glance told you <em>that</em> <code>agent-worker</code> is unwell. <code>kubectl describe pod</code> is the full patient chart: everything Kubernetes knows about one pod, ending with the part that solves most incidents by itself — the <strong>Events</strong> section, the nurses' log of everything that has happened to this pod, oldest first, newest at the bottom.</p>
+      <p>That ordering should ring a bell: in <a href="ch009-errors-and-tracebacks.html">the tracebacks chapter</a> you learned to read a Python traceback from the bottom up, because the last line names the actual error. Events reward the same discipline — <strong>start at the bottom</strong>, where the most recent event (usually the one hurting right now) lives, and read upwards only as far as you need. Here is a describe output, trimmed to the lines that matter; click each annotated line:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">kubectl describe pod agent-worker-6b7c9d4f8-p5jns — trimmed</div>
+        <div class="wl-line"><code>Name:           agent-worker-6b7c9d4f8-p5jns</code>
+          <div class="wl-note">The chart's header. Below it come Namespace, labels, and the pod's IP — skim these unless you suspect a namespace mix-up.</div></div>
+        <div class="wl-line"><code>Node:           aks-nodepool1-38452671-vmss000002/10.224.0.6</code>
+          <div class="wl-note">Which machine in your AKS node pool the scheduler placed this pod on. If several sick pods share one node, suspect the node, not the app.</div></div>
+        <div class="wl-line"><code>Controlled By:  ReplicaSet/agent-worker-6b7c9d4f8</code>
+          <div class="wl-note">Who owns this pod. Delete it and this ReplicaSet will calmly create a replacement — pods are cattle, the Deployment is the promise.</div></div>
+        <div class="wl-line"><code>Containers:</code></div>
+        <div class="wl-line"><code>  agent-worker:</code></div>
+        <div class="wl-line"><code>    Image:          myregistry.azurecr.io/agent-worker:1.4.2</code>
+          <div class="wl-note">The exact image and tag running — from your Azure Container Registry (ch112). When a "fix" doesn't seem deployed, check this line first: is the tag what you think it is?</div></div>
+        <div class="wl-line"><code>    State:          Waiting</code></div>
+        <div class="wl-line"><code>      Reason:       CrashLoopBackOff</code>
+          <div class="wl-note">The container's current state. Waiting/CrashLoopBackOff means: not running right now — Kubernetes is deliberately pausing before the next restart attempt.</div></div>
+        <div class="wl-line"><code>    Last State:     Terminated</code>
+          <div class="wl-note">Gold. This block describes the previous attempt — the container that just died. The current state says "resting"; the last state says what killed it.</div></div>
+        <div class="wl-line"><code>      Reason:       Error</code>
+          <div class="wl-note">A plain error: the process exited by itself. If this said OOMKilled, the kernel killed it for exceeding its memory limit — a completely different fix, and this one line is how you tell them apart.</div></div>
+        <div class="wl-line"><code>      Exit Code:    1</code>
+          <div class="wl-note">The process's own exit code, like a script failing in your terminal. 1 = the app decided to die (go read its logs). 137 = killed by the kernel — the OOMKilled signature.</div></div>
+        <div class="wl-line"><code>    Restart Count:  6</code></div>
+        <div class="wl-line"><code>Events:</code>
+          <div class="wl-note">The nurses' log. Everything the scheduler and the node's kubelet did to this pod, in order. Read it bottom-up, exactly like a ch009 traceback.</div></div>
+        <div class="wl-line"><code>  Normal   Scheduled  9m31s                  Successfully assigned default/agent-worker-... to aks-nodepool1-...</code>
+          <div class="wl-note">Oldest entry: scheduling succeeded, so this is not a Pending problem. A pod stuck Pending never gets past this line — and the message here tells you why.</div></div>
+        <div class="wl-line"><code>  Normal   Pulled     7m58s (x5 over 9m30s)  Container image "...agent-worker:1.4.2" already present on machine</code>
+          <div class="wl-note">The image pull succeeded (five times, says the x5), so not ImagePullBackOff either. Two suspects eliminated without reading a single log line.</div></div>
+        <div class="wl-line"><code>  Warning  BackOff    112s (x23 over 9m)     Back-off restarting failed container</code>
+          <div class="wl-note">Bottom line, newest event, the live problem: the container keeps failing, x23 in nine minutes. Verdict: the app itself is crashing — time for logs.</div></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Notice what <code>describe</code> just did: without opening a single application log, Events told you the pod scheduled fine and pulled its image fine, narrowing the fault to the app itself. Describe first, logs second — the chart tells you <em>which</em> question to ask the patient.</p></div>
+
+      <h2>The patient's own words: kubectl logs</h2>
+      <p><code>kubectl logs</code> prints what the container wrote to its output — every <code>print()</code>, every line from <a href="ch019-logging-config-env.html">your logging setup</a>, every traceback. Three forms cover almost everything:</p>
+
+      <div class="code-title">terminal — three ways to listen</div>
+      <pre><code class="language-bash">kubectl logs agent-api-7d9f8b6c5d-2xkqm              # everything so far
+kubectl logs -f agent-api-7d9f8b6c5d-2xkqm           # follow live, like tail -f
+kubectl logs agent-worker-6b7c9d4f8-p5jns --previous # the CRASHED container's logs</code></pre>
+
+      <p>The first is the transcript to date. The second, <code>-f</code> for <em>follow</em>, streams new lines as they happen — run it in one terminal while you poke the app from another, and you are watching your agent think in real time.</p>
+      <p>The third flag separates people who can fix a CrashLoopBackOff from people who stare at it. When a container crashes, Kubernetes starts a <em>fresh</em> one — and plain <code>kubectl logs</code> reads that fresh container: seconds old, often empty, the crash evidence gone. <code>--previous</code> reads the container that <em>died</em>, final traceback and all:</p>
+
+      <div class="code-title">terminal — the dying words</div>
+      <pre><code class="language-bash">kubectl logs agent-worker-6b7c9d4f8-p5jns --previous
+
+Starting agent-worker 1.4.2
+Loading config from /etc/agent/config.yaml
+Traceback (most recent call last):
+  File "/app/worker.py", line 12, in &lt;module&gt;
+    api_key = os.environ["MODEL_API_KEY"]
+KeyError: 'MODEL_API_KEY'</code></pre>
+
+      <p>And there it is — a bottom line you already know how to read from <a href="ch009-errors-and-tracebacks.html">ch009</a>: the app dies on startup because the environment variable <code>MODEL_API_KEY</code> is missing. From <a href="ch113-agent-in-a-pod.html">An agent in a pod</a>, you know env vars come from a ConfigMap or Secret referenced in the Deployment — so someone's reference is broken. Hold that thought; the stepper below triages this exact case end to end.</p>
+
+      <h2>Hands-on: kubectl exec</h2>
+      <p>Sometimes reading is not enough and you need to be <em>inside</em> the container — checking what the filesystem actually contains, what env vars actually arrived, whether another service answers from in there. <code>kubectl exec</code> runs a command inside a running container; with <code>-it</code> and a shell, it gives you an interactive prompt:</p>
+
+      <div class="code-title">terminal — stepping inside</div>
+      <pre><code class="language-bash">kubectl exec -it agent-api-7d9f8b6c5d-2xkqm -- sh
+
+/app $ env | grep MODEL          # did the env vars arrive?
+/app $ ls /etc/agent/            # is the config mounted?
+/app $ cat /etc/agent/config.yaml
+/app $ exit</code></pre>
+
+      <p>Unpacking the incantation: <code>-it</code> means interactive with a terminal — without it you get one-shot output and no prompt. The bare <code>--</code> is a separator: everything to its left is instructions for kubectl, everything to its right runs <em>inside</em> the container. Here that is <code>sh</code>, the minimal shell most images carry. Once inside, you are in the container's world: its files, its env, its network identity.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Three cautions. Exec with a look-don't-touch mindset — you are inside a live organ. Anything you change dies with the pod, since containers are recreated from the image (<a href="ch110-containers-and-images.html">ch110</a>): exec is for diagnosis, never for fixing — if exec "fixed" it, the fix belongs in the image or the manifests. And hardened images may ship no shell at all; if <code>sh</code> is not found, that is a security feature, not your mistake — fall back to logs and describe.</p></div>
+
+      <h2>The private line: kubectl port-forward</h2>
+      <p>Your agent's API listens on a ClusterIP service — reachable inside the cluster, invisible from your laptop. Before exposing anything to the world, you want to poke it yourself. <code>kubectl port-forward</code> patches a temporary, private tunnel from a port on your machine to a pod or service — the video line to one bed:</p>
+
+      <div class="code-title">terminal — tunnel in, then test</div>
+      <pre><code class="language-bash">kubectl port-forward svc/agent-api 8080:80
+Forwarding from 127.0.0.1:8080 -&gt; 8000
+
+# in a second terminal:
+curl localhost:8080/health
+{"status": "ok", "model": "connected"}</code></pre>
+
+      <p>Read <code>8080:80</code> as <em>local:remote</em> — requests to <code>localhost:8080</code> on your laptop pop out at the service's port 80 and forward on to the container. The command keeps running while the tunnel is open; Ctrl-C hangs up and no trace remains — nothing exposed, no firewall changed, riding your existing kubectl credentials. It works against <code>svc/name</code>, <code>deploy/name</code>, or a bare pod name, and it is how you try your agent's endpoint minutes after deploying, long before any public URL exists.</p>
+
+      <h2>Vitals and the ward diary: top and events</h2>
+      <p>Two more lenses complete the round. <code>kubectl top pods</code> is the vitals sheet — live CPU and memory per pod (AKS ships the metrics plumbing by default, so it just works):</p>
+
+      <div class="code-title">terminal — live vitals</div>
+      <pre><code class="language-bash">kubectl top pods
+
+NAME                           CPU(cores)   MEMORY(bytes)
+agent-api-7d9f8b6c5d-2xkqm     43m          287Mi
+agent-api-7d9f8b6c5d-9wl7t     38m          291Mi</code></pre>
+
+      <p>Units: <code>43m</code> is 43 <em>millicores</em> — about 4% of one CPU core; <code>287Mi</code> is mebibytes of memory. The number to watch is memory against the pod's <em>limit</em>: a pod limited to 512Mi sitting at 495Mi and climbing is a countdown to the OOMKilled state you are about to meet. Glancing at <code>top</code> after every deploy is a cheap habit that catches leaks early.</p>
+      <p>Finally, where <code>describe</code> showed one pod's events, <code>kubectl get events</code> is the diary for the whole ward — every scheduling decision, image pull, probe failure and restart across the namespace. Raw output arrives unhelpfully unordered, so everyone sorts it by time:</p>
+
+      <div class="code-title">terminal — the whole ward's diary, in order</div>
+      <pre><code class="language-bash">kubectl get events --sort-by=.metadata.creationTimestamp</code></pre>
+
+      <p>The <code>--sort-by</code> value is a path into each event object — sort by creation time, oldest first, so the freshest trouble sits at the bottom of your terminal, where your eyes already are. This is the command for vague symptoms: "things feel slow", "something restarted overnight". One screen of sorted events, read bottom-up, usually names the culprit.</p>
+
+      <h2>The status vocabulary</h2>
+      <p>That completes the seven lenses. Now the second half of fluency — what the amber tiles actually mean. Flip these until each back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">Running, 1/1</span><span class="flip-back">The container is up and passing its checks. The only tile you can walk past.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Running, 0/1</span><span class="flip-back">The process is up but not passing its readiness check — alive but not fit to receive traffic. Check describe, then logs.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Pending</span><span class="flip-back">Not scheduled: no node can take it. It never started, so there are no logs yet — describe's Events say what no node could offer.</span></button>
+        <button class="flip" type="button"><span class="flip-front">ImagePullBackOff</span><span class="flip-back">The node cannot download the image: misspelled name, tag that does not exist, or the cluster is not authorised for the registry.</span></button>
+        <button class="flip" type="button"><span class="flip-front">CrashLoopBackOff</span><span class="flip-back">Image fine, scheduling fine — the app itself starts, dies, and is restarted with growing delays. The evidence is in logs --previous.</span></button>
+        <button class="flip" type="button"><span class="flip-front">OOMKilled</span><span class="flip-back">The container exceeded its memory limit, so the kernel killed it — exit code 137, Reason: OOMKilled under Last State. Raise the limit or fix the leak.</span></button>
+      </div>
+
+      <h2>The triage table</h2>
+      <p>Each failure state points at a <em>different layer</em> of the system, which is why one first move never fits all. Pending is a <em>scheduling</em> problem — the cluster's, before your code enters the picture. ImagePullBackOff is a <em>supply</em> problem — the node cannot fetch what it was told to run. CrashLoopBackOff is an <em>application</em> problem — your code runs and chooses to die. OOMKilled is a <em>budget</em> problem — your code outgrows its allowance. Same monitor wall, four different specialists:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Status</th><th>What it is actually telling you</th><th>Your first move</th></tr>
+        <tr><td><code>Pending</code></td><td>The scheduler cannot place the pod — no node has the CPU or memory it requests (or a constraint cannot be met). Nothing has run yet.</td><td><code>kubectl describe pod</code>: the Events bottom line spells out the shortage, e.g. <em>"0/3 nodes are available: 3 Insufficient memory"</em>. Shrink the request, add nodes, or wait for the autoscaler.</td></tr>
+        <tr><td><code>ImagePullBackOff</code></td><td>The node cannot download the image: wrong name, a tag never pushed, or no permission for the registry.</td><td>Describe shows the failing pull. Check the image reference character by character; on AKS, confirm the cluster is attached to your registry: <code>az aks update --attach-acr</code> (<a href="ch112-aks-from-scratch.html">ch112</a>).</td></tr>
+        <tr><td><code>CrashLoopBackOff</code></td><td>Scheduling and image fine — the app itself exits soon after starting, and Kubernetes restarts it with doubling delays (10s, 20s, 40s… capped at 5 minutes).</td><td><code>kubectl logs &lt;pod&gt; --previous</code>, last lines — the crash traceback is there. Missing env vars, bad config and unreachable dependencies are the usual killers.</td></tr>
+        <tr><td><code>OOMKilled</code></td><td>The container exceeded its memory limit, so the kernel killed it instantly (exit code 137). Often masquerades as CrashLoopBackOff — the restarts look identical.</td><td>Describe: <code>Last State: Terminated, Reason: OOMKilled</code> is the fingerprint. Compare <code>kubectl top pods</code> against the limit; raise it honestly or fix the leak.</td></tr>
+      </table></div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Notice the pattern across all four rows: the answer to "what is wrong?" is always in <code>describe</code>'s Events or in <code>logs --previous</code> — never in guesswork, and almost never in re-deploying to "see if it helps". Kubernetes writes down why it is unhappy; fluency is knowing where.</p></div>
+
+      <h2>Triage, end to end: one CrashLoopBackOff, six moves</h2>
+      <p>Let's replay the sick <code>agent-worker</code> as a complete diagnosis — the exact sequence you would run on a real cluster, one command per step:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Symptom">
+          <h3>1. The monitor wall flashes amber</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">agent-api-...2xkqm<small>1/1 Running</small></div>
+              <div class="d-box dim">agent-api-...9wl7t<small>1/1 Running</small></div>
+              <div class="d-box hot">agent-worker-...p5jns<small>0/1 CrashLoopBackOff · 6 restarts</small></div>
+            </div>
+          </div>
+          <p class="step-cap"><code>kubectl get pods</code> — the glance. One pod is 0/1, restarting repeatedly. The status already narrows it: not Pending, not ImagePull. Do not restart anything yet; evidence first.</p>
+        </div>
+        <div class="step" data-title="Chart">
+          <h3>2. Pull the chart</h3>
+          <div class="diagram">
+            <div class="d-box">describe pod</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box dim">Scheduled: OK</div>
+              <div class="d-box dim">Image pulled: OK</div>
+              <div class="d-box hot">Last State: Terminated<small>Reason: Error · Exit Code 1</small></div>
+            </div>
+          </div>
+          <p class="step-cap"><code>kubectl describe pod agent-worker-...p5jns</code> — Events, bottom-up: scheduled fine, image pulled fine, container keeps exiting with code 1. Not OOMKilled (that would say so, with exit 137). The app is choosing to die.</p>
+        </div>
+        <div class="step" data-title="Dying words">
+          <h3>3. Ask the crashed container</h3>
+          <div class="diagram">
+            <div class="d-box">logs --previous</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">KeyError:<small>'MODEL_API_KEY'</small></div>
+          </div>
+          <p class="step-cap"><code>kubectl logs agent-worker-...p5jns --previous</code> — the previous container's final traceback. Bottom line: <code>KeyError: 'MODEL_API_KEY'</code>. The app dies on startup because an environment variable never arrived.</p>
+        </div>
+        <div class="step" data-title="Trace the wiring">
+          <h3>4. Follow the variable to its source</h3>
+          <div class="diagram">
+            <div class="d-box">Deployment<small>env from secretKeyRef</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Secret: agent-secrets<small>key "MODEL_API_KEY" missing</small></div>
+          </div>
+          <p class="step-cap">From <a href="ch113-agent-in-a-pod.html">ch113</a>: env vars come from the Deployment's env block, often referencing a Secret. The Deployment expects the key <code>MODEL_API_KEY</code> in Secret <code>agent-secrets</code> — and the Secret does not contain it. Root cause found.</p>
+        </div>
+        <div class="step" data-title="Fix">
+          <h3>5. Fix the source, not the symptom</h3>
+          <div class="diagram">
+            <div class="d-box hot">Secret updated<small>key added</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">rollout restart<small>fresh pods pick it up</small></div>
+          </div>
+          <p class="step-cap">Add the missing key to the Secret, then <code>kubectl rollout restart deployment agent-worker</code> so fresh pods start with the corrected environment. These are writing verbs — the manifests behind them are <a href="ch115-k8s-yaml-decoded.html">next chapter's</a> whole subject.</p>
+        </div>
+        <div class="step" data-title="Verify">
+          <h3>6. Watch it come back green</h3>
+          <div class="diagram">
+            <div class="d-box dim">ContainerCreating</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Running 1/1<small>restarts: 0</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">logs -f<small>"worker started, polling queue"</small></div>
+          </div>
+          <p class="step-cap"><code>kubectl get pods -w</code> — watch the replacement reach 1/1 Running with zero restarts, then <code>logs -f</code> for a minute to confirm healthy startup. Symptom, chart, dying words, wiring, fix, verify — that six-move rhythm is the whole craft.</p>
+        </div>
+      </div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This chapter is the daily dialect of every on-call channel. Incident threads open with a pasted <code>kubectl get pods</code>; the first reply is almost always "what does describe say?" or "logs --previous?"; enterprise runbooks are literally these commands with pod names filled in. When a GitLab pipeline's deploy stage times out, the debugging that follows is describe-and-events. Dashboards exist — k9s, Lens, the Azure portal's workload view — but they are these same verbs wearing a UI; when the dashboard is down at 2 a.m., the verbs remain. An engineer who can calmly narrate "scheduled fine, image pulled fine, exit code 1, here's the previous container's traceback" is worth a great deal in that moment — and that engineer is now you.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. You deploy a new version and the fresh pod shows <code>ImagePullBackOff</code>. The old pods, on the same cluster, still run fine. What is the most likely story?</p>
+          <div class="q-opts">
+            <button data-opt="a">The app has a bug — read the logs with --previous</button>
+            <button data-opt="b">The cluster is out of memory, so the image cannot be loaded</button>
+            <button data-opt="c">The new image reference is wrong — a misspelled name or a tag that was never pushed — or registry auth broke</button>
+          </div>
+          <p class="q-explain">ImagePullBackOff happens before your code ever runs, so logs are empty and app bugs are irrelevant. Old pods running fine means the cluster is healthy — the new pull itself is failing. Describe shows the exact reference; check its spelling and the registry attachment.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. A pod is in <code>CrashLoopBackOff</code>. You run <code>kubectl logs</code> on it and get two lines of startup banner, then nothing. What did you forget?</p>
+          <div class="q-opts">
+            <button data-opt="a">The -f flag, to keep the stream open</button>
+            <button data-opt="b">The --previous flag — you are reading the fresh replacement, not the container that crashed</button>
+            <button data-opt="c">Nothing — no output means the app logs to a file instead</button>
+          </div>
+          <p class="q-explain">After each crash Kubernetes starts a new container, and plain logs reads that seconds-old newborn. The traceback belongs to the container that died — <code>logs --previous</code> is how you ask it.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. A pod has sat in <code>Pending</code> for fifteen minutes. Which statement is true?</p>
+          <div class="q-opts">
+            <button data-opt="a">It has never started — no node can take it, and describe's Events state the exact shortage</button>
+            <button data-opt="b">It is running but failing its readiness check</button>
+            <button data-opt="c">It crashed and Kubernetes is backing off before restarting it</button>
+          </div>
+          <p class="q-explain">Pending means the scheduler could not place the pod — typically no node has the requested CPU or memory. There are no logs because nothing ran; describe's Events say precisely what no node could offer.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. A pod restarts every few hours. Describe shows <code>Last State: Terminated, Reason: OOMKilled, Exit Code: 137</code>. What actually happened, and what is the fix?</p>
+          <div class="q-opts">
+            <button data-opt="a">The image is corrupt — rebuild and push it again</button>
+            <button data-opt="b">The app raised an unhandled exception — read the traceback and patch the code path</button>
+            <button data-opt="c">The container outgrew its memory limit and the kernel killed it — raise the limit or fix the leak</button>
+          </div>
+          <p class="q-explain">OOMKilled with exit 137 is the kernel enforcing the memory budget — no traceback, because the process was killed from outside mid-stride. Compare top pods against the limit, then grant more memory honestly or hunt the leak.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. You run <code>kubectl describe pod</code> on a misbehaving pod. Where do your eyes go first?</p>
+          <div class="q-opts">
+            <button data-opt="a">The top — name, namespace and labels set the context</button>
+            <button data-opt="b">The bottom of the Events section — the newest event is usually the live problem, read upwards from there</button>
+            <button data-opt="c">The Image line — most incidents are wrong tags</button>
+          </div>
+          <p class="q-explain">Events are ordered oldest to newest, so the bottom entry is what is hurting right now — the same bottom-up discipline you learned for Python tracebacks in ch009. Read upwards only as far as you need for context.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>kubectl's reading verbs — get, describe, logs, exec, port-forward, top, get events — change nothing, so you can investigate any cluster fearlessly, escalating from glance to hands-on.</li>
+          <li><code>kubectl get pods</code> is the monitor wall: READY, STATUS and RESTARTS tell you who needs a visit; <code>-o wide</code> adds the node, <code>-w</code> makes it live.</li>
+          <li><code>kubectl describe pod</code> ends with the Events log — read it bottom-up like a traceback; it rules out scheduling and image problems before you open a single log line.</li>
+          <li><code>kubectl logs --previous</code> reads the container that crashed, not its fresh replacement — the difference between seeing the traceback and staring at an empty log.</li>
+          <li>The four failure states each blame a different layer: Pending = scheduling, ImagePullBackOff = image name/tag/registry auth, CrashLoopBackOff = your app exits (read logs --previous), OOMKilled = memory limit hit (exit 137).</li>
+          <li>exec is for diagnosis, never for fixes — changes die with the pod; port-forward is a private, traceless tunnel to test a service before it has any public address.</li>
+          <li>The six-move rhythm — symptom, chart, dying words, wiring, fix, verify — turns any amber pod into a ten-minute diagnosis instead of a guessing game.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

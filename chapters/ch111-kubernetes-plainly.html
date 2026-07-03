@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kubernetes in plain terms — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch111">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XIII · The Deployment Platform</div>
+        <h1>Kubernetes in plain terms</h1>
+        <p class="ch-tagline">Five words — cluster, node, pod, deployment, service — and one big idea: you write down what you want, and a tireless control loop makes the world match. If you have ever run an agent loop, you already understand Kubernetes.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 112 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Meera runs the busiest harbour on the coast. On her desk sits the <em>standing orders book</em>. It does not say "send ship 47 to berth 12 at 3 p.m." — it says things like <em>"at all times, keep three grain ships of this class afloat and working"</em>. Her deputies walk the docks around the clock, comparing the book to the water. Storm sinks a grain ship at 2 a.m.? By dawn a replacement is crewed, fuelled, and moored — nobody phoned Meera, nobody panicked. The merchants never notice either, because they don't deal with individual ships. They deliver cargo to <em>Pier 9, the grain pier</em> — a fixed address that quietly hands the work to whichever grain ship is afloat today.</p>
+        <p>Meera's harbour is a Kubernetes cluster. The docks are nodes, the berths are pods, the standing orders book is a deployment, and Pier 9 is a service. And the deputies walking the docks, forever comparing the book to reality and fixing the difference? That is the control plane — and by the end of this chapter you will recognise it as something you have already built with your own hands.</p>
+      </section>
+
+      <h2>Why this thing exists at all</h2>
+      <p>Earlier in this act you put your agent inside a container — a sealed, shippable box that runs the same everywhere. One container on one machine is easy. Production asks harder questions: what if the machine dies at night? What if you need three copies for reliability, or thirty for load? What if you want to ship a new version without dropping a request? Answering those by hand — SSH-ing into machines, restarting crashed processes, updating load balancers — is a full-time job for a team of humans.</p>
+      <p><dfn>Kubernetes</dfn> (often written <em>K8s</em> — K, eight letters, s) is the software that does that job instead. You hand it a fleet of machines and a written description of what you want running, and it keeps reality matching that description, forever, without being asked twice. Azure's managed flavour of it is <dfn>AKS</dfn> — Azure Kubernetes Service — which simply means Microsoft runs the harbour master's office for you, and you bring the ships.</p>
+
+      <h2>The harbour, drawn: five words that carry everything</h2>
+      <p>Kubernetes has a reputation for hostile vocabulary, but the core is only five nouns, and each one maps cleanly onto Meera's harbour. Step through the diagram — each step adds one layer.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Cluster">
+          <h3>1. The cluster is the whole harbour</h3>
+          <div class="diagram">
+            <div class="d-box hot">AKS cluster<small>the harbour — one pool of compute you address as a single thing</small></div>
+          </div>
+          <p class="step-cap">A <dfn>cluster</dfn> is a group of machines managed as one unit. You never say "run this on machine 2" — you hand work to the harbour and let it choose the dock. One <code>az aks create</code> call built this whole thing.</p>
+        </div>
+        <div class="step" data-title="Nodes">
+          <h3>2. Nodes are the docks — real machines</h3>
+          <div class="diagram">
+            <div class="d-box hot">Node 1<small>a VM</small></div>
+            <div class="d-box hot">Node 2<small>a VM</small></div>
+            <div class="d-box hot">Node 3<small>a VM</small></div>
+          </div>
+          <p class="step-cap">A <dfn>node</dfn> is one worker machine — on AKS, an ordinary Azure virtual machine. Docks are where ships actually tie up; nodes are where containers actually run. Add docks, and the harbour can hold more ships.</p>
+        </div>
+        <div class="step" data-title="Pods">
+          <h3>3. Pods are the berths — where containers live</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Node 1</div>
+              <div class="d-box hot">pod<small>agent container</small></div>
+              <div class="d-box hot">pod<small>agent container</small></div>
+            </div>
+            <div class="d-col">
+              <div class="d-box">Node 2</div>
+              <div class="d-box hot">pod<small>agent container</small></div>
+            </div>
+            <div class="d-col">
+              <div class="d-box">Node 3</div>
+              <div class="d-box dim">(empty berth)</div>
+            </div>
+          </div>
+          <p class="step-cap">A <dfn>pod</dfn> is the smallest thing Kubernetes runs — a berth holding one or more containers that live and die together, sharing one network address. Usually it is one container: your agent. Sometimes a helper moors alongside in the same pod — a <em>sidecar</em>; later in this act a local MCP server will be exactly that.</p>
+        </div>
+        <div class="step" data-title="Deployment">
+          <h3>4. A deployment is the standing order</h3>
+          <div class="diagram">
+            <div class="d-box hot">Deployment<small>"always three pods of support-agent:1.4.2 afloat"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">pod</div>
+            <div class="d-box good">pod</div>
+            <div class="d-box good">pod</div>
+          </div>
+          <p class="step-cap">A <dfn>deployment</dfn> is a written rule, not a one-off command: <em>always keep three ships of this kind afloat</em>. You never create those three pods yourself — you write the order, and Kubernetes creates, replaces, and upgrades pods to satisfy it.</p>
+        </div>
+        <div class="step" data-title="Service">
+          <h3>5. A service is the fixed pier address</h3>
+          <div class="diagram">
+            <div class="d-box">Caller<small>another app in the cluster</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Service<small>support-agent — one stable name and IP</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">pod</div>
+            <div class="d-box good">pod</div>
+            <div class="d-box good">pod</div>
+          </div>
+          <p class="step-cap">Pods are mortal — they get replaced, and every replacement has a new name and address. A <dfn>service</dfn> is the harbour's fixed pier: one stable address that forwards traffic to whichever matching pods are alive <em>right now</em>. Ships come and go; Pier 9 stays put.</p>
+        </div>
+      </div>
+
+      <p>Hold the five in one line: the <strong>cluster</strong> is the harbour, <strong>nodes</strong> are its docks, <strong>pods</strong> are berths with containers in them, <strong>deployments</strong> are the standing orders, <strong>services</strong> are the fixed pier addresses. Flip the cards until each one feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">cluster</span><span class="flip-back">The whole harbour: a pool of machines managed as one unit. You talk to the cluster, never to individual machines.</span></button>
+        <button class="flip" type="button"><span class="flip-front">node</span><span class="flip-back">One dock: a real machine (a VM on AKS) where containers actually run. More nodes = more capacity.</span></button>
+        <button class="flip" type="button"><span class="flip-front">pod</span><span class="flip-back">One berth: the smallest deployable unit — one or more containers that share a lifecycle and a network address. Mortal by design.</span></button>
+        <button class="flip" type="button"><span class="flip-front">deployment</span><span class="flip-back">The standing order: "keep N copies of this image running". Kubernetes creates and replaces pods to honour it, forever.</span></button>
+        <button class="flip" type="button"><span class="flip-front">service</span><span class="flip-back">The fixed pier address: one stable name and IP that routes to whichever matching pods are alive today.</span></button>
+        <button class="flip" type="button"><span class="flip-front">control plane</span><span class="flip-back">The harbour master's office: the brain of the cluster, running the never-sleeping loops that compare desired state to actual state and fix the gap.</span></button>
+        <button class="flip" type="button"><span class="flip-front">kubectl</span><span class="flip-back">Your radio to the harbour: the command-line tool for asking questions (get, describe, logs) and submitting orders (apply).</span></button>
+        <button class="flip" type="button"><span class="flip-front">namespace</span><span class="flip-back">A harbour district: a named partition of one cluster so teams and environments keep their paperwork separate.</span></button>
+      </div>
+
+      <h2>The big idea: desired state, actual state, and the loop between them</h2>
+      <p>Here is the one idea that makes Kubernetes <em>Kubernetes</em>, and it should feel like coming home. You do not give Kubernetes commands — "start a container", "restart that one". You give it a <dfn>desired state</dfn>: a document describing the world you want. <em>Three replicas of this image, listening on this port, reachable at this name.</em> The cluster's brain — the <dfn>control plane</dfn>, Meera's office — then runs a permanent loop: <strong>observe</strong> the actual state of the harbour, <strong>compare</strong> it with the book, <strong>act</strong> to close any gap. Then do it again. Forever. This is the <dfn>reconciliation loop</dfn>, and it never, ever clocks off.</p>
+      <p>Pause and enjoy the echo. In <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> you built an agent: a loop that observes, reasons about the gap between where it is and where it wants to be, and acts. The Kubernetes control plane is <em>exactly that shape</em> — an agent whose goal is written in YAML, whose tools are "start pod" and "stop pod", and which never emits a FINAL ANSWER because the job is never finished. The <a href="ch089-watchdogs-self-healing.html">watchdogs-and-self-healing chapter</a> taught the same pattern at harness level: don't fix failures by hand, run a loop that notices and repairs. Kubernetes is that philosophy, industrialised.</p>
+      <p>Three consequences fall out of this one design choice:</p>
+      <ul>
+        <li><strong>Self-healing is free.</strong> A crashed pod is just a gap between desired (3) and actual (2), and the loop closes gaps. Nobody is paged for the routine case.</li>
+        <li><strong>Individual pods stop mattering.</strong> Ships are replaceable; the standing order is the truth. You never repair a pod — you fix the desired state and let the loop act.</li>
+        <li><strong>Every change is the same verb.</strong> Scale up, ship a new version, recover from failure: edit the file, re-submit, converge. One mental model covers everything.</li>
+      </ul>
+      <p>Run the loop yourself. This little simulator is pure Python, but the logic — observe, compare, act, repeat — is faithfully what the control plane does thousands of times a day. Press <strong>Run</strong>, then try changing <code>DESIRED</code> or making the crash happen on a different pass.</p>
+
+      <div class="pyrun" data-title="A toy reconciliation loop — the control plane in 30 lines">
+<textarea class="py-src" spellcheck="false">
+import random
+random.seed(11)
+
+DESIRED = 3          # the standing order: three pods afloat
+pods = {}            # actual state: pod name -> status
+
+def new_name():
+    tail = "".join(random.choice("abcdef0123456789") for _ in range(5))
+    return "support-agent-" + tail
+
+def reconcile():
+    # OBSERVE: clear away anything that has died
+    for name in [n for n, s in pods.items() if s != "Running"]:
+        del pods[name]
+        print(f"   sees {name} is dead -- clearing the berth")
+    # COMPARE: how far is actual from desired?
+    gap = DESIRED - len(pods)
+    # ACT: close the gap
+    if gap == 0:
+        print("   actual matches desired -- nothing to do")
+    for _ in range(gap):
+        name = new_name()
+        pods[name] = "Running"
+        print(f"   below desired -- scheduled {name}")
+
+print(f"standing order: keep {DESIRED} pods of support-agent running\n")
+for tick in range(1, 6):
+    running = [n for n, s in pods.items() if s == "Running"]
+    print(f"reconcile pass {tick}:  desired={DESIRED}  running={len(running)}")
+    reconcile()
+    # ...and between passes, the world misbehaves:
+    if tick == 2:
+        victim = sorted(pods)[0]
+        pods[victim] = "Failed"
+        print(f"   (2 a.m.: a node dies -- {victim} goes down)")
+    if tick == 3:
+        DESIRED = 5
+        print("   (you edit the YAML to replicas: 5 and kubectl apply)")
+
+print("\nfinal fleet:")
+for n in sorted(pods):
+    print("  ", n, "-", pods[n])
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Notice what you did <em>not</em> write: any code that restarts the dead pod by name, or any special case for scaling up. Both are just "close the gap". That is why operating Kubernetes feels calm once it clicks — every incident and every change funnels into the same loop.</p></div>
+
+      <h2>The YAML that carries your wish</h2>
+      <p>So how do you tell the harbour master what you want? You write the desired state in a <dfn>manifest</dfn> — a YAML file (old friend from <a href="ch005-yaml-and-json.html">the YAML chapter</a>) describing one Kubernetes object. Here is a real deployment manifest for an agent; click the annotated lines.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">deployment.yaml — the standing order, written down</div>
+        <div class="wl-line"><code>apiVersion: apps/v1</code>
+          <div class="wl-note">Which dialect of the Kubernetes API this document speaks. Deployments live in the <code>apps/v1</code> group — you will type this line from muscle memory within a week.</div></div>
+        <div class="wl-line"><code>kind: Deployment</code>
+          <div class="wl-note">What kind of object this file declares. Same file format, different <code>kind</code>, gives you Services, ConfigMaps, Secrets — the whole catalogue.</div></div>
+        <div class="wl-line"><code>metadata:</code></div>
+        <div class="wl-line"><code>  name: support-agent</code>
+          <div class="wl-note">The deployment's own name — how it appears in <code>kubectl get deployments</code>, and the prefix of every pod it creates.</div></div>
+        <div class="wl-line"><code>spec:</code>
+          <div class="wl-note"><code>spec</code> is Kubernetes-speak for "desired state". Everything under this key is the wish; the control plane's job is to make it true.</div></div>
+        <div class="wl-line"><code>  replicas: 3</code>
+          <div class="wl-note">The heart of the standing order: <em>three ships of this kind afloat at all times</em>. Change this number, re-apply, and the fleet grows or shrinks to match.</div></div>
+        <div class="wl-line"><code>  selector:</code></div>
+        <div class="wl-line"><code>    matchLabels:</code></div>
+        <div class="wl-line"><code>      app: support-agent</code>
+          <div class="wl-note">How the deployment recognises its own pods: by label. This <em>must</em> match the labels in the template below — if they disagree, Kubernetes rejects the manifest. It is the classic first-week error, so check it before you apply.</div></div>
+        <div class="wl-line"><code>  template:</code>
+          <div class="wl-note">The blueprint for every pod this deployment launches — a pod description nested inside the deployment. Everything below this line answers "what does one ship look like?"</div></div>
+        <div class="wl-line"><code>    metadata:</code></div>
+        <div class="wl-line"><code>      labels:</code></div>
+        <div class="wl-line"><code>        app: support-agent</code>
+          <div class="wl-note">The label stamped on each pod at birth — the other half of the selector handshake above, and the hook the Service will use to find these pods.</div></div>
+        <div class="wl-line"><code>    spec:</code></div>
+        <div class="wl-line"><code>      containers:</code></div>
+        <div class="wl-line"><code>      - name: agent</code></div>
+        <div class="wl-line"><code>        image: myregistry.azurecr.io/support-agent:1.4.2</code>
+          <div class="wl-note">Which container image to run — pulled from your Azure Container Registry. Shipping a new version of your agent is a one-character-ish edit right here: bump the tag, re-apply, and the loop rolls the fleet over.</div></div>
+        <div class="wl-line"><code>        ports:</code></div>
+        <div class="wl-line"><code>        - containerPort: 8000</code>
+          <div class="wl-note">The port your agent listens on inside its container — the door the Service will knock on.</div></div>
+      </div>
+
+      <p>And here is the pier address — the Service that gives those three mortal pods one immortal name:</p>
+
+      <div class="code-title">service.yaml</div>
+      <pre><code class="language-yaml">apiVersion: v1
+kind: Service
+metadata:
+  name: support-agent
+spec:
+  selector:
+    app: support-agent
+  ports:
+  - port: 80
+    targetPort: 8000</code></pre>
+
+      <p>Read it top to bottom: it is a <code>v1</code> object of kind <code>Service</code>, named <code>support-agent</code>. Its <code>selector</code> says "route to any pod labelled <code>app: support-agent</code>" — the same label the deployment stamps on its pods, which is how the two files find each other without ever mentioning each other. The <code>ports</code> block says: accept traffic on port 80, forward it to port 8000 inside a pod. By default this creates a <em>ClusterIP</em> service — an address reachable only from inside the cluster, which is exactly right for agent-to-agent traffic; opening a door to the outside world is a later chapter's business.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Pods created by a deployment get names like <code>support-agent-6c9d55d8b-x4k2q</code> — the deployment name, a hash, and random letters. The hash comes from an internal bookkeeping object (a ReplicaSet) the deployment manages for you; you will see it everywhere and almost never touch it.</p></div>
+
+      <h2>Talking to the harbour: kubectl</h2>
+      <p><dfn>kubectl</dfn> (say "kube-control") is your radio to the control plane. On Azure, one command wires it up — <code>az aks get-credentials</code> hands kubectl the keys to your cluster — and from then on every conversation looks the same: ask questions, or submit desired state. First, look around:</p>
+
+      <div class="code-title">terminal — asking questions</div>
+      <pre><code class="language-bash">kubectl get nodes
+kubectl get pods
+kubectl describe pod support-agent-6c9d55d8b-x4k2q
+kubectl logs support-agent-6c9d55d8b-x4k2q</code></pre>
+
+      <p>Line by line: <code>kubectl get nodes</code> lists the docks — every machine and whether it is Ready. <code>kubectl get pods</code> lists the ships — status, restart count, age; the most-typed command in Kubernetes. <code>kubectl describe pod</code> is the dossier on one pod — its node, its labels, and crucially an <em>Events</em> section that narrates its life ("pulled image", "started container", "killed — out of memory"); when a pod misbehaves, the answer is usually written there. And <code>kubectl logs</code> streams what the container printed — your agent's own voice, the same lines you would see running it locally.</p>
+      <p>Now the other half: submitting orders. There is really only one verb, and it is beautifully honest about the desired-state model:</p>
+
+      <div class="code-title">terminal — submitting desired state</div>
+      <pre><code class="language-bash">kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+kubectl get pods -w</code></pre>
+
+      <p><code>kubectl apply -f deployment.yaml</code> does not mean "run this now" — it means "make this file the new desired state"; the control plane diffs your wish against reality and converges. The second <code>apply</code> submits the Service the same way. Then <code>kubectl get pods -w</code> — the <code>-w</code> is <em>watch</em> — prints a line every time a pod changes state, so you can literally watch three ships launch: <code>Pending</code>, <code>ContainerCreating</code>, <code>Running</code>. Scaling to five replicas or shipping a new version is the same ritual: edit the file, <code>apply</code>, watch. You <em>can</em> nudge things imperatively (there is a <code>kubectl scale</code>), but the culture prefers changing the file, because the file is the truth.</p>
+
+      <h2>2 a.m. in the harbour: a pod dies</h2>
+      <p>Now for the payoff — the moment that used to mean a pager going off. Step through what actually happens when a pod dies at night, and notice that every step is just the reconciliation loop doing its rounds.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Steady state">
+          <h3>1. Steady state: the book matches the water</h3>
+          <div class="diagram">
+            <div class="d-box">Control plane<small>desired 3 = actual 3</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">pod a<small>Node 1</small></div>
+            <div class="d-box good">pod b<small>Node 2</small></div>
+            <div class="d-box good">pod c<small>Node 3</small></div>
+          </div>
+          <p class="step-cap">Three replicas desired, three running. The Service is routing traffic across all three. Everyone is asleep, as it should be.</p>
+        </div>
+        <div class="step" data-title="A pod dies">
+          <h3>2. 02:04 — Node 2 fails, taking pod b with it</h3>
+          <div class="diagram">
+            <div class="d-box">Control plane</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">pod a<small>Node 1</small></div>
+            <div class="d-box dim">pod b<small>gone with Node 2</small></div>
+            <div class="d-box good">pod c<small>Node 3</small></div>
+          </div>
+          <p class="step-cap">A VM crashes, or the agent process hits an unrecoverable error and exits. Either way, pod b is gone. The Service quietly stops sending it traffic — callers only ever reach the healthy two.</p>
+        </div>
+        <div class="step" data-title="Loop notices">
+          <h3>3. The loop compares: desired 3, actual 2</h3>
+          <div class="diagram">
+            <div class="d-box hot">Control plane<small>gap detected: 3 wanted, 2 alive</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">pod a</div>
+            <div class="d-box good">pod c</div>
+          </div>
+          <p class="step-cap">Nobody reports the outage; the reconciliation loop observes it on its next pass. The book says three, the water shows two. A gap is a to-do item, not an emergency.</p>
+        </div>
+        <div class="step" data-title="Replacement scheduled">
+          <h3>4. A new pod is scheduled on a healthy node</h3>
+          <div class="diagram">
+            <div class="d-box hot">Control plane<small>schedule replacement</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">pod a<small>Node 1</small></div>
+            <div class="d-box good">pod c<small>Node 3</small></div>
+            <div class="d-box hot">pod d<small>Node 1 — pulling image, starting</small></div>
+          </div>
+          <p class="step-cap">The control plane picks a dock with room — here, Node 1 takes a second ship — pulls the image if needed, and starts the container. The newcomer gets a brand-new name and address; it is a replacement, not a resurrection.</p>
+        </div>
+        <div class="step" data-title="Steady again">
+          <h3>5. 02:05 — the book matches the water again</h3>
+          <div class="diagram">
+            <div class="d-box good">Service<small>same pier address throughout</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">pod a</div>
+            <div class="d-box good">pod c</div>
+            <div class="d-box good">pod d<small>the new ship</small></div>
+          </div>
+          <p class="step-cap">The new pod passes its startup checks, the Service folds it into the rotation, and desired equals actual once more. Total human involvement: zero. In the morning, one pod is younger than the others — the only evidence anything happened.</p>
+        </div>
+      </div>
+
+      <p>You can stage this drama yourself, safely — the best five minutes you will spend building trust in the platform:</p>
+
+      <div class="code-title">terminal — sink a ship on purpose</div>
+      <pre><code class="language-bash">kubectl delete pod support-agent-6c9d55d8b-x4k2q
+kubectl get pods</code></pre>
+
+      <p>The first line deletes a pod by name — you are the storm now. The second lists pods again, and there it is: three pods still, one of them seconds old with a name you have never seen. The standing order outranks the storm.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The safety net is the deployment, not the pod. <code>kubectl delete pod</code> is a party trick; <code>kubectl delete deployment support-agent</code> revokes the standing order itself, and the loop dutifully converges on the new desired state — which is <em>zero pods</em>. Desired-state systems are perfectly obedient: make sure the state you declare is the one you actually desire.</p></div>
+
+      <h2>Namespaces: districts of the harbour</h2>
+      <p>One more word and the vocabulary is complete. A <dfn>namespace</dfn> is a named district within one cluster — separate berths, separate paperwork, same harbour. Teams use them to keep environments and projects apart: your agent might live in both an <code>agents-dev</code> and an <code>agents-prod</code> namespace on one cluster, since names only need to be unique <em>within</em> a district. Every kubectl command takes a <code>-n</code> flag to aim at one — <code>kubectl get pods -n agents-prod</code> — and if you ever see nothing where something should be, check which namespace you are pointed at before you panic. Everyone makes the "wrong district" mistake in week one.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this chapter everywhere. Repositories grow a <code>k8s/</code> or <code>manifests/</code> folder full of YAML — you can now read every file in it. Merge requests say "bump replicas to 5" or "roll image to 1.4.3" — both one-line edits to desired state. Runbooks open with <code>kubectl get pods</code>. When a colleague shrugs "it'll get rescheduled" about a dead pod, that is the reconciliation loop they are trusting. And "we run GitOps" means the desired-state idea taken to its logical end: the YAML lives in git, and yet another loop keeps the cluster matching the repository.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. A pod running your agent crashes at 2 a.m. Who restarts it?</p>
+          <div class="q-opts">
+            <button data-opt="a">The on-call engineer, after an alert fires</button>
+            <button data-opt="b">The container itself, which reboots automatically</button>
+            <button data-opt="c">The control plane's reconciliation loop, which sees actual state fall below desired and schedules a replacement</button>
+          </div>
+          <p class="q-explain">Nobody issues a restart command. The deployment declares "three replicas"; the loop observes two, and closes the gap with a brand-new pod. Self-healing is a side effect of desired state, not a separate feature.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. What exactly does a deployment declare?</p>
+          <div class="q-opts">
+            <button data-opt="a">A one-time instruction to start some containers</button>
+            <button data-opt="b">A standing order — the desired state: which image, and how many copies must always be running</button>
+            <button data-opt="c">The network address other apps use to reach the pods</button>
+          </div>
+          <p class="q-explain">A deployment is Meera's standing orders book, not a launch command: "always three ships of this kind afloat". The network address is the Service's job.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why does a Service need to exist at all, if the pods already have network addresses?</p>
+          <div class="q-opts">
+            <button data-opt="a">Pods are mortal — replacements get new names and addresses, so callers need one stable address that routes to whoever is alive now</button>
+            <button data-opt="b">Pods cannot receive network traffic without one</button>
+            <button data-opt="c">It encrypts traffic between pods</button>
+          </div>
+          <p class="q-explain">Every replaced pod is a new ship with a new address. The Service is the fixed pier: callers use its stable name, and it forwards to whichever labelled pods are currently running.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. You need five replicas instead of three. What is the Kubernetes-native move?</p>
+          <div class="q-opts">
+            <button data-opt="a">SSH into two more nodes and start the containers there</button>
+            <button data-opt="b">Delete the deployment and recreate it with five pods</button>
+            <button data-opt="c">Change <code>replicas: 3</code> to <code>5</code> in the YAML and run <code>kubectl apply</code> — the loop converges on the new desired state</button>
+          </div>
+          <p class="q-explain">Every change is the same verb: edit the desired state, apply it, let the loop close the gap. You never manipulate individual pods or machines by hand.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. In the harbour analogy, which pairing is correct?</p>
+          <div class="q-opts">
+            <button data-opt="a">Node = berth, pod = dock, cluster = standing order</button>
+            <button data-opt="b">Cluster = harbour, node = dock (a VM), pod = berth holding containers, deployment = standing order, service = fixed pier address</button>
+            <button data-opt="c">Service = harbour master, deployment = pier, namespace = ship</button>
+          </div>
+          <p class="q-explain">Cluster is the harbour; nodes are docks (real machines); pods are berths for containers; the deployment keeps N afloat; the service is the pier address that stays put while ships churn.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Five words carry Kubernetes: <strong>cluster</strong> (harbour), <strong>nodes</strong> (docks — VMs), <strong>pods</strong> (berths holding one or more containers), <strong>deployments</strong> (standing orders: "always N afloat"), <strong>services</strong> (fixed pier addresses while pods come and go).</li>
+          <li>The big idea is desired state: you declare the world you want in YAML, and the control plane's reconciliation loop — observe, compare, act, forever — makes reality match. It is an agent loop that never sleeps and never files a FINAL ANSWER.</li>
+          <li>Self-healing is not a feature bolted on; a dead pod is just a gap between desired and actual, and the loop closes gaps. Replacements arrive with new names — pods are cattle, not pets.</li>
+          <li>Every change is the same ritual: edit the manifest, <code>kubectl apply</code>, watch the cluster converge. Scaling, upgrading, and recovering all funnel into one mental model.</li>
+          <li>In the deployment manifest, <code>selector.matchLabels</code> must match the pod template's labels — and the Service finds its pods by those same labels. Labels are the glue of the whole system.</li>
+          <li>Namespaces are districts of one harbour: same cluster, separate paperwork — and half of all "where are my pods?!" moments are just a missing <code>-n</code> flag.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

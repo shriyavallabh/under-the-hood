@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAG: retrieval-augmented generation — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch042">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act IV · Talking to the Model</div>
+        <h1>RAG: retrieval-augmented generation</h1>
+        <p class="ch-tagline">The model is brilliant but has never read your documents. RAG hires it a librarian. By the end of this chapter you will have built the entire pipeline — embeddings, similarity search, prompt stuffing, grounded answer — in pure Python you can run right here.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 43 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A company keeps forty years of records in a grand old archive room — every policy, every contract, every memo. In the reading room sits a genius consultant who has read every published book on Earth but not one of these files. You ask her, "How many days of paid leave do I get?" She has two bad options: guess from general knowledge (confident, plausible, quite possibly wrong), or read all forty years of files aloud before answering (ruinously slow and expensive).</p>
+        <p>Then the librarian steps in. Months ago she went shelf by shelf and wrote an index card for every folder — not the folder's title, but a fingerprint of what it is <em>about</em> — and she arranged the cards so that similar topics sit near each other. Now she hears your question, works out where it lives in that arrangement, walks straight to the right neighbourhood, pulls the three most relevant folders, and drops them on the genius's desk: "Answer from these, and say which page." Thirty seconds later you have a correct answer with a citation.</p>
+        <p>The librarian is <strong>retrieval</strong>. The card catalogue is a <strong>vector store</strong>. The drop-on-the-desk is <strong>prompt stuffing</strong>. The whole arrangement is <strong>RAG</strong> — and it is the single most common way enterprises put LLMs to work.</p>
+      </section>
+
+      <h2>The problem RAG solves</h2>
+      <p>Quick recap from <a href="ch030-tokens-embeddings-context.html">tokens, embeddings and context</a>: a model's knowledge is frozen at training time, squashed into its weights as a blurry statistical summary. It has never seen your leave policy or yesterday's incident report, and it cannot look anything up on its own. Ask it about your handbook anyway and it produces the most plausible-sounding text — a polite description of a hallucination.</p>
+      <p>There are three honest ways to give a model knowledge it lacks. Retrain it (fine-tuning — slow, costly, and as we will see, wrong for facts). Paste your entire corpus into every prompt (the meter from <a href="ch041-tokens-and-cost.html">the previous chapter</a> starts spinning like a fan). Or fetch <em>only the passages relevant to this question</em> and paste just those. That third option is <dfn>retrieval-augmented generation</dfn> — RAG — a pipeline that searches your documents for the best-matching passages and stuffs them into the prompt so the model answers from evidence instead of memory.</p>
+      <p>Fix one thing in your head early: RAG is not a model feature. There is no <code>rag=True</code> switch on any API. It is plumbing — ordinary code wrapped around the same chat call from <a href="ch033-first-api-call.html">your first API call</a>. The model never knows a retrieval system exists; it just receives a prompt that happens to contain exactly the right paragraphs.</p>
+
+      <h2>Embeddings: filing by meaning, not by keyword</h2>
+      <p>The librarian's index cards are the clever part. An <dfn>embedding</dfn> is a list of numbers — a vector — that positions a piece of text as a point in a huge "meaning space", such that texts about similar things land near each other. You met the idea in <a href="ch030-tokens-embeddings-context.html">chapter 30</a>; RAG is where it earns its salary. "Reimbursement limits for travel meals" and "how much can I claim for food on a work trip" share almost no words, yet their embeddings sit practically on top of each other. That makes this <em>semantic</em> search, not keyword search: it matches what you mean, not what you typed.</p>
+      <p>To measure "near", the standard tool is <dfn>cosine similarity</dfn> — a score for the angle between two vectors: 1.0 means pointing the same way (same meaning), around 0 means unrelated.</p>
+      <p>Two practical notes. Embedding models are separate from chat models — small, fast, and cheap, which is why embedding a million documents is routine. And vectors are only comparable <em>within one model's space</em>: embed documents with one model and queries with another and the similarity scores are meaningless — a classic production bug.</p>
+
+      <h2>The pipeline, end to end</h2>
+      <p>The whole system is two halves that run at different times. <em>Ingestion</em> happens offline — nightly, or whenever a document changes. <em>Query time</em> happens in the second after a user hits Enter. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Chunk">
+          <h3>1. Ingestion: split documents into chunks</h3>
+          <div class="diagram">
+            <div class="d-box hot">Documents<small>handbook, policies, wikis</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Chunker<small>~500-token passages</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Chunks<small>each one self-contained</small></div>
+          </div>
+          <p class="step-cap">You cannot file a 300-page handbook under one index card — its "meaning" would be mush. Each document is cut into passages a few hundred tokens long, ideally along headings so every chunk is one coherent thought.</p>
+        </div>
+        <div class="step" data-title="Embed">
+          <h3>2. Ingestion: embed every chunk</h3>
+          <div class="diagram">
+            <div class="d-box">Chunks</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Embedding model<small>text in, vector out</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Vectors<small>[0.12, -0.87, ...]</small></div>
+          </div>
+          <p class="step-cap">Every chunk goes through the embedding model once and comes back as a vector — its coordinates in meaning space. This is the librarian writing an index card per folder.</p>
+        </div>
+        <div class="step" data-title="Store">
+          <h3>3. Ingestion: store vectors in a vector database</h3>
+          <div class="diagram">
+            <div class="d-box">Vectors + text + source</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Vector store<small>built for nearest-neighbour lookup</small></div>
+          </div>
+          <p class="step-cap">A vector database stores each vector alongside the original chunk text and metadata (source file, section, permissions), and answers "which stored vectors are nearest to this one?" in milliseconds across millions of chunks. Ingestion done — all before any user asked anything.</p>
+        </div>
+        <div class="step" data-title="Question">
+          <h3>4. Query time: embed the question</h3>
+          <div class="diagram">
+            <div class="d-box hot">User<small>"how much can I claim for meals?"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Embedding model<small>the SAME one</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Query vector</div>
+          </div>
+          <p class="step-cap">The question gets embedded too — with the same model, so it lands in the same meaning space. Now the question is a point on the same map as every passage in the archive.</p>
+        </div>
+        <div class="step" data-title="Retrieve">
+          <h3>5. Query time: top-k retrieval</h3>
+          <div class="diagram">
+            <div class="d-box">Query vector</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Vector store<small>cosine similarity vs every chunk</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Top 4 chunks<small>the expense-policy passages</small></div>
+          </div>
+          <p class="step-cap">The store compares the query vector against its shelves and returns the k nearest chunks — typically 3 to 10. This is the librarian walking to the right shelf and pulling the right folders.</p>
+        </div>
+        <div class="step" data-title="Stuff">
+          <h3>6. Query time: stuff the prompt</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">Grounding rules<small>"answer ONLY from the context, cite sources"</small></div>
+              <div class="d-box hot">Retrieved chunks<small>pasted as plain text</small></div>
+              <div class="d-box">The question</div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">One ordinary prompt</div>
+          </div>
+          <p class="step-cap">The retrieved text is pasted — literally concatenated — into a prompt along with instructions and the question. No magic channel into the model: it is <a href="ch037-prompting-that-matters.html">prompting</a>, done by code.</p>
+        </div>
+        <div class="step" data-title="Answer">
+          <h3>7. Query time: grounded answer</h3>
+          <div class="diagram">
+            <div class="d-box">Prompt</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">LLM<small>answers from the evidence</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">User<small>"2,000 rupees/day [expense-rules.md]"</small></div>
+          </div>
+          <p class="step-cap">The model reads the passages sitting right there in its context and answers from them, citing its sources. An open-book exam instead of a memory test. That is the whole trick.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Steps 1–3 run offline on a schedule; steps 4–7 run per question in about a second. This split is why RAG scales: the expensive reading of the whole archive happens once, and each question pays only for a lookup plus a small prompt.</p></div>
+
+      <h2>The vocabulary you need</h2>
+      <p>Six terms carry every RAG conversation you will ever sit in. Flip until boring:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">chunk</span><span class="flip-back">A passage cut from a document — usually a few hundred tokens — small enough to have one clear meaning, big enough to stand alone.</span></button>
+        <button class="flip" type="button"><span class="flip-front">embedding</span><span class="flip-back">A vector (list of numbers) placing a text in meaning space. Similar meaning = nearby points, even with zero shared words.</span></button>
+        <button class="flip" type="button"><span class="flip-front">vector store</span><span class="flip-back">A database that keeps vectors next to their original text and answers "which stored items are nearest to this vector?" fast, at scale.</span></button>
+        <button class="flip" type="button"><span class="flip-front">cosine similarity</span><span class="flip-back">The angle-based score between two vectors: 1.0 = same direction (same meaning), near 0 = unrelated. The ruler for "nearby".</span></button>
+        <button class="flip" type="button"><span class="flip-front">top-k</span><span class="flip-back">Return the k best matches — the retrieval budget. k=4 means the four most similar chunks go into the prompt, nothing else.</span></button>
+        <button class="flip" type="button"><span class="flip-front">grounding</span><span class="flip-back">Making the model answer from supplied evidence rather than memory — with instructions to cite sources and admit when the context does not contain the answer.</span></button>
+      </div>
+
+      <h2>Build one, right now</h2>
+      <p>Below is a complete, working RAG pipeline. Because this page cannot call paid APIs, two pieces are honest stand-ins: the embeddings are tiny hand-made 4-dimensional vectors (real ones have a thousand-plus learned dimensions), and the chat model is a scripted <code>fake_llm()</code> that obeys the grounding rules the way a well-prompted real model would. Everything in between — cosine similarity, top-k retrieval, prompt stuffing — is exactly the production logic. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A complete toy RAG pipeline — run me">
+<textarea class="py-src" spellcheck="false">
+import math
+
+# ---- The "vector store": chunks with hand-made embeddings ----
+# Our meaning space has 4 hand-chosen dimensions:
+#   [leave/holiday, expenses/money, security, office/food]
+# A real embedding model learns 1,000+ dimensions by itself.
+DOCS = {
+    "leave-policy.md": (
+        "Employees get 24 days of paid leave per year. "
+        "Unused leave lapses on 31 March.",
+        [0.9, 0.1, 0.0, 0.0]),
+    "expense-rules.md": (
+        "Meals on business trips are reimbursed up to "
+        "2,000 rupees per day, with receipts.",
+        [0.1, 0.9, 0.0, 0.2]),
+    "it-security.md": (
+        "Passwords must be rotated every 90 days and "
+        "never shared, even with managers.",
+        [0.0, 0.0, 1.0, 0.0]),
+    "cafeteria.md": (
+        "The cafeteria serves lunch from 12 to 2. "
+        "Friday is biryani day.",
+        [0.1, 0.1, 0.0, 0.9]),
+}
+
+def cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    mag_a = math.sqrt(sum(x * x for x in a))
+    mag_b = math.sqrt(sum(y * y for y in b))
+    return dot / (mag_a * mag_b)
+
+# ---- Stand-in for the embedding model ----
+def embed_query(question):
+    q = question.lower()
+    dims = [
+        ["leave", "holiday", "vacation"],
+        ["expense", "claim", "meal", "reimburse"],
+        ["password", "security", "login"],
+        ["cafeteria", "lunch", "food"],
+    ]
+    vec = [1.0 if any(w in q for w in words) else 0.0
+           for words in dims]
+    if not any(vec):                 # no signal at all:
+        vec = [0.25, 0.25, 0.25, 0.25]   # equally unsure everywhere
+    return vec
+
+# ---- Retrieval: top-k nearest chunks ----
+def retrieve(question, k=2):
+    qv = embed_query(question)
+    scored = sorted(
+        ((cosine(qv, vec), name, text)
+         for name, (text, vec) in DOCS.items()),
+        reverse=True)
+    return scored[:k]
+
+# ---- Stand-in for the chat model. A real call would be
+# client.messages.create(...) with this exact prompt. ----
+def fake_llm(prompt):
+    q = prompt.split("QUESTION:")[-1].lower()
+    if "meal" in q and "reimbursed up to" in prompt:
+        return ("Meals on work trips are reimbursed up to 2,000 "
+                "rupees per day, with receipts. [expense-rules.md]")
+    if "leave" in q and "24 days" in prompt:
+        return ("You get 24 days of paid leave a year; unused days "
+                "lapse on 31 March. [leave-policy.md]")
+    return ("The provided documents do not answer this, "
+            "so I will not guess.")
+
+# ---- The whole pipeline for one question ----
+def rag_answer(question):
+    print("QUESTION:", question)
+    hits = retrieve(question, k=2)
+    for score, name, text in hits:
+        print(f"  retrieved {name:<18} similarity {score:.2f}")
+    context = "\n".join(f"[{name}] {text}"
+                        for _, name, text in hits)
+    prompt = ("Answer ONLY from the context. Cite the source. "
+              "If the answer is not there, say so.\n"
+              "CONTEXT:\n" + context + "\nQUESTION: " + question)
+    print("  ANSWER:", fake_llm(prompt))
+    print()
+
+rag_answer("How much can I claim for meals on a work trip?")
+rag_answer("How many days of leave do I get?")
+rag_answer("What is the dress code?")
+</textarea>
+      </div>
+
+      <p>Read the output carefully. The meals question retrieved <code>expense-rules.md</code> with a high similarity score and got a cited answer. The dress-code question is the interesting one: the archive contains nothing about dress codes, so retrieval returned weak, roughly-equal scores, the context held nothing useful — and the grounded model <em>refused to guess</em>. That refusal is the behaviour enterprises pay for.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now break it. Set <code>k=1</code> and ask a question that needs two documents. Rephrase the meals question as "food money when travelling" and watch keyword-based <code>embed_query</code> miss what a real embedding model would catch — exactly why learned embeddings beat keyword tricks. Add a fifth document and notice nothing else needs to change.</p></div>
+
+      <h2>Chunking: the unglamorous decision that decides everything</h2>
+      <p><dfn>Chunking</dfn> — how you cut documents into passages — sounds like a formality and is actually the highest-leverage knob in the pipeline. The tension is geometric: one embedding must summarise one chunk. Make chunks tiny (a sentence each) and every vector is razor-sharp, but the retrieved text arrives stripped of its surroundings — the table of amounts without the heading saying which grade of employee it covers. Make chunks huge (twenty pages) and each vector becomes a blurry average of many topics, retrieval turns vague, and every hit drags thousands of irrelevant tokens into the prompt — the <a href="ch041-tokens-and-cost.html">meter</a> again.</p>
+      <p>Sensible defaults that survive production: chunks of a few hundred tokens; 10–15% overlap between neighbours so a sentence straddling a boundary is not cut in half; and best of all, structure-aware splitting — cut along headings and paragraphs, and prepend the document title and section heading to each chunk so an orphaned passage still knows where it came from.</p>
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>When a RAG bot gives a weird answer, almost everyone's first instinct is to blame the model. Look at the retrieved chunks first. Nine times out of ten the model answered perfectly reasonably given the wrong or mangled passages it was handed — a retrieval problem wearing a hallucination costume. Debugging RAG means debugging the librarian before the genius.</p></div>
+
+      <h2>Why grounding cuts hallucination — and where it does not</h2>
+      <p>An ungrounded model sits a closed-book exam: it reconstructs answers from compressed memories, and when memory runs out it improvises fluently. RAG turns it into an open-book exam: the right passage is physically present in the context, the instructions say "answer only from this, cite the source, say when it is missing", and models are far better at reading than remembering. Citations do double duty — the user can click through and verify, converting "trust me" into "check me", which is the difference between a demo and something a compliance team signs off.</p>
+      <p>But keep your scepticism. RAG <em>reduces</em> hallucination; it does not abolish it. If retrieval fetches a plausible-but-wrong passage, the model produces a confident wrong answer <em>with a citation</em> — the most dangerous failure in the genre. Stale index, stale answers. And a model can still occasionally blend memory into the evidence. Mature teams evaluate the halves separately: "did the right chunk arrive?" (retrieval quality) and "did the model stick to it?" (faithfulness).</p>
+
+      <h2>RAG vs long context vs fine-tuning</h2>
+      <p>Modern models accept enormous contexts — hundreds of thousands of tokens — so why not paste the whole handbook into every prompt? For a small corpus and a handful of questions, honestly, that works. At scale it collapses for three reasons. Cost: the full corpus is re-sent and re-billed on <em>every</em> question, while RAG sends a few chunks. Focus: models get measurably worse at using facts buried in the middle of a huge context, whereas retrieval hands over exactly the relevant paragraphs. And ceiling: no context window holds ten million documents, but a vector store shrugs — and can filter by permissions, so each user's retrieval only touches documents they may see. That last one, access control, is quietly the biggest enterprise reason of all.</p>
+
+      <div data-bars data-title="Tokens sent for ONE question against a 300-page handbook (illustrative round numbers)" data-unit="tokens"
+           data-note="Same question, same corpus: retrieval sends roughly 1-2% of the tokens that whole-corpus stuffing sends — on every single question.">
+        <div class="bar" data-label="Whole handbook in the prompt" data-value="150000"></div>
+        <div class="bar" data-label="RAG, top 10 chunks" data-value="5000"></div>
+        <div class="bar" data-label="RAG, top 4 chunks" data-value="2000"></div>
+      </div>
+
+      <p>Fine-tuning is the other pretender. Retraining a model on your documents adjusts its weights — excellent for teaching <em>behaviour</em>: tone, output format, domain vocabulary, house style. It is a terrible way to store facts: knowledge goes in blurry, cannot be cited, cannot be deleted, and is stale the day after training. RAG keeps facts <em>outside</em> the model, where they update the moment you re-index an edited file. The industry's rule of thumb: <strong>fine-tune for behaviour, retrieve for knowledge</strong> — and plenty of systems do both.</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>RAG</th><th>Long context</th><th>Fine-tuning</th></tr>
+        <tr><td>Where knowledge lives</td><td>External store, fetched per question</td><td>Pasted whole into every prompt</td><td>Baked into the weights</td></tr>
+        <tr><td>Updating a fact</td><td>Re-index one file — instant</td><td>Instant, but re-billed every question</td><td>Retrain the model</td></tr>
+        <tr><td>Cost per question</td><td>Low — a few chunks</td><td>High — everything, every time</td><td>Low per call, big upfront</td></tr>
+        <tr><td>Citations</td><td>Natural — you know what was retrieved</td><td>Possible but fuzzy</td><td>Impossible</td></tr>
+        <tr><td>Best at</td><td>Facts at scale, per-user access control</td><td>Small corpus needing deep cross-referencing</td><td>Style, format, skills</td></tr>
+      </table></div>
+
+      <h2>What production RAG code looks like</h2>
+      <p>Your toy and a production system differ in three swaps: hand-made vectors become calls to a real embedding model, the <code>DOCS</code> dict becomes a real vector database (FAISS, Chroma, pgvector inside Postgres, Pinecone — different clients, identical verbs), and <code>fake_llm</code> becomes the chat call from <a href="ch033-first-api-call.html">chapter 33</a>. The shape below is deliberately generic pseudocode — vendor names differ, but you will recognise this skeleton in any codebase. Click the lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">rag_service.py — the shape you will meet in real repos</div>
+        <div class="wl-line"><code>chunks = chunk_markdown(handbook, size=500, overlap=60)</code>
+          <div class="wl-note">Ingestion starts with chunking: ~500 tokens per passage, 60 tokens of overlap so no sentence is beheaded at a boundary. The unit is tokens, not characters — both the embedding model and the prompt budget are metered in tokens (<a href="ch041-tokens-and-cost.html">ch41</a>).</div></div>
+        <div class="wl-line"><code>vectors = embedding_model.embed([c.text for c in chunks])</code>
+          <div class="wl-note">One API call embeds the whole batch — the square-bracket expression is a list comprehension (<a href="ch008-comprehensions.html">ch8</a>). Embedding a million chunks is an evening, not a project.</div></div>
+        <div class="wl-line"><code>store.upsert(ids, vectors, texts, metadata)</code>
+          <div class="wl-note">"Upsert" = insert-or-update: re-ingesting an edited document overwrites its old vectors instead of duplicating them. Metadata (source file, section, access group) rides along with each vector.</div></div>
+        <div class="wl-line"><code># --- everything above runs offline, on a schedule ---</code>
+          <div class="wl-note">The ingestion half typically lives in a nightly job or fires when a document changes. Users never wait for it.</div></div>
+        <div class="wl-line"><code>def answer(question, user):</code></div>
+        <div class="wl-line"><code>    qv = embedding_model.embed([question])[0]</code>
+          <div class="wl-note">Embedded with the SAME model as the chunks. Mixing embedding models between ingestion and query is the classic silent killer: no error, just garbage similarity scores.</div></div>
+        <div class="wl-line"><code>    hits = store.query(qv, top_k=4, filter=user.access)</code>
+          <div class="wl-note">Top-k nearest neighbours, filtered to documents this user may see. That one <code>filter</code> argument is why security teams approve RAG and veto "paste everything into the prompt".</div></div>
+        <div class="wl-line"><code>    context = format_with_sources(hits)</code>
+          <div class="wl-note">Each chunk is labelled with its source ("[expense-rules.md, section 3]") so the model can cite, exactly like your toy did.</div></div>
+        <div class="wl-line"><code>    prompt = GROUNDING_RULES + context + question</code>
+          <div class="wl-note">Prompt stuffing is string concatenation — that is the whole secret. GROUNDING_RULES says: answer only from the context, cite sources, say "not found" when it is not there (<a href="ch037-prompting-that-matters.html">ch37</a>).</div></div>
+        <div class="wl-line"><code>    return chat_model.generate(prompt), sources(hits)</code>
+          <div class="wl-note">One ordinary chat-model call, plus the source list so the UI can render clickable citations. Everything upstream existed only to make this prompt good.</div></div>
+      </div>
+
+      <p>One forward pointer: in Act V retrieval often stops being a fixed pipeline step and becomes a <a href="ch035-tool-calling.html">tool</a> the model chooses to call — deciding for itself when to look something up and re-searching when the first haul is thin. People call that agentic RAG; you will recognise it as this chapter plus <a href="ch044-what-is-an-agent.html">a loop</a>.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>RAG is, by a wide margin, the most common enterprise LLM pattern: nearly every "ask our documentation" assistant, HR-policy bot, support-deflection widget, and legal-research tool is this exact pipeline. You will spot it in the artefacts: a <code>pgvector</code> extension appearing in a Postgres migration, a nightly <code>ingest</code> job in the scheduler, an "embeddings" line item on the API bill next to the chat models, config keys named <code>chunk_size</code>, <code>chunk_overlap</code>, and <code>top_k</code>, and merge requests titled "increase k to 6" or "switch to heading-aware chunking". And when someone in a review says "the bot hallucinated", you now know the first question to ask: <em>what did the retriever return?</em></p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. At answer time, how does the model actually receive the retrieved passages?</p>
+          <div class="q-opts">
+            <button data-opt="a">It queries the vector database directly through a special connection</button>
+            <button data-opt="b">The passages are pasted into the prompt as ordinary text, like any other message content</button>
+            <button data-opt="c">They were baked into the model's weights during ingestion</button>
+          </div>
+          <p class="q-explain">There is no side channel. Retrieval happens in your code, and the winning chunks are concatenated into the prompt string. The model just sees a prompt that happens to contain the evidence — RAG is plumbing around a normal chat call.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Why must the query be embedded with the same embedding model used for the documents?</p>
+          <div class="q-opts">
+            <button data-opt="a">Because the chat model requires matching model versions</button>
+            <button data-opt="b">It is only a cost optimisation — any model would work</button>
+            <button data-opt="c">Different models produce vectors in different, incomparable spaces — similarity scores only mean something within one space</button>
+          </div>
+          <p class="q-explain">An embedding is coordinates in one specific model's learned meaning space. Compare coordinates from two different maps and "nearby" is noise. Mixing embedding models between ingestion and query is a classic silent production bug.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. You re-chunk your handbook into giant 20-page chunks. What goes wrong?</p>
+          <div class="q-opts">
+            <button data-opt="a">The vector store rejects chunks over a fixed size limit</button>
+            <button data-opt="b">Each vector becomes a blurry average of many topics, retrieval gets vaguer, and every hit wastes thousands of prompt tokens</button>
+            <button data-opt="c">Nothing — bigger chunks always mean more context and better answers</button>
+          </div>
+          <p class="q-explain">One embedding must summarise one chunk. Twenty pages of mixed topics average into a vector that matches everything weakly, and each retrieved hit drags mostly-irrelevant tokens into the prompt. Chunking is a precision-versus-context trade, not a formality.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Your leave policy changed yesterday. Which approach reflects the change in today's answers, cheapest?</p>
+          <div class="q-opts">
+            <button data-opt="a">Fine-tune the model on the new policy document overnight</button>
+            <button data-opt="b">Wait for the next base-model release to pick it up</button>
+            <button data-opt="c">Re-ingest the edited file — its chunks are re-embedded and the very next question retrieves the new text</button>
+          </div>
+          <p class="q-explain">RAG keeps facts outside the model, so freshness is just re-indexing one file. Fine-tuning bakes facts in blurrily, cannot cite, and needs a retrain per update — it is for behaviour and style, not for knowledge. Fine-tune for behaviour, retrieve for knowledge.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">5. A user asks about something genuinely absent from the corpus. What should a well-built RAG system do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Instruct the model to say the documents do not contain the answer, rather than guessing</button>
+            <button data-opt="b">Silently fall back to the model's training-data memory so the user always gets an answer</button>
+            <button data-opt="c">Return the top-k chunks anyway and let the model improvise something plausible from them</button>
+          </div>
+          <p class="q-explain">Grounding rules include the refusal path: "if it is not in the context, say so." A grounded refusal is a feature, not a failure — the silent fallback to memory is exactly the confident hallucination RAG exists to prevent.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>RAG is not a model feature — it is plumbing: search your documents for the passages relevant to the question and paste them into an ordinary prompt so the model answers from evidence, with citations.</li>
+          <li>The pipeline has two timelines: ingestion offline (chunk, embed, store in a vector database) and query time online (embed the question, top-k retrieve by cosine similarity, stuff the prompt, generate).</li>
+          <li>Embeddings turn meaning into geometry — similar texts land nearby even with zero shared words — and both sides must use the same embedding model or similarity scores are noise.</li>
+          <li>Chunking is the highest-leverage knob: a few hundred tokens, some overlap, split along headings. When answers go weird, inspect the retrieved chunks before blaming the model.</li>
+          <li>Grounding reduces hallucination but does not abolish it — wrong retrieval yields confident wrong answers with citations, so evaluate retrieval and faithfulness separately.</li>
+          <li>Versus alternatives: long context re-bills the whole corpus every question and dilutes attention; fine-tuning teaches behaviour, not fresh facts. Fine-tune for behaviour, retrieve for knowledge — which is why RAG is the most common enterprise LLM pattern alive.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

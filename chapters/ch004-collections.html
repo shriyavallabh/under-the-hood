@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The four containers — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch004">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act I · The Language</div>
+        <h1>The four containers</h1>
+        <p class="ch-tagline">Lists, dicts, tuples, sets — four ways to hold a bunch of things, each built for a different job. Learn to tell them apart on sight and half of every agent codebase stops being mysterious, because agent code really is dicts all the way down.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 4 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>It is 6 a.m. at a small courier depot, and the supervisor is setting up the day with four pieces of stationery. First, the <em>run sheet</em>: today's delivery stops written top to bottom, in the exact order the van will drive them — and the same society appears twice if two parcels are going there. Second, the <em>parcel register</em>: a fat book where every entry sits under a tracking number, so anyone can flip straight to PN-4471 without reading from page one. Third, the <em>sealed manifest</em>: once the depot stamps it, its contents are fixed — nobody edits a sealed manifest; if something changes, they issue a new one. Fourth, the <em>gate board</em>: the guard chalks up each vehicle number he has seen today. Writing the same number twice changes nothing, and one glance answers "has this van already been in?"</p>
+        <p>Four jobs, four shapes of stationery. Python ships exactly these four shapes as built-in containers — <strong>list</strong>, <strong>dict</strong>, <strong>tuple</strong>, <strong>set</strong> — and choosing between them is the first genuinely architectural decision you will learn to read in any agent codebase.</p>
+      </section>
+
+      <h2>Four shapes, four jobs</h2>
+      <p>Quick recap before the new material. In <a href="ch002-names-and-objects.html">chapter 2</a> you learned that every value in Python is an object, and a variable is just a name stuck on one. In <a href="ch003-strings-and-fstrings.html">chapter 3</a> the object was a string — a sequence of characters you could index and slice. A <dfn>container</dfn> is simply an object whose job is to hold <em>other</em> objects: strings, numbers, booleans, even other containers. The name-on-object rule does not change; the object just got roomier.</p>
+      <p>Python gives you four built-in containers, and each answers a different question:</p>
+      <ul>
+        <li>A <dfn>list</dfn> is an ordered, editable sequence — the run sheet. It answers: <em>what comes first, second, third?</em></li>
+        <li>A <dfn>dict</dfn> (short for dictionary) is a collection of labelled values — the parcel register. It answers: <em>what is filed under this name?</em></li>
+        <li>A <dfn>tuple</dfn> is an ordered sequence that cannot be changed after creation — the sealed manifest. It answers: <em>what was fixed at the moment of writing?</em></li>
+        <li>A <dfn>set</dfn> is an unordered collection with no duplicates — the gate board. It answers: <em>have I seen this before?</em></li>
+      </ul>
+      <p>Flip these cards until each one feels obvious. This vocabulary carries the whole chapter — and most of the course.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">list</span><span class="flip-back">An ordered, changeable sequence. Square brackets: ["a", "b"]. Duplicates welcome. The run sheet.</span></button>
+        <button class="flip" type="button"><span class="flip-front">dict</span><span class="flip-back">Labelled storage: every value filed under a key. Curly braces with colons: {"weight": 2.5}. The parcel register.</span></button>
+        <button class="flip" type="button"><span class="flip-front">tuple</span><span class="flip-back">An ordered sequence sealed at creation — read it, never edit it. Round brackets: (18.5, 73.8). The stamped manifest.</span></button>
+        <button class="flip" type="button"><span class="flip-front">set</span><span class="flip-back">An unordered bag with no duplicates and instant "is it in here?" checks. Curly braces, no colons: {"a", "b"}. The gate board.</span></button>
+        <button class="flip" type="button"><span class="flip-front">key</span><span class="flip-back">The label side of a dict entry — the tracking number you look things up by. Usually a string.</span></button>
+        <button class="flip" type="button"><span class="flip-front">KeyError</span><span class="flip-back">The crash you get for asking a dict for a label it does not have. The single most common traceback in agent logs.</span></button>
+      </div>
+
+      <h2>The list: when order is the point</h2>
+      <p>You create a list with square brackets, and Python keeps the items in exactly the order you wrote them:</p>
+
+      <div class="code-title">the run sheet</div>
+      <pre><code class="language-python">run_sheet = ["Kothrud", "Aundh", "Baner", "Aundh"]</code></pre>
+
+      <p>Notice "Aundh" appears twice — lists do not mind duplicates, because two parcels really are going to the same suburb. Reading works exactly like the string indexing you met in <a href="ch003-strings-and-fstrings.html">chapter 3</a>: <code>run_sheet[0]</code> is the first stop, <code>run_sheet[-1]</code> is the last, and slices like <code>run_sheet[1:3]</code> carve out a portion. Positions start at zero, same as before — one rule, learned once, reused everywhere.</p>
+      <p>Updating comes in two flavours. You can replace an item by position — <code>run_sheet[0] = "Karve Nagar"</code> — or grow the list at the end with <code>run_sheet.append("Hinjewadi")</code>. That <code>.append()</code> is worth a pause, because it is the most consequential method in agent engineering: every time an agent "remembers" a new message, somewhere a line of code appended a message to a list. You saw it in spirit in the depot; you will see it literally in a few minutes.</p>
+      <p>Iterating — visiting each item in turn — looks like this:</p>
+
+      <div class="code-title">visiting every stop</div>
+      <pre><code class="language-python">for stop in run_sheet:
+    print("deliver to", stop)</code></pre>
+
+      <p>Read <code>for stop in run_sheet:</code> as plain English: "for each stop in the run sheet, do the indented bit". Loops get their own full treatment in <a href="ch006-control-flow.html">chapter 6</a>; for now that reading is all you need.</p>
+
+      <h2>The dict: when labels are the point</h2>
+      <p>The run sheet is great until someone phones asking about parcel PN-4471. Scanning an ordered list for one entry is slow and awkward — what you want is the register, where everything is filed under a label. That is a dict. You create one with curly braces, writing each entry as <code>key: value</code>:</p>
+
+      <div class="code-title">one parcel in the register</div>
+      <pre><code class="language-python">parcel = {"tracking": "PN-4471", "weight_kg": 2.5, "cod": True}</code></pre>
+
+      <p>Reading uses square brackets again, but with the label instead of a position: <code>parcel["tracking"]</code> gives you <code>"PN-4471"</code>. Updating is the same shape in reverse — <code>parcel["weight_kg"] = 2.7</code> overwrites the value under an existing label, and <code>parcel["fragile"] = False</code> files a brand-new entry, no ceremony needed. One label, one value: if you write to the same key twice, the second write wins.</p>
+      <p>Iterating over a dict usually means walking its labelled pairs with <code>.items()</code>:</p>
+
+      <div class="code-title">reading the whole register entry</div>
+      <pre><code class="language-python">for key, value in parcel.items():
+    print(key, "=", value)</code></pre>
+
+      <p>There is also <code>.keys()</code> for just the labels and <code>.values()</code> for just the contents, but <code>.items()</code> is the one you will meet most in real code.</p>
+
+      <h2>.get() and the KeyError you will meet in production</h2>
+      <p>Here is the sharp edge. Ask a dict for a label it does not have — <code>parcel["insured"]</code> — and Python does not shrug and return nothing. It crashes, loudly, with a <dfn>KeyError</dfn>: an error meaning "you asked for a key that is not in this dict". If you have ever watched an agent run die with a traceback ending in something like <code>KeyError: 'content'</code>, you have already met it — some code assumed a label would be present, and one day it was not.</p>
+      <p>The polite alternative is <code>.get()</code>. Where square brackets demand, <code>.get()</code> asks: <code>parcel.get("insured")</code> returns the value if the key exists and <code>None</code> (Python's "nothing here" object) if it does not — no crash. Better still, you can supply a fallback: <code>parcel.get("insured", False)</code> means "give me the insured flag, and if there is no such entry, just say False".</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Neither spelling is "correct" — they encode different beliefs. <code>parcel["tracking"]</code> says <em>this key must exist, and if it does not, I want the loud crash so I find out</em>. <code>parcel.get("insured", False)</code> says <em>this key is optional, and here is the sensible default</em>. Reviewers read the choice as a statement of intent. Blindly replacing every bracket lookup with <code>.get()</code> does not fix bugs — it hides them, because the crash that would have pointed at the real problem becomes a silent <code>None</code> that explodes three functions later.</p></div>
+
+      <h2>The tuple: sealed once written</h2>
+      <p>A tuple looks like a list wearing round brackets — <code>depot = (18.5074, 73.8077)</code> — and reading it works identically: <code>depot[0]</code> is the latitude. The difference is a single, deliberate restriction: a tuple is <dfn>immutable</dfn>, meaning it cannot be changed after creation. Try <code>depot[0] = 19.0</code> and Python refuses with an error. No append, no overwrite, no delete. Lists and dicts, by contrast, are <dfn>mutable</dfn> — editable in place.</p>
+      <p>Why would you ever <em>want</em> the handcuffs? For the same reason the depot seals a manifest: some values are facts, not workspaces. Coordinates, an RGB colour, a (host, port) pair, a date-of-birth triple — things that should never be quietly edited by a distant line of code. Using a tuple is how Python programmers write "this is fixed" in a way the language itself enforces. When you see round brackets in code, hear a stamp coming down.</p>
+
+      <h2>The set: already seen it</h2>
+      <p>The gate board has two defining behaviours: chalking up a number that is already there changes nothing, and checking whether a number is on the board takes one glance no matter how full it gets. A set gives you both. You write it with curly braces but no colons — <code>seen = {"MH12AB1234", "MH14XY9876"}</code> — and you get an unordered bag where duplicates simply cannot exist. <code>seen.add("MH12AB1234")</code> when that number is already present does nothing at all, silently. And the membership check <code>"MH14XY9876" in seen</code> answers True or False effectively instantly, even with a million entries — dramatically faster than searching a list item by item.</p>
+      <p>The trade-off: sets have no order and no positions. There is no <code>seen[0]</code>, because "first" means nothing on the gate board. If you catch yourself deduplicating a list by hand, or checking <code>in</code> against a long list inside a loop, a set is almost always the answer someone will suggest in review.</p>
+
+      <p>Enough description — press <strong>Run</strong> and watch all four do their jobs, then break things. The comments suggest what to try.</p>
+
+      <div class="pyrun" data-title="All four containers, one run — run me, then edit me">
+<textarea class="py-src" spellcheck="false">
+# ---- LIST: the run sheet (order matters, duplicates fine) ----
+run_sheet = ["Kothrud", "Aundh", "Baner", "Aundh"]
+run_sheet.append("Hinjewadi")        # grow at the end
+run_sheet[0] = "Karve Nagar"         # replace by position
+print("stops:", run_sheet)
+print("first:", run_sheet[0], "| last:", run_sheet[-1])
+
+# ---- DICT: the parcel register (label -> value) ----
+parcel = {"tracking": "PN-4471", "weight_kg": 2.5, "cod": True}
+parcel["weight_kg"] = 2.7            # update an existing label
+parcel["fragile"] = False            # file a brand-new label
+for key, value in parcel.items():
+    print("register:", key, "=", value)
+
+# Reading a label that is not there:
+print("insured?", parcel.get("insured", "unknown"))
+# parcel["insured"] would CRASH with a KeyError -- try it!
+
+# ---- TUPLE: the sealed manifest (fixed once written) ----
+depot = (18.5074, 73.8077)           # latitude, longitude
+print("depot latitude:", depot[0])
+# depot[0] = 19.0 would crash: tuples cannot be edited -- try!
+
+# ---- SET: the gate board (no duplicates, instant lookup) ----
+seen = {"MH12AB1234", "MH14XY9876"}
+seen.add("MH12AB1234")               # already there: ignored
+print("vehicles seen:", len(seen))
+print("seen MH14XY9876?", "MH14XY9876" in seen)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Uncomment the two crash lines one at a time and read the errors slowly. <code>KeyError: 'insured'</code> and <code>TypeError: 'tuple' object does not support item assignment</code> are two of the most common tracebacks in real systems — meeting them here, on purpose, in a sandbox, is how you stay calm when they appear in a production log at 11 p.m.</p></div>
+
+      <h2>Choosing the right container</h2>
+      <p>Nobody memorises this as theory; you choose by the question your data needs to answer. This table is the whole decision:</p>
+
+      <div class="tbl"><table>
+        <tr><th>You need to…</th><th>Reach for</th><th>Because</th></tr>
+        <tr><td>keep things in order, add and remove freely</td><td>list</td><td>ordered, editable, duplicates allowed</td></tr>
+        <tr><td>look things up by name or label</td><td>dict</td><td>direct key-to-value access, no scanning</td></tr>
+        <tr><td>bundle values that must never change</td><td>tuple</td><td>immutability is enforced by the language</td></tr>
+        <tr><td>deduplicate, or ask "have I seen this?" fast</td><td>set</td><td>no duplicates, near-instant membership tests</td></tr>
+      </table></div>
+
+      <p>Two honest observations from the field. First, lists and dicts do perhaps ninety-five percent of the work in agent code; tuples and sets are the specialist tools you are glad to recognise when they appear. Second, the container choice is rarely wrong in a way that crashes — it is wrong in a way that makes code slow or confusing, which is why reviewers care about it more than the interpreter does.</p>
+
+      <h2>Nesting: containers inside containers</h2>
+      <p>Here is the move that unlocks real-world code: containers hold objects, and containers <em>are</em> objects — so containers can hold containers. This is called <dfn>nesting</dfn>: putting a list inside a dict, a dict inside a dict, a dict inside a list, as deep as the data demands. The parcel register does not store one fact per tracking number; it stores a whole labelled bundle. In Python, that is a <strong>dict of dicts</strong> — and it is the default shape of every configuration file, every agent registry, every API response you will ever read.</p>
+      <p>Click through the annotated lines below. The last two lines — the chained lookups — are the skill that makes unfamiliar code readable.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">agents_config.py — a shape you will meet in every harness</div>
+        <div class="wl-line"><code>config = {</code>
+          <div class="wl-note">The outer container is a dict. Each key will be an agent's name; each value will be that agent's entire settings bundle. One label, one bundle.</div></div>
+        <div class="wl-line"><code>    "researcher": {</code>
+          <div class="wl-note">The value filed under "researcher" is itself another dict. A dict inside a dict — nesting in action. The indentation is just for human eyes; the braces do the real work.</div></div>
+        <div class="wl-line"><code>        "model": "big-careful-model",</code></div>
+        <div class="wl-line"><code>        "temperature": 0.2,</code>
+          <div class="wl-note">Inside the inner dict, settings are plain key-value pairs: a string filed under "model", a number under "temperature". Simple values at the deepest level.</div></div>
+        <div class="wl-line"><code>        "tools": ["web_search", "read_file"],</code>
+          <div class="wl-note">And now a LIST inside the dict inside the dict — three layers. Tools are a sequence of names, so a list is the honest choice. Nesting mixes container types freely.</div></div>
+        <div class="wl-line"><code>    },</code></div>
+        <div class="wl-line"><code>    "summariser": {</code>
+          <div class="wl-note">A second agent, same inner shape. When every value under the outer keys has the same structure, you are looking at a registry — a pattern worth recognising on sight.</div></div>
+        <div class="wl-line"><code>        "model": "small-fast-model",</code></div>
+        <div class="wl-line"><code>        "temperature": 0.7,</code></div>
+        <div class="wl-line"><code>        "tools": [],</code>
+          <div class="wl-note">An empty list is still a list. The summariser has no tools today — but the shape stays consistent, so code that loops over agents never needs a special case.</div></div>
+        <div class="wl-line"><code>    },</code></div>
+        <div class="wl-line"><code>}</code></div>
+        <div class="wl-line"><code>print(config["researcher"]["tools"][0])</code>
+          <div class="wl-note">Chained lookups read left to right, opening one layer at a time: open the outer dict at "researcher", open that inner dict at "tools", take item 0 of the list. Prints web_search. Every deep lookup you will ever read is this pattern, longer.</div></div>
+        <div class="wl-line"><code>print(config.get("critic", {}))</code>
+          <div class="wl-note">.get() with a default, at the outer layer: there is no "critic" agent, so this returns an empty dict instead of crashing with a KeyError. Defensive reads like this are everywhere in harness code.</div></div>
+      </div>
+
+      <p>If that <code>config</code> looked oddly familiar, good instincts — it is exactly what the YAML and JSON files you squint at every week become the moment Python loads them. That is the whole of the <a href="ch005-yaml-and-json.html">next chapter</a>, and after today it will feel like a costume reveal rather than new material.</p>
+
+      <h2>Why every agent transcript is a list of dicts</h2>
+      <p>Now the payoff — the reason this chapter sits this early in the course. Every chat model API on Earth accepts the conversation as the same data shape: a <strong>list of dicts</strong>. Why that pairing, and not something else? Because a conversation needs both of the superpowers you just learned. It needs <em>order</em> — who spoke first matters enormously, and the model reads the transcript top to bottom — so the outer container is a list. And each message needs <em>labelled parts</em> — at minimum a <code>"role"</code> saying who is speaking (system, user, or assistant) and a <code>"content"</code> carrying the words — so each item is a dict. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="One message">
+          <h3>1. The transcript starts as a list holding one dict</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">messages[0]<small>role: system · "You are a billing assistant."</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The standing instructions go in first. The dict's two labels do two jobs: "role" says who is speaking, "content" carries the words.</p>
+        </div>
+        <div class="step" data-title="User speaks">
+          <h3>2. The user's question is appended</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">messages[0]<small>role: system</small></div>
+              <div class="d-box hot">messages[1]<small>role: user · "What is 20% GST on 1500?"</small></div>
+            </div>
+          </div>
+          <p class="step-cap">One .append() call. The list guarantees this dict stays after the system message forever — order is exactly what lists are for.</p>
+        </div>
+        <div class="step" data-title="The whole list is sent">
+          <h3>3. The entire list goes to the model</h3>
+          <div class="diagram">
+            <div class="d-box hot">messages<small>the whole list, every turn</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">LLM<small>reads top to bottom</small></div>
+          </div>
+          <p class="step-cap">The model keeps no memory between calls — whatever it should know must be in this list. That single fact drives most of agent engineering, and it starts right here.</p>
+        </div>
+        <div class="step" data-title="Reply appended">
+          <h3>4. The reply becomes a dict too</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box dim">messages[0]<small>role: system</small></div>
+              <div class="d-box dim">messages[1]<small>role: user</small></div>
+              <div class="d-box good">messages[2]<small>role: assistant · "300 rupees."</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The model's answer is appended with role "assistant". The transcript is now three dicts long, and the next user question will make it four.</p>
+        </div>
+        <div class="step" data-title="Repeat">
+          <h3>5. The list grows, the shape never changes</h3>
+          <div class="diagram">
+            <div class="d-box good">list<small>keeps conversation order</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">of dicts<small>labels each message's parts</small></div>
+          </div>
+          <p class="step-cap">Order is why the outside is a list; labelled parts is why each item is a dict. Every framework, every provider, every transcript you will ever inspect: this exact shape.</p>
+        </div>
+      </div>
+
+      <p>And here it is running. The page cannot call a paid model, so the "model" below is a tiny scripted stand-in — a <code>fake_llm()</code> function that answers from a script. Everything around it, the list, the dicts, the appends, is byte-for-byte what production agent code does. In <a href="ch045-react-loop-by-hand.html">chapter 45</a> you will wrap a full reasoning loop around this very list.</p>
+
+      <div class="pyrun" data-title="A real message history — the list of dicts, live">
+<textarea class="py-src" spellcheck="false">
+# The transcript every chat model API expects:
+# a LIST (conversation order) of DICTS (labelled parts).
+
+messages = [
+    {"role": "system", "content": "You are a polite billing assistant."},
+]
+
+def fake_llm(history):
+    # A real agent would send the WHOLE history to a model API
+    # here. This scripted stand-in lets the page run offline.
+    latest = history[-1]["content"]
+    count = 0
+    for m in history:
+        if m["role"] == "user":
+            count = count + 1
+    return f"(reply to question {count}) Noted: {latest}"
+
+for question in ["What is 20% GST on 1500 rupees?",
+                 "And who do I email for a refund?"]:
+    messages.append({"role": "user", "content": question})
+    answer = fake_llm(messages)
+    messages.append({"role": "assistant", "content": answer})
+
+print(f"transcript now holds {len(messages)} messages\n")
+for m in messages:
+    print(f"{m['role']:&gt;9} | {m['content']}")
+
+# Try: add a third question to the list in the for-line above.
+# Try: print(messages[0]["content"]) -- list index first, then
+#      dict key. Position, then label. Nesting, read left to right.
+# Try: change a "role" key to "rolle" and enjoy your first KeyError.
+</textarea>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Look at the shape of one message access: <code>messages[0]["content"]</code>. A number in the first brackets — so the outer container is a list. A string in the second — so the inner one is a dict. You can now read the container structure of code you have never seen, purely from what goes inside the square brackets. That is fluency starting.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any agent codebase and the four containers greet you by name. The call into every model API carries <code>messages=[{"role": ..., "content": ...}]</code> — the list of dicts you just built. Tool registries are dicts mapping a tool's name to its function, so the loop can look up what the model asked for. Config loaded from YAML or JSON arrives as nested dicts and lists (next chapter's whole story). In merge requests you will see reviewers ask "should this be <code>.get()</code> with a default, or do we want the KeyError?" — now you can follow, and even hold, that argument. And when a production log ends in <code>KeyError: 'content'</code>, you will know precisely what happened: some code reached into a dict for a label that was not there.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. You must make sure no tracking number is ever processed twice today, and the "already processed?" check has to stay fast at any volume. Which container holds the processed numbers?</p>
+          <div class="q-opts">
+            <button data-opt="a">A list, appending each number as it is processed</button>
+            <button data-opt="b">A tuple, so nobody can tamper with it</button>
+            <button data-opt="c">A set, adding each number and checking membership with <code>in</code></button>
+          </div>
+          <p class="q-explain">The job is deduplication plus fast membership — the set's exact specialty. A list would allow duplicates and get slower to search as it grows; a tuple cannot even be added to.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. <code>parcel["insured"]</code> runs, but the dict has no "insured" key. What happens?</p>
+          <div class="q-opts">
+            <button data-opt="a">Python returns None and carries on</button>
+            <button data-opt="b">Python crashes with a KeyError</button>
+            <button data-opt="c">Python adds the key with an empty value</button>
+          </div>
+          <p class="q-explain">Square-bracket lookup demands the key exist and crashes loudly when it does not. The None-and-carry-on behaviour is what <code>parcel.get("insured")</code> gives you — and <code>.get("insured", False)</code> lets you choose the fallback.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why is a list the right <em>outer</em> container for an agent's message history?</p>
+          <div class="q-opts">
+            <button data-opt="a">A list preserves conversation order, and the model reads the transcript top to bottom</button>
+            <button data-opt="b">Lists use less memory than the other containers</button>
+            <button data-opt="c">Lists are the only container that can hold strings</button>
+          </div>
+          <p class="q-explain">Who said what, and in what sequence, is the conversation — so the container must preserve order and allow appending, which is the list's whole job. Each item is then a dict because a message has labelled parts: a role and its content.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. A teammate stores the depot's coordinates as <code>(18.5074, 73.8077)</code> — a tuple, not a list. What are they telling you?</p>
+          <div class="q-opts">
+            <button data-opt="a">Coordinates need less precision than lists provide</button>
+            <button data-opt="b">Nothing — tuples and lists are interchangeable style choices</button>
+            <button data-opt="c">This pair of values is fixed, and the language itself will block any code that tries to edit it</button>
+          </div>
+          <p class="q-explain">Immutability is a statement of intent that Python enforces: any attempt to assign into the tuple raises an error. Choosing a tuple over a list is how code says "this is a fact, not a workspace".</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. What does <code>config["researcher"]["tools"][0]</code> do, in reading order?</p>
+          <div class="q-opts">
+            <button data-opt="a">Takes item 0 of config first, then searches for "researcher" inside it</button>
+            <button data-opt="b">Opens the outer dict at "researcher", opens that inner dict at "tools", then takes item 0 of the list</button>
+            <button data-opt="c">Runs all three lookups at once and merges the results</button>
+          </div>
+          <p class="q-explain">Chained lookups peel one layer at a time, left to right — dict key, dict key, list index. The bracket contents even tell you each layer's type: strings mean dicts, numbers mean lists.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Four containers, four questions: a list answers "in what order?", a dict answers "what is filed under this label?", a tuple answers "what was fixed at writing time?", and a set answers "have I seen this before?"</li>
+          <li>Lists and dicts are editable in place (mutable) and do most of the work in agent code; tuples are sealed (immutable) and sets refuse duplicates while making membership checks near-instant.</li>
+          <li><code>d[key]</code> means "this key must exist — crash loudly if not"; <code>d.get(key, default)</code> means "this key is optional — here is the fallback". The choice is a statement of intent, and a KeyError traceback means some code chose the first and lost the bet.</li>
+          <li>Containers nest freely — dicts of dicts of lists — and chained lookups like <code>config["researcher"]["tools"][0]</code> read left to right, one layer per bracket.</li>
+          <li>Agent message history is a list of dicts because a conversation needs both order (the list) and labelled parts per message — role and content (the dict). Every provider and framework uses this shape.</li>
+          <li>The bracket contents reveal the structure: a string inside <code>[...]</code> means you are looking at a dict, a number means a list. You can now read the skeleton of code you have never seen.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

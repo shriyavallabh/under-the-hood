@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What a harness actually is — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch081">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act X · Harness Anatomy</div>
+        <h1>What a harness actually is</h1>
+        <p class="ch-tagline">Model, framework, harness, platform — four words that get swapped for each other in every meeting you attend. One nested diagram untangles them for good, and after this chapter you will never mix them up again.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 82 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>At a family dinner, your uncle announces he has bought "a car". Everyone congratulates him. Then you visit his garage and find a gleaming V8 engine, on a wooden pallet, going nowhere. It is a magnificent brain of a machine — but an engine moves nothing by itself.</p>
+        <p>Over the next year the garage fills up. First a drivetrain kit: gearbox, axles, a frame that connects engine to wheels. Now it moves — but it is a go-kart, and nobody sane commutes on a go-kart. So next come the cabin, seatbelts, mirrors, a fuel gauge, door locks, headlights, a horn: everything that makes raw motion <em>safe and usable by a person</em>. Finally your uncle reveals the actual plan: an airport taxi business. Twenty cars, a dispatch desk, night-shift supervisors, a maintenance rota, a booking system.</p>
+        <p>Four purchases. Engine, drivetrain, car, fleet. Nobody at that dinner table would confuse them — yet in AI conversations, people use one word for all four. The engine is the <strong>model</strong>. The drivetrain kit is the <strong>framework</strong>. The whole car is the <strong>harness</strong>. The taxi company is the <strong>platform</strong>.</p>
+      </section>
+
+      <h2>Four words, one confused conversation</h2>
+      <p>Quick recap before the new material, because this whole Act stands on it. In <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> you built an agent in fifty lines: a stateless model that only emits text, a dict of tools, and a loop that ferries tool results back into the transcript. In <a href="ch054-create-agent.html">the LangChain chapters</a> and <a href="ch058-stategraph-anatomy.html">the LangGraph chapters</a> you saw frameworks package that same loop as importable code. And in <a href="ch072-deep-agents-vs-claude-code.html">deep agents vs Claude Code</a> you glimpsed something bigger wrapped around the loop — planning, files, permissions, compaction. This Act names that bigger thing and dissects it organ by organ. Its theme is <em>the loop around the loop</em>.</p>
+      <p>Here is the confusion this chapter kills. You have heard sentences like these, possibly in the same meeting: "We're switching from LangChain to Claude." "Is Claude Code a model?" "Our platform uses GPT." Each one grinds different layers together, and the grinding has real costs — teams benchmark models when their actual problem is a missing permission system, or rip out a perfectly good framework because the <em>harness</em> around it was badly configured.</p>
+      <p>The fix is one picture: four layers, each wrapped around the previous one like an onion. Step through it.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The model">
+          <h3>1. Innermost: the model — a brain in a jar</h3>
+          <div class="diagram">
+            <div class="d-box hot">Model<small>text in, text out · stateless · no hands</small></div>
+          </div>
+          <p class="step-cap">Weights behind an API. It completes text and does absolutely nothing else: no memory between calls, no tools, no permissions, no opinion about where its output goes. This is the engine on the pallet — from <a href="ch024-what-is-a-model.html">chapter 24</a>, remember, it is literally a file of numbers.</p>
+        </div>
+        <div class="step" data-title="The framework">
+          <h3>2. Wrap it in a framework — the loop you import</h3>
+          <div class="diagram">
+            <div class="d-box hot">Framework<small>loop + graph code you import</small>
+              <div class="d-box dim">Model</div>
+            </div>
+          </div>
+          <p class="step-cap">Library code that turns one-shot completions into an agent: the ReAct loop, tool dispatch, graph wiring, checkpointing. LangChain's <code>create_agent</code>, LangGraph's <code>StateGraph</code>, deepagents' <code>create_deep_agent</code>. Crucially, a framework is inert — it runs only when <em>your</em> program calls it. The drivetrain kit.</p>
+        </div>
+        <div class="step" data-title="The harness">
+          <h3>3. Wrap that in a harness — the running system</h3>
+          <div class="diagram">
+            <div class="d-box hot">Harness<small>context mgmt · permissions · tools · memory · channels</small>
+              <div class="d-box dim">Framework<small>the loop</small>
+                <div class="d-box dim">Model</div>
+              </div>
+            </div>
+          </div>
+          <p class="step-cap">Now it is a product that runs: something assembles the context each turn, decides which tools exist and which are <em>allowed</em>, persists memory across sessions, and gives humans a doorway in — a terminal, a chat window, an editor. This is the whole car, and it is what you actually operate every day.</p>
+        </div>
+        <div class="step" data-title="The platform">
+          <h3>4. Wrap everything in a platform — the fleet</h3>
+          <div class="diagram">
+            <div class="d-box hot">Platform<small>schedulers · watchdogs · multi-user · observability</small>
+              <div class="d-box dim">Harness<small>one running agent system</small>
+                <div class="d-box dim">Framework
+                  <div class="d-box dim">Model</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="step-cap">One car is transport; twenty cars with dispatch is a business. The platform layer runs <em>many</em> harnessed agents: cron-style schedulers, watchdogs that restart crashed runs, per-user authentication, billing, dashboards. The taxi company.</p>
+        </div>
+        <div class="step" data-title="The whole onion">
+          <h3>5. The whole onion, labelled</h3>
+          <div class="diagram">
+            <div class="d-box">Platform<small>fleet operations</small>
+              <div class="d-box">Harness<small>the running system around the loop</small>
+                <div class="d-box">Framework<small>the loop code</small>
+                  <div class="d-box good">Model<small>the brain</small></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="step-cap">Four layers, four different purchase decisions, four different failure modes. When something goes wrong in production, your first diagnostic question should be: <em>which ring is misbehaving?</em> A wrong answer is usually the model; a missing tool result is the framework loop; a permission prompt or amnesia is the harness; a run that never started is the platform.</p>
+        </div>
+      </div>
+
+      <h2>Layer 1 — the model: the brain</h2>
+      <p>Everything you learned in Acts III and IV applies here and only here. A model is stateless text-in, text-out — you met the raw API in <a href="ch033-first-api-call.html">your first API call</a>. It cannot execute a tool, remember yesterday, or refuse to be swapped out. GPT-5, Claude Opus, Gemini, Llama: these names belong to this ring and no other. When someone asks "which model should we use?", they are asking about capability, cost per token, latency, and context window. Nothing else.</p>
+
+      <h2>Layer 2 — the framework: the loop you import</h2>
+      <p>A <dfn>framework</dfn> (or library — the words blur) is pre-written loop and graph code that you import into your own program: the agent loop with native <a href="ch035-tool-calling.html">tool calling</a>, retries, streaming, state graphs, checkpointing. You have already used three: LangChain's <code>create_agent</code>, LangGraph's <code>StateGraph</code> with its nodes and edges, and deepagents' <code>create_deep_agent</code> from <a href="ch067-create-deep-agent-anatomy.html">chapter 67</a>. A framework ships no user interface, holds no API keys, runs on no schedule. It is scaffolding for <em>your</em> code.</p>
+
+      <h2>Layer 3 — the harness: the body around the loop</h2>
+      <p>Here is the word this Act is named for. A <dfn>harness</dfn> is the complete running system wrapped around the agent loop — the software that turns "a loop I could run" into "a system I do run, all day, safely". Concretely, a harness owns five jobs:</p>
+      <ul>
+        <li><strong>Context management</strong> — deciding what actually goes into the model's window each turn: system prompt, instructions files, trimmed history, compaction when the transcript bloats. The next chapter, <a href="ch082-context-engineering.html">context engineering</a>, is entirely about this job.</li>
+        <li><strong>Tool inventory</strong> — which tools exist at all: file access, shell, search, <a href="ch074-why-mcp-exists.html">MCP servers</a> plugged in from outside.</li>
+        <li><strong>Permissions</strong> — which of those tools may run <em>right now</em>, and which need a human to say yes first. The approval prompt you click every day lives in this ring.</li>
+        <li><strong>Memory</strong> — what survives between sessions: instruction files, notes the agent writes to itself, project state. (Recall <a href="ch047-memory-and-context.html">memory vs context</a>: context is the working window, memory is what persists outside it.)</li>
+        <li><strong>Channels</strong> — the doorways humans use to reach the agent: a terminal, a chat app, an editor pane, a voice interface. Same loop, different front doors.</li>
+      </ul>
+      <p>Claude Code is a harness. So is the ChatGPT app — around the same GPT models you can call raw over the API, it adds conversation history, memory, tools, and a chat channel. So is an AI-native code editor's agent mode. None of these are models, and none are frameworks: they are cars, not engines or drivetrains.</p>
+
+      <h2>Layer 4 — the platform: the fleet</h2>
+      <p>A <dfn>platform</dfn> is what you need the day one agent becomes twenty: schedulers that launch runs at 6 a.m. without a human, watchdogs that notice a hung agent and restart it, authentication so a hundred users each get their own sandboxed harness, quotas and billing, observability dashboards, and — increasingly — <a href="ch080-a2a-protocol.html">A2A endpoints</a> so the fleet's agents can talk to each other. The hosted services that deploy LangGraph agents for you sit here, as does any enterprise setup where agents run in Kubernetes with cron jobs and log pipelines. Platform problems are fleet problems: "the nightly run didn't fire", "who approved this agent's spend", "restart the stuck ones".</p>
+
+      <p>Flip these until each one feels obvious:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">model</span><span class="flip-back">Weights behind an API. Text in, text out. No memory, no tools, no hands. The brain in the jar.</span></button>
+        <button class="flip" type="button"><span class="flip-front">framework</span><span class="flip-back">Loop and graph code you import — LangChain, LangGraph, deepagents. Inert until your program calls it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">harness</span><span class="flip-back">The running system around the loop: context management, tool inventory, permissions, memory, channels. Claude Code is one.</span></button>
+        <button class="flip" type="button"><span class="flip-front">platform</span><span class="flip-back">Fleet machinery: schedulers, watchdogs, multi-user auth, quotas, dashboards. Runs many harnessed agents at once.</span></button>
+        <button class="flip" type="button"><span class="flip-front">channel</span><span class="flip-back">A doorway humans use to reach a harness — terminal, chat app, editor pane, phone. One harness can have several.</span></button>
+        <button class="flip" type="button"><span class="flip-front">watchdog</span><span class="flip-back">A platform process that watches running agents and restarts or alerts when one crashes, hangs, or overspends.</span></button>
+      </div>
+
+      <h2>Put the products you know on the map</h2>
+      <p>The fastest way to make the layers stick is to sort familiar names into them. Illustrative, not exhaustive:</p>
+      <div class="tbl"><table>
+        <tr><th>Things you hear about</th><th>Layer</th><th>The tell</th></tr>
+        <tr><td>GPT-5, Claude Opus, Gemini, Llama</td><td>Model</td><td>It is priced per token and does nothing without a caller.</td></tr>
+        <tr><td>LangChain, LangGraph, deepagents, Microsoft Agent Framework</td><td>Framework</td><td>You <code>pip install</code> and <code>import</code> it; it ships no running product.</td></tr>
+        <tr><td>Claude Code, the ChatGPT app, an editor's agent mode</td><td>Harness</td><td>You open it and work in it; it manages context, tools, permissions, memory for you.</td></tr>
+        <tr><td>Hosted agent-deployment services, a Kubernetes fleet with schedulers and watchdogs</td><td>Platform</td><td>It runs many agents for many users on a schedule, and someone is on call for it.</td></tr>
+      </table></div>
+      <p>Two wrinkles keep this interesting. First, one product can span rings: the ChatGPT app is a harness, but the company behind it also sells the raw model underneath, and its team-management features reach into platform territory. Second, a harness does not have to be built <em>on</em> a public framework — Claude Code implements its own loop rather than importing LangGraph. The rings describe <em>roles</em>, not vendor boundaries.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Marketing loves the word "platform" — every vendor with a landing page claims to be one. Ignore the label and run the test: does it <em>complete text</em> (model), do you <em>import it</em> (framework), do you <em>work inside it</em> (harness), or does it <em>run fleets of agents for many users</em> (platform)? What a thing does places it on the diagram; what its pricing page says does not.</p></div>
+
+      <h2>Run all four layers in sixty lines</h2>
+      <p>Concepts stick when you can poke them. Below, each layer is a few lines of Python: a scripted stand-in model, a bare framework loop (a compressed version of your <a href="ch045-react-loop-by-hand.html">chapter 45 loop</a>), and a tiny harness that wraps the loop with a permission gate, a context budget, and memory. Run it, then read the three outputs against the onion diagram.</p>
+
+      <div class="pyrun" data-title="model, framework, harness — in one file">
+<textarea class="py-src" spellcheck="false">
+# ---- LAYER 1: the model (a scripted stand-in for a real LLM) ----
+def fake_llm(messages):
+    last = messages[-1]
+    if "DENIED" in last:
+        return "FINAL: I could not read the invoice - the tool was blocked."
+    if "OBSERVATION" in last:
+        return "FINAL: The March invoice total is 47,200 rupees."
+    return "ACTION: read_invoice(march)"
+
+# ---- LAYER 2: the framework - loop code you import ----
+def agent_loop(model, tools, messages, max_turns=4):
+    for _ in range(max_turns):
+        reply = model(messages)
+        messages.append(reply)
+        if reply.startswith("FINAL:"):
+            return reply[len("FINAL:"):].strip()
+        name, arg = reply.split("ACTION: ")[1].rstrip(")").split("(")
+        messages.append("OBSERVATION: " + tools[name](arg))
+    return "gave up: hit max turns"
+
+# ---- LAYER 3: the harness - the running system AROUND the loop ----
+class Harness:
+    def __init__(self, model, tools, allowed, max_context=6):
+        self.model = model
+        self.tools = tools
+        self.allowed = allowed          # permission policy
+        self.max_context = max_context  # context budget
+        self.memory = []                # survives between tasks
+
+    def gate(self, name):
+        def guarded(arg):
+            if name not in self.allowed:
+                return "DENIED: " + name + " is not permitted"
+            print("  [harness] approved tool:", name)
+            return self.tools[name](arg)
+        return guarded
+
+    def run(self, task):
+        context = self.memory[-self.max_context:] + ["TASK: " + task]
+        guarded = {n: self.gate(n) for n in self.tools}
+        answer = agent_loop(self.model, guarded, context)
+        self.memory.extend(context)     # remember for next time
+        return answer
+
+# LAYER 4 (the platform) is not in this file: it would run MANY
+# Harness objects on a schedule, restart crashed ones, and give
+# each user their own. Fleets need more than one page of code.
+
+tools = {"read_invoice": lambda month: "March total is 47,200 rupees"}
+
+print("1) Bare framework loop - no permissions, no memory:")
+print("   ", agent_loop(fake_llm, tools, ["TASK: total the March invoice"]))
+
+print()
+print("2) The same loop inside a harness (tool allowed):")
+h = Harness(fake_llm, tools, allowed={"read_invoice"})
+print("   ", h.run("total the March invoice"))
+print("    memory now holds", len(h.memory), "messages for the next task")
+
+print()
+print("3) Same harness, permission revoked:")
+locked = Harness(fake_llm, tools, allowed=set())
+print("   ", locked.run("total the March invoice"))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it the useful ways. Set <code>max_context=1</code> and run <code>h.run(...)</code> twice — watch the context budget silently drop older memory, which is exactly what harness compaction trades away. Add a second tool the model never asked for and confirm the gate never fires. Then delete the <code>gate</code> wrapper and notice run 3 quietly succeeds — that is what "running without a harness" means in production, and why it should make you nervous.</p></div>
+
+      <h2>The wrapping, line by line</h2>
+      <p>The <code>Harness</code> class is small, but every line maps to something you click or configure daily. Read it like a reviewer:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">harness.py — what each line is in real life</div>
+        <div class="wl-line"><code>class Harness:</code>
+          <div class="wl-note">The loop is not the product; this wrapper is. Everything Claude Code does that a bare LangGraph script does not lives in classes shaped like this one.</div></div>
+        <div class="wl-line"><code>    self.allowed = allowed</code>
+          <div class="wl-note">The permission policy — the harness's most important organ. In Claude Code this is your settings allowlist plus the approval prompt; in an enterprise harness it is a policy file with an audit trail.</div></div>
+        <div class="wl-line"><code>    self.max_context = max_context</code>
+          <div class="wl-note">The context budget. Real harnesses do far more than slice a list — trimming, summarising, compacting — but the decision is the same: the window is finite, something must choose what fills it. That choosing is <a href="ch082-context-engineering.html">context engineering</a>, next chapter.</div></div>
+        <div class="wl-line"><code>    self.memory = []</code>
+          <div class="wl-note">State that outlives one task. In real harnesses: instruction files, memory directories, project state. The model still remembers nothing — the <em>harness</em> remembers on its behalf.</div></div>
+        <div class="wl-line"><code>    def gate(self, name):</code>
+          <div class="wl-note">Every tool gets wrapped in a permission check before the loop ever sees it. The model cannot tell a gated tool from a bare one — the enforcement is invisible from inside the jar.</div></div>
+        <div class="wl-line"><code>        if name not in self.allowed:</code>
+          <div class="wl-note">The actual gate. One line here is the difference between "the agent read the invoice" and "the agent ran a destructive command at 2 a.m." Harness bugs at this line are security incidents, not glitches.</div></div>
+        <div class="wl-line"><code>        context = self.memory[-self.max_context:] + ["TASK: " + task]</code>
+          <div class="wl-note">Context assembly: memory plus fresh task, trimmed to budget. Note the order of authority — the harness decides what the model gets to know before the model gets a say in anything.</div></div>
+        <div class="wl-line"><code>        answer = agent_loop(self.model, guarded, context)</code>
+          <div class="wl-note">The entire framework layer is this one line. That proportion is honest: in production harnesses, the loop is a small fraction of the code, and the wrapping is the rest.</div></div>
+        <div class="wl-line"><code>        self.memory.extend(context)</code>
+          <div class="wl-note">Persistence after the run — what makes tomorrow's session smarter than a goldfish. Frameworks offer this too (recall <a href="ch061-checkpointing.html">checkpointing</a>); the harness decides the policy of what is kept.</div></div>
+      </div>
+
+      <h2>"Which harness?" is a different question from "which model?"</h2>
+      <p>Now the payoff, and the sentence to carry into your next architecture meeting. When teams evaluate "AI", they usually reach for model benchmarks — but most of what they will live with day to day is decided by the harness. The two questions have almost no overlap:</p>
+      <div class="tbl"><table>
+        <tr><th>Questions that pick a model</th><th>Questions that pick a harness</th></tr>
+        <tr><td>How capable is it on our kind of task?</td><td>Which tools can the agent reach, and how do new ones get added?</td></tr>
+        <tr><td>What does it cost per million tokens?</td><td>Who approves a dangerous action, and is there an audit log?</td></tr>
+        <tr><td>How fast is the first token?</td><td>How is the context window managed when the transcript bloats?</td></tr>
+        <tr><td>How large is the context window?</td><td>Where does memory live, and what survives a restart?</td></tr>
+        <tr><td>Open weights or API-only?</td><td>Which channels can our people use — terminal, chat, editor?</td></tr>
+      </table></div>
+      <p>Two consequences follow. First, <strong>the same model behaves like two different employees in two different harnesses</strong> — one harness gives it your codebase, a scratchpad, and a shell; the other gives it a chat box and nothing else. When a colleague says "Claude was useless for this", the honest question is: in <em>which harness</em>, with which tools and which context? Second, <strong>harnesses generally let you swap the model inside</strong> — a config line, because the model is a component of the harness and never the other way round. Committing to a harness is the sticky decision: your permissions, memory, channels, and habits all grow into it. Committing to a model is, increasingly, a dropdown.</p>
+      <p>This is also why the chapters ahead matter more than another benchmark chart. The model race is loud, but <a href="ch071-the-token-bill.html">your token bill</a>, your safety, and your agents' apparent intelligence are mostly determined in the quiet ring around the loop. Act X walks that ring organ by organ: context engineering, memory, skills, durability, guardrails.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will use this diagram weekly to decode sentences. "We're standardising on one model" — an inner-ring decision that leaves every harness question open. "The platform team owns the schedulers" — outermost ring. A vendor pitching an "agent platform" that turns out to be an importable library — second ring wearing a fourth-ring costume; now you can say so. In repositories, harness code is everything <em>around</em> the loop: permission configs, context-compaction modules, memory directories, channel adapters — often outweighing the agent logic ten to one. And in job postings, "harness team" and "agent infrastructure" roles at AI labs are precisely layer-3 engineering: not making the brain smarter, but building it a better body.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A colleague says: "We're replacing LangChain with Claude." What is muddled about that sentence?</p>
+          <div class="q-opts">
+            <button data-opt="a">Nothing — both are agent products, so they are interchangeable</button>
+            <button data-opt="b">It compares a framework with a model — two different rings that usually coexist rather than compete</button>
+            <button data-opt="c">It compares two platforms with different pricing</button>
+          </div>
+          <p class="q-explain">LangChain is loop code you import (ring 2); Claude is a model (ring 1). A LangChain agent can call Claude — the sensible follow-up question is which layer actually has the problem.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Which layer decides whether the agent may actually run a destructive shell command right now?</p>
+          <div class="q-opts">
+            <button data-opt="a">The model — it refuses dangerous requests</button>
+            <button data-opt="b">The API provider's servers</button>
+            <button data-opt="c">The harness — its permission gate wraps every tool before the loop can execute it</button>
+          </div>
+          <p class="q-explain">A model can only emit text, and refusal is not enforcement. The gate in the harness is the enforcement point — like the <code>if name not in self.allowed</code> line you just walked through, but production grade.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. You run the identical model in two harnesses and get wildly different quality. Why is this the expected outcome?</p>
+          <div class="q-opts">
+            <button data-opt="a">The harness controls context, tools, memory, and guardrails — most of what looks like "intelligence" in practice</button>
+            <button data-opt="b">Models drift randomly between products</button>
+            <button data-opt="c">One harness must have received a better copy of the weights</button>
+          </div>
+          <p class="q-explain">The brain was identical; the bodies were not. One harness fed it your codebase and gave it hands; the other gave it a chat box. Same weights, different employee.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. Nightly scheduled runs, a watchdog restarting crashed agents, and per-user authentication belong to which layer?</p>
+          <div class="q-opts">
+            <button data-opt="a">The framework</button>
+            <button data-opt="b">The platform — fleet machinery that runs many harnessed agents for many users</button>
+            <button data-opt="c">The model</button>
+          </div>
+          <p class="q-explain">Schedulers, watchdogs, and multi-user auth are what you need when one agent becomes twenty — the taxi company, not the car.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. What exactly does the framework layer ship?</p>
+          <div class="q-opts">
+            <button data-opt="a">A running product with a user interface and an approval flow</button>
+            <button data-opt="b">The trained weights themselves</button>
+            <button data-opt="c">Importable loop and graph code that does nothing until your own program runs it</button>
+          </div>
+          <p class="q-explain">A framework is inert scaffolding — <code>create_agent</code>, <code>StateGraph</code>, <code>create_deep_agent</code>. No UI, no schedule, no keys. The moment something is running with context management and permissions around it, you are looking at a harness.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Four nested layers: the <strong>model</strong> (weights: text in, text out), the <strong>framework</strong> (loop and graph code you import), the <strong>harness</strong> (the running system around the loop: context, permissions, tools, memory, channels), and the <strong>platform</strong> (fleet machinery: schedulers, watchdogs, multi-user).</li>
+          <li>Claude Code and the ChatGPT app are harnesses; LangChain, LangGraph, and deepagents are frameworks; GPT-5 and Claude Opus are models; the fleet services that schedule and supervise many agents are platforms.</li>
+          <li>The rings describe roles, not vendors — one company can sell several rings, and a harness may implement its own loop instead of importing a framework.</li>
+          <li>Permissions, context assembly, and memory are harness jobs. When an agent misbehaves, first ask which ring failed before blaming the model.</li>
+          <li>"Which model" is about capability, cost, and latency; "which harness" is about tools, permissions, context management, memory, and channels — the sticky, everyday decision, since models are usually swappable inside a harness.</li>
+          <li>In production harnesses the loop is one line and the wrapping is the rest of the codebase — which is why this Act spends its remaining chapters walking the wrapping, organ by organ.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

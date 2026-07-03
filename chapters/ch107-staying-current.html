@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Staying current — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch107">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XII · The Working Engineer</div>
+        <h1>Staying current</h1>
+        <p class="ch-tagline">The field will not slow down for you — and you do not need it to. A short list of accountable sources, one ruthless filter, and thirty minutes a week will keep you sharper than people who scroll all day.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 108 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Two cardiologists qualify in the same year. The first subscribes to everything — forty newsletters, a dozen video channels, every conference hashtag. She knows every miracle-cure headline within hours of it appearing, and she is permanently, quietly exhausted. The second reads two journals and her professional society's guideline updates. Thirty minutes, every Sunday, coffee in hand. She has one rule for everything else that crosses her desk: <em>"Would this change how I treat a patient on Monday? If it might, I go find the trial data and check it myself."</em></p>
+        <p>Ten years on, guess which one colleagues call when they want to know what actually changed in cardiology. The second one — every time. Her secret was never reading <em>more</em>. It was reading <em>upstream</em>: sources that are professionally accountable for being right, plus a filter that converts every exciting claim into a small test. This chapter hands you her system, rebuilt for a field that moves ten times faster than medicine.</p>
+      </section>
+
+      <h2>A field with two speeds</h2>
+      <p>Here is the anxiety, said out loud: you have spent a hundred and six chapters learning this stuff, and the field reinvents itself every few months. Was it all sandcastles?</p>
+      <p>No — because the field moves at two very different speeds, and almost nobody tells you that. The <em>fundamentals</em> barely move. The agent loop you built in <a href="ch045-react-loop-by-hand.html">chapter 45</a> — model, tools, history, a bounded loop — is the same loop it was years ago and will be the same loop next year. Tokens and context windows (<a href="ch030-tokens-embeddings-context.html">chapter 30</a>), tool calling (<a href="ch035-tool-calling.html">chapter 35</a>), the reasons agents fail (<a href="ch048-failure-modes.html">chapter 48</a>) — these are geology. They shift over decades, not weekends.</p>
+      <p>What churns is the <em>surface</em>: package names, method signatures, which framework is fashionable, which model tops which leaderboard this month. You have already lived through one of these churns in this very course: LangChain's old <code>AgentExecutor</code> was deprecated and replaced by <code>create_agent</code> (<a href="ch054-create-agent.html">chapter 54</a>). The loop inside did not change. The wrapper did.</p>
+      <p>This two-speed picture dictates the strategy: a reliable, low-effort way to notice when a surface change touches something you actually run, and the confidence to ignore everything else. That takes the right sources, and a filter.</p>
+
+      <h2>Read upstream: the primary sources</h2>
+      <p>A <dfn>primary source</dfn> is the artifact published by the people who built the thing — the changelog, the spec, the release notes, the engineering post from the team itself. Everything else — videos about the changelog, threads about the spec, newsletters summarising the release — is secondary: someone else's paraphrase, usually optimised for clicks rather than correctness. The single biggest upgrade to your information diet is to read the primary source first and let the commentary go.</p>
+      <p>Primary sources have a property nothing downstream has: <em>accountability</em>. When maintainers write a <dfn>changelog</dfn> — the dated, versioned list of what changed in each release — they are writing a document their own users will hold them to. When a vendor publishes <dfn>release notes</dfn> — the human-readable summary shipped alongside a new version — support tickets get filed against every sentence. An influencer who over-hypes a release pays no such price. Read where the accountability is.</p>
+      <p>Here is the list that matters for the world you work in. Six feeds, none of them daily:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Feed</th><th>What it is</th><th>Read it for</th></tr>
+        <tr><td>Anthropic engineering blog<br><small>anthropic.com/engineering</small></td><td>Long-form posts from the team behind Claude and Claude Code</td><td>Durable patterns, not news — the rare posts that reshape practice</td></tr>
+        <tr><td>LangChain / LangGraph changelog + blog</td><td>The source of truth for the framework APIs you may run</td><td>Deprecations, new APIs, migration guides — before they break your build</td></tr>
+        <tr><td>MCP spec + blog<br><small>modelcontextprotocol.io</small></td><td>The versioned protocol standard for tool connectivity</td><td>Dated spec revisions; newer additions arriving in the protocol</td></tr>
+        <tr><td>A2A project updates</td><td>The agent-to-agent protocol, stewarded under the Linux Foundation</td><td>Where cross-vendor agent interop is heading</td></tr>
+        <tr><td>Model release notes + model cards</td><td>The vendor's own account of what a new model can and cannot do</td><td>Context window, tool-use behaviour, pricing, safety notes</td></tr>
+        <tr><td>GitHub releases of what <em>you</em> run</td><td>Release notes for your own pinned dependencies</td><td>The only feed that can literally break your Monday</td></tr>
+      </table></div>
+
+      <p>A few of these deserve a closer word.</p>
+      <p><strong>The Anthropic engineering blog</strong> is unusual: it publishes rarely, and almost everything it publishes matters. You have already studied three of its posts as whole chapters of this course — <em>Building effective agents</em> (<a href="ch049-building-effective-agents.html">chapter 49</a>: workflows before agents, simple before clever), the context engineering post (<a href="ch082-context-engineering.html">chapter 82</a>: context is a budget, not a bucket), and the guidance on writing tools for agents (<a href="ch046-tools.html">chapter 46</a>: a tool's description is a prompt). That is the calibre of the feed: when a new post lands, give it your full attention — easy, because that happens perhaps once a month.</p>
+      <p><strong>The MCP spec</strong> is versioned by date — each revision is a dated release with migration notes, which means you can answer "which version does my server speak?" precisely (<a href="ch074-why-mcp-exists.html">chapter 74</a> covered why the protocol exists; <a href="ch076-mcp-primitives.html">chapter 76</a> its primitives). Newer spec additions keep arriving — treat each dated revision as a changelog for the protocol itself. <strong>A2A</strong> (<a href="ch080-a2a-protocol.html">chapter 80</a>) moves more slowly; an occasional glance at the project's updates tells you whether agent-to-agent interop is arriving in your world yet.</p>
+      <p><strong>Model cards and release notes</strong> are how you stay current on models without leaderboard whiplash. A <dfn>model card</dfn> — sometimes published as a fuller <em>system card</em> — is the vendor's structured disclosure of a model's capabilities, limits, and safety behaviour. When a new model ships, the card plus the release notes answer the questions that matter to an operator — context window, tool-use changes, cost — in ten minutes flat (<a href="ch032-model-landscape.html">chapter 32</a> taught you the map these updates redraw).</p>
+
+      <div class="code-title">a typical changelog entry — read the verbs, they are a protocol</div>
+<pre><code class="language-diff">+ Added: new middleware hook on create_agent (opt-in, no action needed)
+! Changed: default recursion limit lowered — check your long-running agents
+- Deprecated: AgentExecutor — removal planned for 2.0. Migration guide linked.
+</code></pre>
+      <p>Changelogs speak a compact dialect. <em>Added</em> means opt-in, ignore freely. <em>Changed</em> means check whether a default you rely on moved. A <dfn>deprecation</dfn> — a feature marked for future removal — is a countdown clock: nothing breaks today, but a <dfn>breaking change</dfn>, one that will stop existing code from working, is scheduled. Because your projects pin versions (<a href="ch020-environments-and-packaging.html">chapter 20</a>), a deprecation never ambushes you — it politely warns you months ahead. But only if someone on the team reads the changelog. Be that someone.</p>
+
+      <p>Six terms carry this chapter's vocabulary. Flip until they feel obvious:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">primary source</span><span class="flip-back">Published by the people who built the thing — changelog, spec, release notes, the team's own blog. Accountable for being right.</span></button>
+        <button class="flip" type="button"><span class="flip-front">changelog</span><span class="flip-back">The dated, versioned list of what changed in each release. The source of truth for "will this upgrade break me?"</span></button>
+        <button class="flip" type="button"><span class="flip-front">release notes</span><span class="flip-back">The human-readable summary shipped with a new version — what is new, what changed, what to do about it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">model card</span><span class="flip-back">The vendor's structured disclosure of a model's capabilities, limits, and safety behaviour. The fuller version is often called a system card.</span></button>
+        <button class="flip" type="button"><span class="flip-front">deprecation</span><span class="flip-back">A feature marked for future removal. Still works today; a migration clock is now ticking.</span></button>
+        <button class="flip" type="button"><span class="flip-front">breaking change</span><span class="flip-back">A change that stops existing code from working — the reason version pins and changelog-reading exist.</span></button>
+      </div>
+
+      <h2>The hype filter: can I test it in an hour?</h2>
+      <p>Even a clean diet of primary sources leaves you with more claims than time. "This new technique doubles agent reliability." "This framework makes graphs obsolete." "This model is a step change." Some of these will be true. Most will not. You cannot referee them by reading harder — commentary begets commentary. You referee them the way this whole course has taught you to referee everything: <em>you run it</em>.</p>
+      <p>The filter is one question: <strong>can I test this myself in an hour?</strong> Unpacked, it is three smaller questions asked in order:</p>
+      <p><strong>First — is there anything to run?</strong> A repo, a snippet, an endpoint, a released package. A benchmark chart with no runnable artifact behind it is marketing until proven otherwise, and "proven otherwise" is not your job. Close the tab without guilt.</p>
+      <p><strong>Second — can I shrink it to a kernel?</strong> This is the muscle you built in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, when a fifty-line loop with a scripted <code>fake_llm</code> demystified every agent framework on Earth. Almost any claim about agents can be shrunk the same way: the smallest script that would show the effect if the effect is real. If you cannot imagine the small version, you do not yet understand the claim — which is itself useful information.</p>
+      <p><strong>Third — would it change what I do on Monday?</strong> A genuine breakthrough in a domain you do not ship in is a pleasant read, not a work item. Archive it. The filter is not "is this interesting?" — everything is interesting. The filter is "does this touch something I operate?"</p>
+      <p>A claim that passes all three gets its hour: a scratch folder, the smallest runnable version, your own task instead of the demo's cherry-picked one. For a new model it is even easier — run the tiny eval set you built for your own pipeline earlier in this act, and read the diff. Whatever the outcome, one hour of running beats forty hours of reading, because the result is <em>yours</em>: your data, your task, your stack.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Keep a permanent <code>scratch/</code> folder with a ready-to-go skeleton: a virtual environment, an API key wired up, the fifty-line loop from chapter 45, and a five-case mini-eval for your own use case. When the filter says "test it", the hour starts at minute zero instead of minute forty. Operators who test claims within a day of hearing them are rare enough to be considered oracles by their teams.</p></div>
+
+      <p>Because rubrics you can run beat rubrics you can recite, here is the triage as code. The scoring is deliberately crude — the point is that <em>your</em> filter, made visible, stops being a mood and starts being a policy. Press Run, then tune the weights and re-run.</p>
+
+      <div class="pyrun" data-title="Monday triage — score a week of headlines">
+<textarea class="py-src" spellcheck="false">
+# Monday, 09:00. Eight things happened in AI last week.
+# You have 30 minutes. Make the triage rubric visible as code.
+
+FEED = [
+  {"title": "Changelog: create_agent adds a new middleware hook",
+   "source": "changelog", "runnable": True},
+  {"title": "SHOCKING: this new framework makes graphs obsolete",
+   "source": "influencer", "runnable": False},
+  {"title": "Engineering post: how we built our research agent",
+   "source": "engineering-blog", "runnable": True},
+  {"title": "MCP spec revision (dated release, migration notes)",
+   "source": "spec", "runnable": True},
+  {"title": "New model release notes + system card published",
+   "source": "release-notes", "runnable": True},
+  {"title": "Hot take: agents are dead, long live workflows",
+   "source": "influencer", "runnable": False},
+  {"title": "GitHub discussion: checkpointing bug we also hit",
+   "source": "community", "runnable": True},
+  {"title": "Benchmark chart, no repo: 98% on everything",
+   "source": "influencer", "runnable": False},
+]
+
+SOURCE_WEIGHT = {"changelog": 3, "spec": 3, "engineering-blog": 3,
+                 "release-notes": 3, "community": 2, "influencer": 0}
+HYPE_WORDS = ["shocking", "obsolete", "dead", "insane", "secret",
+              "you won't believe"]
+
+def score(item):
+    s = SOURCE_WEIGHT.get(item["source"], 1)
+    if item["runnable"]:
+        s += 2   # the one-hour test needs something to run
+    title = item["title"].lower()
+    s -= sum(2 for word in HYPE_WORDS if word in title)
+    return s
+
+print(f"{'score':&gt;5}  {'verdict':&lt;7}  headline")
+print("-" * 62)
+for item in sorted(FEED, key=score, reverse=True):
+    s = score(item)
+    verdict = "TEST" if s &gt;= 5 else ("SKIM" if s &gt;= 3 else "SKIP")
+    print(f"{s:&gt;5}  {verdict:&lt;7}  {item['title']}")
+
+print()
+print("Four passed. You still pick ONE to test:")
+print("the one closest to something you ship.")
+</textarea>
+      </div>
+
+      <p>Notice what the rubric rewards: accountable sources and runnable artifacts. Notice what it punishes: hype vocabulary and claims you cannot touch. Your real filter is judgement, not arithmetic — but when four things pass in one week, the tie-breaker is always the same: test the one closest to something you actually ship.</p>
+
+      <h2>Communities worth the time</h2>
+      <p>Primary sources tell you what changed. Communities tell you what it is like to <em>live with</em> the change — and that second kind of knowledge is often what saves your week. Four are worth your limited hours:</p>
+      <p><strong>The issue trackers and discussions of the tools you run.</strong> A GitHub issue is a truth machine: a real person, a real stack trace, a maintainer's real answer. Before any upgrade, ten minutes in the repo's recent issues tells you more than any review video. You learned to navigate these in <a href="ch021-just-enough-git.html">chapter 21</a>; searching an issue tracker before debugging is the professional reflex that follows.</p>
+      <p><strong>The official community chat each project links from its README.</strong> Most serious projects run one, and maintainers actually answer there. One well-formed question with a minimal reproduction — the shrink-to-a-kernel skill again — routinely gets you an answer in hours that would have cost you days alone.</p>
+      <p><strong>One cross-industry watering hole.</strong> Hacker News earns its place not for the headlines but for the comment sections, where a breathless claim is reliably followed by a practitioner writing "we ran this in production; here is what the post leaves out". That correction layer is the value.</p>
+      <p><strong>Your own workplace.</strong> The internal channel where engineers paste what they personally tested is the highest-signal feed you will ever have, because everything in it is pre-filtered by people who share your stack and your constraints. Post your one-hour test results there. Feeds you contribute to are feeds that feed you back.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The influencer economy is paid in your attention, and its incentives are not your incentives. Someone whose income depends on you clicking is a secondary source at best and an amplifier of noise at worst. The tell is falsifiability: an accountable source tells you how to check the claim; an attention merchant tells you how to feel about it. You do not need to be angry about this — just unsubscribed.</p></div>
+
+      <h2>The 30-minute weekly routine</h2>
+      <p>Everything above compresses into a routine that fits inside one coffee. Not daily — <em>weekly</em>. Daily scrolling feels like diligence and compounds into nothing; one tested thing a week feels like almost nothing and compounds into expertise. Here is the whole ritual, step by step:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Scan (10 min)">
+          <h3>1. Scan the primary feeds — ten minutes</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">Anthropic engineering<small>anything new?</small></div>
+              <div class="d-box hot">LangChain / LangGraph<small>changelog + blog</small></div>
+            </div>
+            <div class="d-col">
+              <div class="d-box hot">MCP + A2A<small>spec revisions, updates</small></div>
+              <div class="d-box hot">Model releases<small>notes + cards</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Candidate list<small>headlines only</small></div>
+          </div>
+          <p class="step-cap">Headlines and first paragraphs only — you are triaging, not reading. Plus one glance at GitHub release notes for anything your own projects pin. Most weeks, most feeds have nothing for you. That is a good week, not a wasted check.</p>
+        </div>
+        <div class="step" data-title="Filter (5 min)">
+          <h3>2. Apply the filter — five minutes</h3>
+          <div class="diagram">
+            <div class="d-box">This week's candidates<small>say, six items</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">The one-hour test<small>runnable? shrinkable? touches what I ship?</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">One winner</div>
+          </div>
+          <p class="step-cap">Run every candidate through the three questions. At most one survives most weeks. If two survive, pick the one closest to something you operate; the other goes on a shortlist for next week — if it still matters then, it was real.</p>
+        </div>
+        <div class="step" data-title="Test (10 min)">
+          <h3>3. Test the winner — ten minutes to first signal</h3>
+          <div class="diagram">
+            <div class="d-box hot">scratch/<small>ready-made skeleton</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Smallest runnable version<small>your task, not the demo's</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Verdict<small>real / hype / needs the full hour</small></div>
+          </div>
+          <p class="step-cap">Ten minutes in your prepared scratch folder usually yields a verdict. If the thing is genuinely promising, it graduates to a proper one-hour session later in the week — now as scheduled work, not as doomscrolling.</p>
+        </div>
+        <div class="step" data-title="Note (5 min)">
+          <h3>4. Write three lines, share one — five minutes</h3>
+          <div class="diagram">
+            <div class="d-box hot">3-line note<small>what, verdict, so-what</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Team channel<small>your tested result</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Your future self<small>searchable memory</small></div>
+          </div>
+          <p class="step-cap">What you tested, what happened, what it means for your stack. Post it where your team will see it. Untested opinions are noise; your three lines are evidence, and evidence is how reputations get built.</p>
+        </div>
+        <div class="step" data-title="Let go">
+          <h3>5. Let everything else go</h3>
+          <div class="diagram">
+            <div class="d-box dim">The other 40 headlines<small>gone, guilt-free</small></div>
+            <div class="d-box good">Fundamentals<small>still true, still yours</small></div>
+          </div>
+          <p class="step-cap">This is the step people skip, and it is the one that makes the routine survivable. Anything truly important will resurface — in the changelog, in your team channel, in next week's scan. The fundamentals you own do not expire between Sundays.</p>
+        </div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The routine compounds in one more way: fold what you learn into the systems you run. If a test changes how one of your agents should work, update its prompt, its tools (<a href="ch046-tools.html">chapter 46</a>), or its skill files (<a href="ch084-agent-skills.html">chapter 84</a>) the same day. A lesson left in your head upgrades one person; a lesson folded into the harness upgrades every future run.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will see this chapter in merge requests before you see it anywhere else. A reviewer comments "this API is deprecated in 1.x — see the changelog" with a link, and a five-minute fix now prevents a broken pipeline next quarter. A data scientist opens an MR bumping a pinned dependency, and the description quotes the release notes and the migration guide — that quote is the difference between a rubber-stamp and a gamble. A teammate posts "new MCP spec revision is out; here is my twenty-line repro of the new feature against our server" in the team channel, and suddenly the whole team is current for the cost of one person's hour. The engineers who are trusted on "what's new" are never the ones who read the most. They are the ones who tested the thing.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A framework releases a new version. Why is its changelog higher-signal than a popular video explaining the same release?</p>
+          <div class="q-opts">
+            <button data-opt="a">Changelogs are shorter, so they save time</button>
+            <button data-opt="b">The maintainers are accountable to their own users for every line — the video maker pays no price for being wrong</button>
+            <button data-opt="c">Videos are always inaccurate</button>
+          </div>
+          <p class="q-explain">Primary sources carry accountability: users will hold the maintainers to what the changelog says, so precision is survival. Commentary can be excellent, but it is optimised for attention, and its author bears no cost for over-claiming. Read upstream first.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. What does the hype filter actually ask of a new claim?</p>
+          <div class="q-opts">
+            <button data-opt="a">Is it trending across several communities?</button>
+            <button data-opt="b">Did a credible, well-known person share it?</button>
+            <button data-opt="c">Is there something runnable, can I shrink it to a small test, and does it touch what I ship?</button>
+          </div>
+          <p class="q-explain">Popularity and endorsements are both secondary signals — they measure attention, not truth. The filter converts the claim into an experiment you can run in about an hour: runnable artifact, shrinkable kernel, relevance to what you operate.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. Your project pins its framework version, and this week's changelog marks an API you use as deprecated. What is the right move?</p>
+          <div class="q-opts">
+            <button data-opt="a">Nothing — pinned versions mean changelogs are someone else's problem</button>
+            <button data-opt="b">Read the migration guide now and schedule the upgrade in a branch — the pin bought you time, not immunity</button>
+            <button data-opt="c">Upgrade production immediately before the removal lands</button>
+          </div>
+          <p class="q-explain">A deprecation is a countdown, not an explosion. The pin means nothing breaks today, so you migrate calmly: read the guide, test the upgrade in a branch, merge when green. Ignoring it converts a five-minute fix into a future outage; panic-upgrading skips the testing that makes upgrades safe.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. Why does one tested thing per week beat an hour of scrolling per day?</p>
+          <div class="q-opts">
+            <button data-opt="a">Knowledge from running something on your own task compounds and sticks; scrolled headlines evaporate within days</button>
+            <button data-opt="b">Scrolling is only bad because it is unfashionable</button>
+            <button data-opt="c">Weekly reading covers strictly more material than daily reading</button>
+          </div>
+          <p class="q-explain">Scrolling covers far more material — and retains almost none of it, because nothing was tested against your own stack. One small experiment produces evidence you own: your data, your task, your verdict. Fifty of those a year is a body of first-hand knowledge no feed can give you.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. The MCP spec is versioned by dated revisions. What does that give you as an operator?</p>
+          <div class="q-opts">
+            <button data-opt="a">A guarantee that servers never need updating</button>
+            <button data-opt="b">Proof that the protocol has stopped changing</button>
+            <button data-opt="c">A precise answer to "which spec version does my server speak?" and a per-revision changelog for the protocol itself</button>
+          </div>
+          <p class="q-explain">Dated revisions make protocol change legible: you can name exactly which version each side speaks, and each revision documents what changed since the last. That turns "the spec moved" from a vague worry into an ordinary, checkable migration — the same discipline as any dependency upgrade.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>The field has two speeds: fundamentals (the loop, tokens, tools, failure modes) barely move, while surfaces (APIs, framework fashion, leaderboards) churn constantly. Anchor in the first, track the second cheaply.</li>
+          <li>Read upstream. Primary sources — the Anthropic engineering blog, framework changelogs, the dated MCP spec revisions, A2A project updates, model release notes and cards, and the GitHub releases of what you run — are accountable for being right. Commentary is not.</li>
+          <li>The hype filter is one question — can I test it myself in an hour? — unpacked into three: is there something runnable, can I shrink it to a kernel, does it touch what I ship.</li>
+          <li>One tested claim per week beats daily scrolling, because tested knowledge is yours — your task, your data, your verdict — and it compounds.</li>
+          <li>Communities are for lived experience, not headlines: issue trackers of the tools you run, official project chat, one watering hole for its correction layer, and your own team channel — which gets better every time you post a test result into it.</li>
+          <li>Close the loop: a deprecation read today is a five-minute branch, not a future outage, and a lesson folded into your prompts, tools, or skills upgrades every future run, not just you.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StateGraph anatomy — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch058">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VII · LangGraph</div>
+        <h1>StateGraph anatomy</h1>
+        <p class="ch-tagline">Every LangGraph app — every one — is exactly three declarations: a state schema, some nodes, and some edges. By the end of this chapter you will read them like a floor plan, trace one by hand, and build the whole machine yourself in twenty-five lines of Python.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 59 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Walk into a well-run hospital and follow one patient's file. At the admission desk, someone opens a fresh folder with printed sections: name, current ward, medication log, discharge note. The patient then moves — admissions to the ward, the ward to the pharmacy — and the folder travels with them. Each department writes only in its own section; the pharmacist never rewrites the X-ray report. And notice that the sections behave differently. <em>Current ward</em> gets crossed out and replaced at every move. The <em>medication log</em> is sacred: staff may only add lines to it, never blank it and start over — a patient's dosing history must survive every handover. On the corridor wall hangs a floor plan showing exactly which department hands over to which, so a new nurse never has to guess where the folder goes next. At discharge, the last section is signed and the folder is returned.</p>
+        <p>That hospital is a LangGraph application. The printed folder is the <strong>state schema</strong>. The departments are <strong>nodes</strong>. The corridors on the floor plan are <strong>edges</strong>. The append-only medication log is a <strong>reducer</strong>. Admission and discharge are <strong>START</strong> and <strong>END</strong>.</p>
+      </section>
+
+      <h2>One idea, three parts</h2>
+      <p>In <a href="ch057-why-graphs.html">the last chapter</a> you saw why graphs exist: the hand-rolled <a href="ch045-react-loop-by-hand.html">ReAct loop</a> is wonderful until the flow stops being a loop — until you need branches, parallel steps, pause-and-resume, or a shape you can actually draw for a colleague. LangGraph's answer is to stop burying the flow inside <code>if</code> statements and instead <em>declare</em> it: here are the workers, here is the shared paperwork, here is who hands over to whom. The class that holds those declarations is <dfn>StateGraph</dfn> — a builder object you load up with a state schema, nodes, and edges, and then compile into something runnable.</p>
+      <p>That is genuinely the whole anatomy. Three parts:</p>
+      <ul>
+        <li><strong>The state schema</strong> — the shape of the shared folder every node reads and writes.</li>
+        <li><strong>The nodes</strong> — plain Python functions that take the current state and return the part they changed.</li>
+        <li><strong>The edges</strong> — the wiring that says which node runs after which, bookended by <code>START</code> and <code>END</code>.</li>
+      </ul>
+      <p>Everything else in this Act — <a href="ch059-conditional-edges.html">routing</a>, <a href="ch061-checkpointing.html">checkpoints</a>, human-in-the-loop — is an upgrade to one of these three parts. Get these three cold and the rest of LangGraph becomes furniture arrangement.</p>
+
+      <h2>Part one: the state — a folder with a printed form inside</h2>
+      <p>Quick recap from <a href="ch016-type-hints-and-pydantic.html">the type-hints chapter</a>, because it is about to earn its keep. A <dfn>TypedDict</dfn> is a way to declare the <em>shape</em> of a dictionary: which keys exist and what type each value should hold. It enforces nothing at runtime — it is a description that tools (and frameworks) can read. Pydantic models actively validate data at the boundary; TypedDicts just describe it, at zero cost. LangGraph reads that description and uses it as the blueprint for the folder your graph passes around.</p>
+
+      <div class="code-title">state.py — the printed form</div>
+      <pre><code class="language-python">from typing import Annotated, TypedDict
+import operator
+
+class ResearchState(TypedDict):
+    topic: str                                  # plain: last write wins
+    notes: Annotated[list[str], operator.add]   # reducer: appended
+    draft: str                                  # plain: last write wins</code></pre>
+
+      <p>Each key in the state is called a <dfn>channel</dfn> — a named slot that nodes can read from and write to, like one section of the hospital folder. When you build the graph you hand this class to the constructor — <code>StateGraph(ResearchState)</code> — and from then on, every node receives a dictionary of exactly this shape and every update is merged back into it.</p>
+      <p>The interesting question is <em>how</em> updates are merged, and that is where the second line of that snippet gets its moment.</p>
+
+      <h2>Reducers: sections that append instead of overwrite</h2>
+      <p>By default a channel behaves like <em>current ward</em> on the folder: when a node writes a new value, the old one is simply replaced. Last write wins. For <code>topic</code> and <code>draft</code> that is exactly right.</p>
+      <p>But some channels must behave like the medication log. If the planning step writes a note and then the research step writes another, you do not want the second note to erase the first — you want both. Declaring that rule is what <dfn>Annotated</dfn> is for: it lets you attach extra metadata to a type hint, and LangGraph reads that metadata as the channel's merge rule. The attached function is called a <dfn>reducer</dfn> — it takes the old value and the incoming update and combines them into the new value.</p>
+      <p><code>operator.add</code> is the workhorse reducer for lists: recall from <a href="ch004-collections.html">the collections chapter</a> that <code>+</code> on two lists concatenates them, so <em>old + new</em> means <em>append</em>. For chat history LangGraph ships a smarter reducer, <code>add_messages</code> (imported from <code>langgraph.graph.message</code>): it appends new messages like <code>operator.add</code> would, but if an incoming message carries the same id as an existing one it <em>replaces</em> it instead of duplicating it — which is what makes edits and retries safe. It is so common that LangGraph provides a ready-made <code>MessagesState</code> with a <code>messages</code> channel already wired to it.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Channel declaration</th><th>Merge rule</th><th>Feels like</th></tr>
+        <tr><td><code>draft: str</code></td><td>Last write wins — new value replaces old</td><td>"Current ward" — crossed out and rewritten</td></tr>
+        <tr><td><code>notes: Annotated[list, operator.add]</code></td><td>Old + new — updates are appended</td><td>The medication log — add lines, never erase</td></tr>
+        <tr><td><code>messages: Annotated[list, add_messages]</code></td><td>Append, but replace when ids match</td><td>A log where a correction overwrites the original entry</td></tr>
+      </table></div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>With a reducer channel, a node should return <em>only the new items</em>, never the whole updated list. If a node returns <code>state["notes"] + [new_note]</code>, the reducer dutifully appends all of it — and every old note is now in the state twice. The infamous "why is my agent's history duplicated?" bug is almost always someone hand-merging a channel that already has a reducer.</p></div>
+
+      <h2>The vocabulary you need</h2>
+      <p>Six terms carry the whole Act. Flip each card until the back feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">state schema</span><span class="flip-back">The declared shape of the shared data — usually a TypedDict. Every node reads it, every update merges into it. The folder's printed form.</span></button>
+        <button class="flip" type="button"><span class="flip-front">channel</span><span class="flip-back">One key in the state, with its own merge rule. Plain channels overwrite; reducer channels combine old and new.</span></button>
+        <button class="flip" type="button"><span class="flip-front">reducer</span><span class="flip-back">A function attached via Annotated that merges an update into a channel — operator.add appends lists, add_messages appends chat and replaces by id.</span></button>
+        <button class="flip" type="button"><span class="flip-front">node</span><span class="flip-back">A plain Python function: current state in, partial update out. It never calls other nodes — it only reads and writes the folder.</span></button>
+        <button class="flip" type="button"><span class="flip-front">edge</span><span class="flip-back">A declared handover: after node A, run node B. The corridors on the floor plan. Fixed for now; conditional in the next chapter.</span></button>
+        <button class="flip" type="button"><span class="flip-front">START and END</span><span class="flip-back">Special markers, not nodes you write. START is where invoke enters the graph; reaching END stops the run and returns the state.</span></button>
+      </div>
+
+      <h2>Part two: nodes — wards that write in the folder</h2>
+      <p>A <dfn>node</dfn> is a plain function that receives the current state and returns a dictionary containing <em>only the channels it changed</em> — a <dfn>partial update</dfn>, meaning you mention what you touched and stay silent about everything else. The graph merges your update into the state using each channel's rule. This is the pharmacist writing one line in the medication log and leaving the X-ray report alone.</p>
+
+      <div class="code-title">one node — state in, partial update out</div>
+      <pre><code class="language-python">def plan(state: ResearchState) -&gt; dict:
+    # read anything you like from state...
+    angle = f"PLAN: three angles on {state['topic']}"
+    # ...but return ONLY what you changed
+    return {"notes": [angle]}</code></pre>
+
+      <p>Two things to sit with. First, nodes never call each other. <code>plan</code> does not import <code>research</code> or pass it anything — it drops its update into the shared state and its job is over. Who runs next is the graph's business, not the node's. That separation is what makes graphs rearrangeable: you can reorder, insert, or remove nodes without touching the code inside any of them.</p>
+      <p>Second, notice what the node returns for <code>notes</code>: a <em>list containing one new note</em>, not the whole updated log. The <code>operator.add</code> reducer does the appending. The node describes the change; the channel decides the merge.</p>
+
+      <h2>Part three: edges — the corridors on the wall</h2>
+      <p>An <dfn>edge</dfn> is a declared handover: "after this node, run that one." You register nodes with <code>add_node(name, function)</code> and wire them with <code>add_edge(source, target)</code>. Two special markers bracket the flow: <dfn>START</dfn> is the entry — the admission desk where <code>invoke</code> hands the initial state in — and <dfn>END</dfn> is the discharge — when the run reaches it, the graph stops and returns the final state. You never write a function for either; they are just names for "the way in" and "the way out".</p>
+      <p>When the wiring is done, <code>.compile()</code> checks it — every edge must point at a registered node, and there must be a way in from <code>START</code> — and returns the runnable graph object, the one with <code>.invoke()</code> and <code>.stream()</code> on it (both get <a href="ch060-compile-invoke-stream.html">their own chapter</a>). Compiling runs nothing and calls no model. It is the hospital board approving the floor plan and pinning it to the wall: validation plus freeze, and also the moment where extras like a <a href="ch061-checkpointing.html">checkpointer</a> plug in via <code>.compile(checkpointer=...)</code>.</p>
+      <p>Here is the complete file, the way you will meet it in real repositories. Click through the annotated lines — each one should end up boring, and boring means fluent:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">research_graph.py — a complete three-node LangGraph app</div>
+        <div class="wl-line"><code>from typing import Annotated, TypedDict</code>
+          <div class="wl-note">Both come from the standard library's typing module — nothing LangGraph-specific yet. <code>TypedDict</code> declares the state's shape; <code>Annotated</code> lets us staple a reducer onto one channel.</div></div>
+        <div class="wl-line"><code>import operator</code></div>
+        <div class="wl-line"><code>from langgraph.graph import StateGraph, START, END</code>
+          <div class="wl-note">The three imports that define this Act. <code>StateGraph</code> is the builder; <code>START</code> and <code>END</code> are the special entry and exit markers. This exact line appears near the top of almost every LangGraph file ever written.</div></div>
+        <div class="wl-line"><code>class ResearchState(TypedDict):</code>
+          <div class="wl-note">Part one: the state schema. The class body is the printed form — every node will receive a dict shaped like this.</div></div>
+        <div class="wl-line"><code>    topic: str</code></div>
+        <div class="wl-line"><code>    notes: Annotated[list[str], operator.add]</code>
+          <div class="wl-note">The reducer channel. Without the annotation, a second write to <code>notes</code> would erase the first. With <code>operator.add</code>, updates are concatenated — appended, never overwritten.</div></div>
+        <div class="wl-line"><code>    draft: str</code></div>
+        <div class="wl-line"><code>def plan(state: ResearchState) -&gt; dict:</code>
+          <div class="wl-note">Part two: a node. Just a function (<a href="ch007-functions.html">ch7</a>) — no base class, no decorator required. State in, partial update out.</div></div>
+        <div class="wl-line"><code>    return {"notes": [f"PLAN: three angles on {state['topic']}"]}</code>
+          <div class="wl-note">A partial update: only <code>notes</code> is mentioned, so <code>topic</code> and <code>draft</code> are untouched. And it returns one new item, trusting the reducer to append it.</div></div>
+        <div class="wl-line"><code>def research(state: ResearchState) -&gt; dict:</code></div>
+        <div class="wl-line"><code>    return {"notes": ["FACT: exports hit a record last year"]}</code>
+          <div class="wl-note">In a real app this node would call an LLM or a search tool. Structurally, nothing changes — it still just returns the channels it modified.</div></div>
+        <div class="wl-line"><code>def write(state: ResearchState) -&gt; dict:</code></div>
+        <div class="wl-line"><code>    return {"draft": " ".join(state["notes"])}</code>
+          <div class="wl-note">This node <em>reads</em> the accumulated notes and <em>writes</em> the plain channel <code>draft</code>. No reducer there, so whatever was in <code>draft</code> before is replaced.</div></div>
+        <div class="wl-line"><code>builder = StateGraph(ResearchState)</code>
+          <div class="wl-note">The builder is born holding the schema. From here on it knows every channel and every merge rule.</div></div>
+        <div class="wl-line"><code>builder.add_node("plan", plan)</code>
+          <div class="wl-note">Register a node under a name. The string is what edges refer to; the function is what actually runs. Same dict-of-callables idea as the <code>TOOLS</code> dict in <a href="ch045-react-loop-by-hand.html">ch45</a>.</div></div>
+        <div class="wl-line"><code>builder.add_node("research", research)</code></div>
+        <div class="wl-line"><code>builder.add_node("write", write)</code></div>
+        <div class="wl-line"><code>builder.add_edge(START, "plan")</code>
+          <div class="wl-note">Part three: the wiring. This edge is the admission desk — when someone calls <code>invoke</code>, the state enters here.</div></div>
+        <div class="wl-line"><code>builder.add_edge("plan", "research")</code>
+          <div class="wl-note">Plain edges are unconditional: after <code>plan</code>, always <code>research</code>. The next chapter makes these decisions dynamic.</div></div>
+        <div class="wl-line"><code>builder.add_edge("research", "write")</code></div>
+        <div class="wl-line"><code>builder.add_edge("write", END)</code>
+          <div class="wl-note">Discharge. Reaching <code>END</code> stops the run and hands the final state back to the caller. Compile will not force you to draw this edge — a node with no outgoing edge simply ends the run — but drawing it keeps the map honest.</div></div>
+        <div class="wl-line"><code>graph = builder.compile()</code>
+          <div class="wl-note">Validation plus freeze: every edge must point at a real node, START must lead somewhere. Returns the runnable object. No model has been called; no node has run.</div></div>
+        <div class="wl-line"><code>result = graph.invoke({"topic": "chai exports"})</code>
+          <div class="wl-note">Now it runs: the initial state enters at START, flows plan to research to write, and the final merged state comes back as a plain dict — <code>result["draft"]</code> holds the report.</div></div>
+      </div>
+
+      <h2>Trace it by hand</h2>
+      <p>Reading the wiring is one skill; <em>feeling</em> the state move through it is another. Step through one full run of the graph above and watch the folder change at every handover:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="invoke">
+          <h3>1. The folder is opened at admission</h3>
+          <div class="diagram">
+            <div class="d-box hot">START<small>invoke enters here</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">plan</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">research</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">write</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">END</div>
+          </div>
+          <p class="step-cap">You call <code>graph.invoke({"topic": "chai exports"})</code>. The state is now <code>topic="chai exports"</code>, <code>notes=[]</code>, <code>draft=""</code>. The edge from START says the first stop is <code>plan</code>.</p>
+        </div>
+        <div class="step" data-title="plan runs">
+          <h3>2. plan writes the first note</h3>
+          <div class="diagram">
+            <div class="d-box dim">START</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">plan<small>returns {"notes": [PLAN...]}</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">research</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">write</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">END</div>
+          </div>
+          <p class="step-cap"><code>plan</code> reads the topic and returns a partial update touching only <code>notes</code>. The reducer merges: <code>[] + ["PLAN: ..."]</code>. The state now holds one note; <code>topic</code> and <code>draft</code> are untouched.</p>
+        </div>
+        <div class="step" data-title="research runs">
+          <h3>3. research appends — nothing is erased</h3>
+          <div class="diagram">
+            <div class="d-box dim">START</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">plan</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">research<small>returns {"notes": [FACT...]}</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">write</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">END</div>
+          </div>
+          <p class="step-cap">The moment reducers exist for. <code>research</code> also writes to <code>notes</code>, and because of <code>operator.add</code> the update is <em>appended</em>: <code>notes</code> now holds both the PLAN note and the FACT note. On a plain channel, the FACT would have wiped the PLAN.</p>
+        </div>
+        <div class="step" data-title="write runs">
+          <h3>4. write fills the plain channel</h3>
+          <div class="diagram">
+            <div class="d-box dim">START</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">plan</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">research</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">write<small>returns {"draft": "..."}</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">END</div>
+          </div>
+          <p class="step-cap"><code>write</code> reads both accumulated notes and returns <code>{"draft": ...}</code>. No reducer on <code>draft</code>, so last write wins: the empty string is replaced by the report. <code>notes</code> is not in the update, so it is untouched.</p>
+        </div>
+        <div class="step" data-title="END">
+          <h3>5. Discharge — the folder comes back</h3>
+          <div class="diagram">
+            <div class="d-box dim">START</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">plan</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">research</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">write</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">END<small>state returned to caller</small></div>
+          </div>
+          <p class="step-cap">The edge from <code>write</code> points at END, so the run stops and <code>invoke</code> returns the final state: the original topic, two notes, and a finished draft. One folder, three departments, zero functions calling each other.</p>
+        </div>
+      </div>
+
+      <h2>Build the machine yourself</h2>
+      <p>Frameworks feel like magic until you build a small one. The runner below is a complete miniature StateGraph in pure Python — reducers, partial updates, <code>add_node</code>, <code>add_edge</code>, <code>compile</code>, <code>invoke</code>, all of it. The "model" is a scripted <code>fake_llm()</code> stand-in, as usual, so it runs entirely in your browser. Press <strong>Run</strong> and watch each node's partial update get merged:</p>
+
+      <div class="pyrun" data-title="A miniature StateGraph — run me">
+<textarea class="py-src" spellcheck="false">
+import operator
+
+# ---- reducers: HOW each channel accepts an update ---------
+# A key listed here is merged (old + new). Any other key is
+# simply overwritten. This dict plays the role of Annotated.
+REDUCERS = {"notes": operator.add}
+
+# ---- the 'model': a scripted stand-in for a real LLM ------
+def fake_llm(prompt):
+    if prompt.startswith("plan"):
+        return "cover prices, growers, exports"
+    if prompt.startswith("research"):
+        return "tea exports hit a record volume last year"
+    return "Chai, in three acts: prices, growers, exports."
+
+# ---- nodes: state in, PARTIAL update out ------------------
+def plan(state):
+    return {"notes": ["PLAN: " + fake_llm("plan " + state["topic"])]}
+
+def research(state):
+    return {"notes": ["FACT: " + fake_llm("research " + state["topic"])]}
+
+def write(state):
+    return {"draft": fake_llm("write " + "; ".join(state["notes"]))}
+
+# ---- a miniature StateGraph in ~25 lines ------------------
+class MiniStateGraph:
+    def __init__(self, reducers):
+        self.nodes, self.edges, self.reducers = {}, {}, reducers
+
+    def add_node(self, name, fn):
+        self.nodes[name] = fn
+
+    def add_edge(self, src, dst):
+        self.edges[src] = dst
+
+    def compile(self):
+        if "START" not in self.edges:
+            raise ValueError("no edge from START: no way into the graph")
+        return self   # real LangGraph returns a fancier runnable object
+
+    def invoke(self, state):
+        state = dict(state)
+        here = self.edges["START"]
+        while here != "END":
+            update = self.nodes[here](state)     # the node runs
+            print(f"{here} returned {update}")
+            for key, new in update.items():      # merge the update
+                red = self.reducers.get(key)
+                old = state.get(key)
+                if red and old is not None:
+                    state[key] = red(old, new)   # reduce: append
+                else:
+                    state[key] = new             # plain: overwrite
+            here = self.edges[here]              # follow the edge
+        return state
+
+builder = MiniStateGraph(REDUCERS)
+builder.add_node("plan", plan)
+builder.add_node("research", research)
+builder.add_node("write", write)
+builder.add_edge("START", "plan")
+builder.add_edge("plan", "research")
+builder.add_edge("research", "write")
+builder.add_edge("write", "END")
+
+graph = builder.compile()
+final = graph.invoke({"topic": "chai exports", "notes": [], "draft": ""})
+print()
+print("FINAL notes:", final["notes"])
+print("FINAL draft:", final["draft"])
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now break it, on purpose. Delete <code>"notes"</code> from <code>REDUCERS</code> and watch the FACT note wipe out the PLAN note — that is life without reducers. Remove the <code>("write", "END")</code> edge and read the KeyError when the run falls off the map. Make <code>research</code> return <code>state["notes"] + ["FACT..."]</code> and watch the duplication bug from the warning above appear in your own output. Each failure you cause here is one you will diagnose in seconds when a production graph does it.</p></div>
+
+      <p>Compare your miniature with the real thing and the mapping is one-to-one: the <code>REDUCERS</code> dict is what <code>Annotated[..., operator.add]</code> declares, the merge loop inside <code>invoke</code> is LangGraph's channel machinery, and the <code>compile</code> check is a shadow of the real validation. The production version adds enormously valuable engineering — parallel execution, streaming, <a href="ch061-checkpointing.html">persistence</a>, retries — but no new <em>ideas</em>. You have now held all three parts in your hands.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Open any LangGraph repository and you can navigate it in one pass: look for a <code>TypedDict</code> (often in <code>state.py</code>, often named <code>AgentState</code> or <code>State</code>) — that is the folder; find the block of <code>add_node</code>/<code>add_edge</code> calls (often <code>graph.py</code>) — that is the floor plan, and you can sketch the whole app from it without reading a single node body. A merge request that says "added a summarise node" will touch exactly one new function and two or three edge lines. And when a teammate uses LangChain's <a href="ch054-create-agent.html"><code>create_agent</code></a>, the object it returns <em>is</em> a compiled StateGraph under the hood — a prebuilt agent graph (model node, tools node) with the loop drawn as edges. Same anatomy, pre-assembled.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. A node returns <code>{"draft": "Report text"}</code>. What happens to the state's other keys, <code>topic</code> and <code>notes</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">They are reset to their default values</button>
+            <button data-opt="b">Nothing — a node's return is a partial update, merged into the state; unmentioned keys are untouched</button>
+            <button data-opt="c">The graph raises an error because a node must return every key</button>
+          </div>
+          <p class="q-explain">Nodes return only what they changed. The graph merges that update into the shared state channel by channel; anything not mentioned simply keeps its current value.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. <code>notes</code> is declared as <code>Annotated[list[str], operator.add]</code>. The <code>plan</code> node writes <code>["PLAN"]</code> and later the <code>research</code> node writes <code>["FACT"]</code>. What does <code>notes</code> hold afterwards?</p>
+          <div class="q-opts">
+            <button data-opt="a"><code>["FACT"]</code> — the last write wins</button>
+            <button data-opt="b">An error — two nodes cannot write to the same key</button>
+            <button data-opt="c"><code>["PLAN", "FACT"]</code> — the reducer appends each update to what is already there</button>
+          </div>
+          <p class="q-explain">That is the entire job of a reducer: instead of replacing the old value, it merges old and new. <code>operator.add</code> on lists concatenates, so successive writes accumulate — the medication log, not the whiteboard.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What does <code>builder.compile()</code> actually do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Validates the wiring and returns a runnable graph object — no node runs, no model is called</button>
+            <button data-opt="b">Executes the graph once end-to-end as a test run</button>
+            <button data-opt="c">Translates your Python into a faster compiled language</button>
+          </div>
+          <p class="q-explain">Compile is check-and-freeze: edges must point at registered nodes and START must lead somewhere. Execution only happens when you call <code>.invoke()</code> or <code>.stream()</code> on the compiled graph.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. What is <code>START</code> in a StateGraph?</p>
+          <div class="q-opts">
+            <button data-opt="a">The first node — you must write a function called start</button>
+            <button data-opt="b">A special marker naming the entry point: the edge from START says which node runs first when invoke is called</button>
+            <button data-opt="c">An alias that automatically points at whichever node was added first</button>
+          </div>
+          <p class="q-explain">START and END are markers, not nodes — you never write functions for them. The edge <code>add_edge(START, "plan")</code> is you telling the graph where the folder enters the building.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A node on an <code>operator.add</code> channel returns <code>state["notes"] + [new_note]</code> — the whole old list plus the new item. What happens?</p>
+          <div class="q-opts">
+            <button data-opt="a">Nothing unusual — the state ends up correct either way</button>
+            <button data-opt="b">The graph detects the overlap and removes the duplicates</button>
+            <button data-opt="c">Every old note is appended again — the state now contains duplicates of the entire history</button>
+          </div>
+          <p class="q-explain">The reducer appends whatever you return. Return old + new and the reducer computes old + (old + new). On a reducer channel, return only the new items. (The <code>add_messages</code> reducer is more forgiving for chat history because it matches message ids, but plain <code>operator.add</code> has no such mercy.)</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Every LangGraph app is three declarations: a state schema (the shared folder, usually a TypedDict), nodes (functions that read state and return partial updates), and edges (who hands over to whom), bookended by START and END.</li>
+          <li>Each state key is a channel with its own merge rule: plain channels overwrite (last write wins); <code>Annotated[..., reducer]</code> channels combine — <code>operator.add</code> appends lists, <code>add_messages</code> appends chat history and replaces by id.</li>
+          <li>Nodes never call each other. They communicate only through the shared state, which is exactly what makes graphs rearrangeable and drawable.</li>
+          <li>On a reducer channel, return only the new items — hand-merging old content re-appends it and duplicates your history.</li>
+          <li><code>.compile()</code> validates the wiring and returns the runnable object; nothing executes until <code>.invoke()</code>. Checkpointers plug in at compile time.</li>
+          <li>The whole machine fits in twenty-five lines of pure Python — you built it in this chapter, and everything LangGraph adds on top is engineering, not new ideas.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

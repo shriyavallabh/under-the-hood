@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Is LangGraph the right choice? — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch093">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XI · The Landscape</div>
+        <h1>Is LangGraph the right choice?</h1>
+        <p class="ch-tagline">No cheerleading, no dunking — a working scorecard for where graph orchestration earns its keep, what it quietly costs, and how to defend your answer in a meeting with evidence instead of fashion.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 94 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A sweets factory runs its packing floor on two skilled runners carrying trays between tables. It works. It is cheap, flexible, and everyone understands it. Then a consultant visits: <em>"Every serious factory is installing conveyor lines now."</em> And the vendor's conveyor really is impressive — fixed, numbered stations; if the power fails, the line restarts exactly where it stopped; there is even an inspection gate where a supervisor can halt a batch until she signs off.</p>
+        <p>But the price is not just the invoice. The whole floor must be redesigned around the belt. Staff must be retrained to think in stations instead of trays. And the belt's fittings only accept that vendor's parts. So the owner refuses to argue taste. She writes down what her factory actually needs, weights each need <em>before</em> looking at any brochure, scores the belt, the runners, and the neighbour's trolley system — and attaches evidence to every score. The belt wins the big export line. It loses the small custom-orders room. Both answers are right, because they came from requirements, not fashion. This chapter is that scorecard, for LangGraph.</p>
+      </section>
+
+      <h2>What you are actually deciding</h2>
+      <p>You have already built everything LangGraph does, in miniature. In <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> you wrote the raw loop; in Act VII you rebuilt it as a graph — the <a href="ch058-stategraph-anatomy.html">StateGraph anatomy</a>, <a href="ch061-checkpointing.html">checkpointing</a>, and the <a href="ch062-human-in-the-loop.html">interrupt-and-resume approval gate</a>. So this chapter asks the grown-up question: when your team picks the orchestration layer for a real workload, should the answer be LangGraph?</p>
+      <p>Teams get this wrong in two mirror-image ways. The first is <em>adoption by fashion</em>: "it is the industry standard", said with no requirement attached. The second is <em>avoidance by fashion</em>: "frameworks are bloat, real engineers write their own loops", said with equal confidence and less evidence. Both skip the only step that matters — writing down what this workload needs and checking each candidate against it. The cure is boring and works: a <dfn>weighted scorecard</dfn> — a table where each requirement gets an importance weight, each candidate an evidenced score, and the totals do the arguing.</p>
+
+      <h2>The scorecard method</h2>
+      <p>An honest scorecard has four rules, and each one exists to block a specific way of cheating.</p>
+      <p><strong>1. Criteria come from requirements, not from feature lists.</strong> You do not ask "does it have checkpointing?" — that is the vendor's brochure talking. You ask "must a run survive a deploy and resume where it stopped?" If nobody can name the incident or regulation behind a criterion, it is decoration and gets weight zero.</p>
+      <p><strong>2. Weights are fixed before scoring.</strong> If you score first and weight later, you will — honestly, unconsciously — tune the weights until your favourite wins. Fixing weights first turns preference into prediction.</p>
+      <p><strong>3. Every score carries evidence.</strong> A number in a cell means nothing. "LangGraph: 5 on human approval" must point at something — a one-day spike you ran, a documented API, a production story. A scorecard without evidence is a mood board with arithmetic.</p>
+      <p><strong>4. The winner must survive a <dfn>sensitivity check</dfn></strong> — you nudge each weight and see whether the recommendation flips. A choice that flips when one debatable weight moves by a point is not a decision yet; it is a coin standing on its edge.</p>
+      <p>Six words carry the rest of the chapter — flip each card until it feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">durable execution</span><span class="flip-back">A run can crash, pause, or outlive its process and later continue from where it stopped — because its state is saved outside the process at every step.</span></button>
+        <button class="flip" type="button"><span class="flip-front">checkpointer</span><span class="flip-back">The component that saves graph state after each node — to memory, SQLite, Postgres, or Redis. The mechanism behind durable execution, resume, and time travel.</span></button>
+        <button class="flip" type="button"><span class="flip-front">human-in-the-loop</span><span class="flip-back">Pausing an automated run mid-flight for a person's decision, then resuming with their answer — even days later. HITL for short.</span></button>
+        <button class="flip" type="button"><span class="flip-front">lock-in</span><span class="flip-back">How expensive it is to walk away. Every framework-specific primitive in your code — state schemas, interrupts, checkpoint formats — raises the exit price.</span></button>
+        <button class="flip" type="button"><span class="flip-front">churn risk</span><span class="flip-back">The chance the framework's own APIs change under you, turning working code into "legacy" without you touching it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">two-way door</span><span class="flip-back">A decision you can cheaply reverse. Pilots and spikes are two-way doors; a year of production checkpoint data in one vendor's format is not.</span></button>
+      </div>
+
+      <h2>Where LangGraph wins</h2>
+      <p>Five scorecard columns genuinely favour it, and each traces back to one design decision: state is explicit, and the framework saves it at every step.</p>
+      <p><strong>Durable execution.</strong> Because a checkpointer writes the graph's state after every node, a run is not a fragile in-memory thing. A deploy, a crash, or a spot-instance eviction can kill the process, and the run continues later from the last completed step. You met the operational version in <a href="ch085-durability.html">the durability chapter</a>; in LangGraph it is a first-class property, not a bolt-on.</p>
+      <p><strong>Explicit control.</strong> A <a href="ch057-why-graphs.html">graph</a> is a map. Nodes, edges, and conditional edges make a workflow's possible paths readable by a reviewer, an auditor, or a new teammate — no control flow buried in a prompt. When a compliance officer asks "can this agent ever issue a refund without the approval step?", you answer by pointing at the topology, not by hoping the model behaves.</p>
+      <p><strong>Human-in-the-loop.</strong> The <code>interrupt()</code> plus <code>Command(resume=...)</code> pattern from <a href="ch062-human-in-the-loop.html">the HITL chapter</a> means a run can stop at a gate, hold its state with no process running, and continue days later when a human decides. Hand-rolling that means inventing persistence, resumption, and identity — most of a framework.</p>
+      <p><strong>Ecosystem.</strong> Checkpointer backends for Postgres, Redis, and SQLite ship as ready-made packages; <a href="ch088-observability.html">observability tooling</a> integrates directly; <code>langchain-mcp-adapters</code> connects MCP servers straight into your graph; <a href="ch067-create-deep-agent-anatomy.html">deepagents</a> is built on top of it. A large community also means hiring, tutorials, and answered questions.</p>
+      <p><strong>Checkpointing itself.</strong> Beyond survival, saved state per thread buys you conversation memory across sessions, replay for debugging, and forking a run from any past step to test a fix. Teams that operate agents in production — your day job — feel this one the most.</p>
+      <p>Here is the win that sells most decisions, as one incident:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Mid-run">
+          <h3>1. A refund agent, mid-run</h3>
+          <div class="diagram">
+            <div class="d-box good">verify invoice<small>done — state saved</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">compute refund<small>running now</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">approval gate</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">issue refund</div>
+          </div>
+          <p class="step-cap">A four-node graph is halfway through a customer refund. After every completed node, the checkpointer writes the full state to Postgres under this run's thread id.</p>
+        </div>
+        <div class="step" data-title="The deploy lands">
+          <h3>2. A deploy kills the process</h3>
+          <div class="diagram">
+            <div class="d-box hot">server<small>restarted mid-run</small></div>
+            <div class="d-box dim">plain-loop history<small>lived in RAM — gone</small></div>
+            <div class="d-box good">checkpoint row<small>safe in Postgres</small></div>
+          </div>
+          <p class="step-cap">In a hand-rolled loop, the history list lived in process memory: the run is simply gone, and the customer's refund with it. The checkpoint row does not care that the process died.</p>
+        </div>
+        <div class="step" data-title="Resume">
+          <h3>3. Restart and resume, not restart and repeat</h3>
+          <div class="diagram">
+            <div class="d-box good">verify invoice<small>skipped — already done</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">compute refund<small>picks up here</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">approval gate</div>
+          </div>
+          <p class="step-cap">The service comes back and invokes the graph with the same thread id; the checkpointer restores the last completed state. Finished work is not redone; the run continues.</p>
+        </div>
+        <div class="step" data-title="The gate">
+          <h3>4. The approval gate pauses everything</h3>
+          <div class="diagram">
+            <div class="d-box good">compute refund<small>done</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">approval gate<small>interrupt() — waiting</small></div>
+            <div class="d-box dim">no process running<small>state parked in the store</small></div>
+          </div>
+          <p class="step-cap">The graph reaches the gate and interrupts. Nothing is polling, nothing is burning tokens or compute — the run exists only as a saved checkpoint waiting for a human.</p>
+        </div>
+        <div class="step" data-title="Two days later">
+          <h3>5. A human answers, the run completes</h3>
+          <div class="diagram">
+            <div class="d-box">supervisor<small>approves on Monday</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Command(resume=...)<small>run continues</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">issue refund<small>done</small></div>
+          </div>
+          <p class="step-cap">Two days later the supervisor approves. The resume command re-hydrates the run from its checkpoint and the final node executes. Crash, pause, weekend — the run survived all three.</p>
+        </div>
+      </div>
+
+      <h2>Read the wiring before you price it</h2>
+      <p>Before tallying the costs, look at them in code. This is the minimal skeleton of the stepper's refund graph. Read each annotated line twice: once as a <em>toll</em> (what you must type, learn, and maintain), once as a <em>purchase</em> (what it buys). Both readings are true at once — that tension is the scorecard.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">refund_graph.py — every line is both a toll and a purchase</div>
+        <div class="wl-line"><code>from langgraph.graph import StateGraph, START, END</code>
+          <div class="wl-note"><strong>Toll:</strong> a dependency you must pin, upgrade, and trust through its churn. <strong>Buys:</strong> the runtime where checkpointing, resume, and interrupts live.</div></div>
+        <div class="wl-line"><code>from langgraph.checkpoint.memory import InMemorySaver</code>
+          <div class="wl-note">The dev-grade checkpointer. In production you swap in a Postgres, Redis, or SQLite saver from the <code>langgraph-checkpoint-*</code> packages — same interface, real durability.</div></div>
+        <div class="wl-line"><code>from typing import TypedDict</code></div>
+        <div class="wl-line"><code>class RefundState(TypedDict):</code>
+          <div class="wl-note"><strong>Toll:</strong> you must design a state schema up front — the graph mental model and its learning tax start here. <strong>Buys:</strong> every node reads and writes one typed, inspectable object — the object an auditor replays.</div></div>
+        <div class="wl-line"><code>    invoice_id: str</code></div>
+        <div class="wl-line"><code>    amount: float</code></div>
+        <div class="wl-line"><code>    decision: str</code></div>
+        <div class="wl-line"><code>builder = StateGraph(RefundState)</code></div>
+        <div class="wl-line"><code>builder.add_node("verify", verify_invoice)</code>
+          <div class="wl-note">A node is a plain function: state in, updates out. Business logic stays ordinary Python the graph merely calls — the escape hatch that keeps the exit affordable later.</div></div>
+        <div class="wl-line"><code>builder.add_node("compute", compute_refund)</code></div>
+        <div class="wl-line"><code>builder.add_edge(START, "verify")</code>
+          <div class="wl-note"><strong>Toll:</strong> wiring ceremony a twelve-line function never asks of you. <strong>Buys:</strong> the only paths that can execute are the ones written here — explicit control, the compliance answer.</div></div>
+        <div class="wl-line"><code>builder.add_edge("verify", "compute")</code></div>
+        <div class="wl-line"><code>graph = builder.compile(checkpointer=InMemorySaver())</code>
+          <div class="wl-note">The most consequential line. <strong>Toll:</strong> your run history now lives in this checkpointer's storage format — the data lock-in priced below. <strong>Buys:</strong> durable execution, resume, and <code>interrupt()</code> gates, from one argument.</div></div>
+        <div class="wl-line"><code>result = graph.invoke(</code></div>
+        <div class="wl-line"><code>    {"invoice_id": "INV-204", "amount": 18000.0},</code></div>
+        <div class="wl-line"><code>    config={"configurable": {"thread_id": "run-204"}},</code>
+          <div class="wl-note">The <code>thread_id</code> files every checkpoint of this run under one identity — quote it to resume, replay, or fork later. Forgetting it is the classic "why won't my run resume?" bug.</div></div>
+        <div class="wl-line"><code>)</code></div>
+      </div>
+
+      <h2>What it costs you</h2>
+      <p>An honest scorecard now switches sides. Four costs are real, and naming them yourself — before a sceptic does — makes your recommendation credible.</p>
+      <p><strong>The graph mental model.</strong> Your team must learn to think in state machines: nodes that return partial state, reducers that merge it, edges that route it. For a genuinely branchy, resumable workflow this rigour is the point. For a simple linear job it is ceremony — three nodes and five edges to express what a twelve-line function says plainly. Every new teammate pays the same learning tax, and debugging moves into graph-space: checkpoints and traces, not a stack trace through your own loop.</p>
+      <p><strong>Boilerplate.</strong> A state schema, node functions, explicit wiring, a compile step, a checkpointer, thread configuration — the skeleton you just clicked through costs real lines before the first useful behaviour appears. The bars below are illustrative round numbers, not a benchmark, but the shape is honest:</p>
+
+      <div data-bars data-title="Orchestration code to ship the same refund agent" data-unit="lines"
+           data-note="Illustrative round numbers. The extra lines are not waste — they buy resume and approval behaviour — but you pay them on day one, on every workflow, whether or not that workflow needs them.">
+        <div class="bar" data-label="Claude Agent SDK (harness provided)" data-value="40"></div>
+        <div class="bar" data-label="Plain SDK loop (no durability)" data-value="60"></div>
+        <div class="bar" data-label="LangGraph + checkpointer + HITL" data-value="150"></div>
+      </div>
+
+      <p><strong>Framework churn risk.</strong> This ecosystem has form. The way you built a LangChain agent in 2023 — <code>initialize_agent</code> and <code>AgentExecutor</code> — is legacy today; the 1.x line rebuilt agents around <a href="ch054-create-agent.html"><code>create_agent</code></a> and graphs. That migration was a real cost paid by real teams — fair evidence that the APIs you adopt this year may be reshaped again. The mitigation is not denial: pin versions, upgrade deliberately, and keep the framework behind a module boundary you own.</p>
+      <p><strong>Lock-in patterns.</strong> The primitives that make LangGraph powerful are also the ones that only mean something inside it. <code>interrupt()</code>, <code>Command</code>, the state schema, the checkpoint format in your Postgres tables — none of these travel. Migrating away means rewriting the orchestration layer and abandoning or converting stored checkpoints. Two habits keep the exit affordable: write tools as plain framework-agnostic functions (<a href="ch046-tools.html">the tools chapter</a>'s lesson), and keep business logic in ordinary Python that nodes merely call. Then the graph is a thin shell you could re-shell.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The most seductive lock-in is not code — it is data. A year of production checkpoints, thread histories, and replay tooling in one framework's format is a one-way door you walked through without noticing. Decide up front what you would export and how, while the decision is still a two-way door.</p></div>
+
+      <h2>When the alternatives win</h2>
+      <p>A scorecard is only honest if the other columns can win. Three regularly do.</p>
+      <p><strong>Simple cases: the plain SDK loop.</strong> One model, a handful of tools, a job that finishes in one sitting, no resume requirement, no approval gate. You built this agent yourself in <a href="ch045-react-loop-by-hand.html">fifty lines</a>, and for this shape of work those fifty lines — with native <a href="ch035-tool-calling.html">tool calling</a> — are the strongest choice on the board: zero learning tax, zero churn exposure, zero lock-in, every line yours. A surprising fraction of production automations are exactly this shape. (LangChain's <code>create_agent</code> sits one rung up: a prebuilt loop when you want batteries but still no graph.)</p>
+      <p><strong>Claude-native: the Claude Agent SDK.</strong> If your stack is already committed to Claude, the Agent SDK hands you the harness that Claude Code itself runs on — the agentic loop, tool execution, subagents, <a href="ch084-agent-skills.html">skills</a>, permission gating, and context management, pre-hardened by heavy production use. You give up LangGraph's explicit topology and take an opinionated loop instead; recall from <a href="ch072-deep-agents-vs-claude-code.html">the deep-agents comparison</a> that this trade is "the model drives, well-equipped" versus "my graph drives, precisely". When the workload is open-ended knowledge work rather than a fixed business process, the harness usually wins.</p>
+      <p><strong>The Microsoft shop: Agent Framework.</strong> Microsoft's Agent Framework superseded AutoGen and Semantic Kernel as its unified agent story, with both Python and .NET APIs. If your company's identity, deployment, monitoring, and support contracts all live in the Azure estate, operational alignment is a legitimate, weighty criterion — the framework your platform team can secure, observe, and get supported beats a marginally better feature list you would operate alone. That is not fashion; that is total cost of ownership.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Candidate</th><th>Strongest when</th><th>Watch out for</th></tr>
+        <tr><td>Plain SDK loop</td><td>Simple, single-sitting jobs; full ownership; zero dependencies</td><td>You hand-build durability, HITL, and retries the day you need them</td></tr>
+        <tr><td>LangGraph</td><td>Branchy, auditable, resumable workflows; approval gates; long-running state</td><td>Learning tax, boilerplate, churn exposure, checkpoint lock-in</td></tr>
+        <tr><td>Claude Agent SDK</td><td>Claude-native stacks; open-ended agentic work; want a hardened harness now</td><td>Opinionated loop; less explicit topology; single-vendor coupling</td></tr>
+        <tr><td>MS Agent Framework</td><td>Azure/.NET estates; enterprise support and identity alignment matter</td><td>Younger ecosystem; gravity pulls the rest of your stack toward Azure</td></tr>
+      </table></div>
+
+      <h2>Run the scorecard yourself</h2>
+      <p>Here is the whole method as runnable code. The weights describe one imaginary project — a finance workflow with approval gates. Press <strong>Run</strong>, read the recommendation, then re-weight for <em>your</em> real project and see if the answer holds. Watch the sensitivity check do its job at the end.</p>
+
+      <div class="pyrun" data-title="The honest scorecard — edit the weights, press Run">
+<textarea class="py-src" spellcheck="false">
+# 1. Criteria and weights (0 = irrelevant, 5 = critical).
+#    Rule: fix these BEFORE looking at any scores. That is
+#    what keeps the scorecard honest.
+WEIGHTS = {
+    "durable execution": 5,   # must runs survive crashes/deploys?
+    "explicit control":  4,   # must reviewers see the exact flow?
+    "human approval":    4,   # pause for sign-off mid-run?
+    "ecosystem":         3,   # integrations, docs, hiring
+    "simplicity":        2,   # how fast can one person ship it?
+    "low lock-in":       2,   # how cheap is walking away later?
+}
+
+# 2. Scores (0-5). In a real meeting every number here
+#    carries evidence: a spike, a doc, an incident story.
+CANDIDATES = {
+    "Plain SDK loop": {
+        "durable execution": 1, "explicit control": 3,
+        "human approval": 1, "ecosystem": 2,
+        "simplicity": 5, "low lock-in": 5,
+    },
+    "LangGraph": {
+        "durable execution": 5, "explicit control": 5,
+        "human approval": 5, "ecosystem": 5,
+        "simplicity": 2, "low lock-in": 2,
+    },
+    "Claude Agent SDK": {
+        "durable execution": 3, "explicit control": 2,
+        "human approval": 4, "ecosystem": 4,
+        "simplicity": 4, "low lock-in": 2,
+    },
+    "MS Agent Framework": {
+        "durable execution": 4, "explicit control": 4,
+        "human approval": 4, "ecosystem": 4,
+        "simplicity": 3, "low lock-in": 2,
+    },
+}
+
+def rank(weights):
+    totals = {name: sum(weights[c] * s[c] for c in weights)
+              for name, s in CANDIDATES.items()}
+    return sorted(totals.items(), key=lambda kv: -kv[1])
+
+print("Weighted scorecard")
+print("-" * 32)
+ranking = rank(WEIGHTS)
+for name, score in ranking:
+    print(f"{name:&lt;22} {score:&gt;4}")
+
+winner = ranking[0][0]
+print()
+print("Recommendation:", winner)
+
+# 3. Sensitivity check: halve one weight at a time and see
+#    whether the recommendation flips. A robust decision
+#    survives most rows; a fragile one is not a decision yet.
+print()
+print("Sensitivity check (halve one weight at a time):")
+for crit in WEIGHTS:
+    tweaked = dict(WEIGHTS)
+    tweaked[crit] = WEIGHTS[crit] / 2
+    new_winner = rank(tweaked)[0][0]
+    verdict = "stable" if new_winner == winner else "FLIPS -&gt; " + new_winner
+    print(f"  {crit:&lt;18} {verdict}")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Try it: set <code>"durable execution"</code> and <code>"human approval"</code> to 0 and <code>"simplicity"</code> to 5 — the profile of a small one-shot automation — and watch the recommendation change. The scorecard is not pro- or anti-LangGraph. It is pro-requirements — the entire point.</p></div>
+
+      <h2>Arguing the choice in a meeting</h2>
+      <p>Sooner or later you will defend this decision to people who read a different newsletter than you did. Five moves keep the argument on evidence.</p>
+      <p><strong>Open with requirements, never with the tool.</strong> "Runs must survive our Tuesday deploy window and pause for finance sign-off" is an argument; "LangGraph is the industry standard" is weather. If your requirements are thin, say so — that itself argues for the simpler option.</p>
+      <p><strong>Bring a spike, not a slide.</strong> One day spent prototyping the riskiest requirement in your top two candidates produces the only evidence that settles rooms. "Here is interrupt-and-resume actually working; here is what the same thing costs hand-rolled" ends debates that feature tables cannot.</p>
+      <p><strong>Name the costs of your own recommendation first.</strong> Saying "this commits us to a graph mental model, real boilerplate, and a churn-prone ecosystem — and here is why the durability requirement outweighs that" is more persuasive than any advocacy, because it proves you did the comparison rather than the shopping.</p>
+      <p><strong>State the exit cost out loud.</strong> What would migrating away take? Which parts travel (framework-agnostic tools, plain-Python business logic) and which do not (state schemas, checkpoint data)? A decision with a priced exit is a decision; one without is a hope.</p>
+      <p><strong>Classify the door.</strong> A pilot on one workflow is a two-way door — walk through it cheaply and learn. Standardising the org and accumulating a year of checkpoint data is a one-way door — that one deserves the full scorecard, the spike, and the sensitivity check.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>This argument has a home in real repositories: the <dfn>architecture decision record</dfn> — a short markdown file under <code>docs/adr/</code> or <code>docs/decisions/</code>, with sections like Context, Options, Decision, Consequences. When you open one for "orchestration framework", you can now grade it in thirty seconds: are the criteria traced to requirements? Are weights and evidence visible? Is the exit cost priced? The tell of a fashion-driven choice is the phrase "industry standard" appearing where the requirements should be. In merge requests the same debate surfaces as "why pull in this dependency for a three-step script?" — the scorecard question, asked grumpily.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Your workload: multi-step vendor-payment runs that must survive a weekly deploy window and continue where they stopped. Which scorecard column does this requirement light up?</p>
+          <div class="q-opts">
+            <button data-opt="a">Ecosystem — more integrations means more reliability</button>
+            <button data-opt="b">Simplicity — fewer lines means fewer crashes</button>
+            <button data-opt="c">Durable execution — state saved outside the process, resumable after a restart</button>
+          </div>
+          <p class="q-explain">Surviving a process death and resuming mid-run is exactly what checkpointing buys: state is written to a store after every step, so the run outlives the process. This is LangGraph's single strongest column.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. A colleague proposes LangGraph for a single-purpose automation: one model, three tools, finishes in one sitting, no approvals. What does an honest scorecard usually say?</p>
+          <div class="q-opts">
+            <button data-opt="a">LangGraph anyway — standardising on one framework is always worth it</button>
+            <button data-opt="b">A plain SDK loop you own — this workload never uses what the framework charges for</button>
+            <button data-opt="c">Microsoft Agent Framework — enterprise tooling is safest by default</button>
+          </div>
+          <p class="q-explain">The costs (mental model, boilerplate, churn, lock-in) are paid on day one; the wins (durability, HITL, explicit topology) are only collected if the workload needs them. A job with no resume or approval requirement collects nothing — so the fifty-line loop wins.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What separates an honest scorecard from decision theatre?</p>
+          <div class="q-opts">
+            <button data-opt="a">Weights fixed before scoring, evidence behind every score, and a sensitivity check on the winner</button>
+            <button data-opt="b">Having as many criteria as possible</button>
+            <button data-opt="c">Letting the most senior engineer assign the final scores</button>
+          </div>
+          <p class="q-explain">Each rule blocks a specific cheat: pre-fixed weights stop you tuning the maths toward a favourite, evidence stops vibes-as-numbers, and the sensitivity check exposes a winner that only wins under one debatable assumption.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. A sceptic says: "LangChain already rewrote its agent APIs once — AgentExecutor to create_agent. Why trust this ecosystem?" What is the strongest evidence-based reply?</p>
+          <div class="q-opts">
+            <button data-opt="a">That will not happen again — the APIs are stable now</button>
+            <button data-opt="b">Agreed — so we should never adopt any framework</button>
+            <button data-opt="c">The risk is real: we pin versions, wrap the framework behind our own module, and keep tools and business logic framework-agnostic — here is the priced exit</button>
+          </div>
+          <p class="q-explain">Churn risk is legitimate history, so denying it costs you the room, and banning all frameworks is fashion in reverse. The credible answer accepts the risk and shows the mitigation and the exit cost — which is what makes it an engineering decision.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Your company runs everything on Azure with .NET services and Microsoft support contracts. Requirements score a near-tie between LangGraph and Agent Framework. What breaks the tie honestly?</p>
+          <div class="q-opts">
+            <button data-opt="a">GitHub stars — the bigger community wins</button>
+            <button data-opt="b">Operational alignment — identity, deployment, monitoring, and support already fit the Microsoft estate</button>
+            <button data-opt="c">Whichever framework had the most recent release</button>
+          </div>
+          <p class="q-explain">When features tie, total cost of ownership decides. A framework your platform team can secure, observe, and get supported is cheaper to run for years than one you would operate alone — a requirement-shaped argument, not fashion.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>LangGraph's genuine edge is durable, inspectable execution: checkpointed state that survives crashes, resumes across days, pauses for humans, and can be replayed — pay for it when a requirement demands it.</li>
+          <li>The costs are just as genuine: a graph mental model your whole team must learn, day-one boilerplate, a churn-prone ecosystem, and lock-in through state schemas and checkpoint data.</li>
+          <li>The alternatives each own a territory: the plain SDK loop for simple single-sitting jobs, the Claude Agent SDK for Claude-native open-ended work, Microsoft's Agent Framework when Azure alignment dominates total cost.</li>
+          <li>An honest scorecard fixes weights before scoring, attaches evidence to every cell, and stress-tests the winner with a sensitivity check.</li>
+          <li>In the meeting: open with requirements, bring a one-day spike instead of slides, name your recommendation's costs first, and price the exit.</li>
+          <li>Classify the door before committing — pilots are reversible, but a year of production checkpoints in one framework's format is not.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

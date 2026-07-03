@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What makes an agent 'deep' — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch066">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act VIII · Deep Agents</div>
+        <h1>What makes an agent 'deep'</h1>
+        <p class="ch-tagline">Planning, a file system, subagents, and a detailed prompt — four upgrades that turn the fifty-line loop you built in Act V into a worker that stays sharp for hours.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 67 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Your cousin Rohan once volunteered to run his sister's wedding single-handed. No notebook — he was proud of his memory. Guest list, caterer quotes, the florist's number, the priest's availability, which uncle is currently not speaking to which aunt: all of it in his head. Day one went brilliantly. By day ten, every new decision required him to mentally replay everything that had happened so far, and the things that mattered — the venue deposit deadline — were being shouted down by trivia about napkin colours. By week three he had phoned the same caterer twice with the same question and missed the deposit entirely.</p>
+        <p>The professional planner the family hired to rescue him had, measurably, no better memory than Rohan. What she had was a method. A whiteboard with the plan, rewritten every morning. A binder where every quote and contract was filed the moment it arrived — out of her head, retrievable in seconds. Two assistants who each spent days chasing venues and vendors and came back with a one-page shortlist apiece. And a dog-eared company playbook that said exactly how weddings are run here.</p>
+        <p>Same brain. Four habits. That is the entire difference between a shallow agent and a deep one — hold the picture, because this chapter is just naming its parts.</p>
+      </section>
+
+      <h2>Where we stand: one loop, one transcript</h2>
+      <p>Quick recap, because everything here builds on it. In <a href="ch045-react-loop-by-hand.html">Build a ReAct loop by hand</a> you built the atom of all agents: an LLM, a dict of tools, and a loop that alternates think, act, observe until the model declares it is done. Every tool result gets appended to the history, and the <em>entire</em> history is re-sent to the model on every turn — because, as <a href="ch047-memory-and-context.html">the memory chapter</a> hammered home, the model itself remembers nothing between calls. LangChain's <a href="ch054-create-agent.html"><code>create_agent</code></a> packaged that loop with nicer plumbing, and in <a href="ch065-reading-real-code-6.html">the last chapter</a> you read a full LangGraph app and found the same heartbeat drawn as a graph. The loop never changed shape; only the wrapping did.</p>
+      <p>This act calls that style of agent <dfn>shallow</dfn> — a single loop that keeps everything it knows in one ever-growing transcript. Shallow is not an insult. For a task that takes five tool calls — look up the invoice, compute the GST, draft the email — shallow is exactly right, and anything fancier is pure overhead. The trouble begins when the task stops fitting inside one sitting.</p>
+
+      <h2>The long-horizon problem: shallow loops drown</h2>
+      <p>A <dfn>long-horizon task</dfn> is one that needs dozens or hundreds of steps over minutes or hours — "research these five competitors and write a market brief", "migrate this codebase", "plan the wedding". Point a shallow loop at one and watch its context.</p>
+      <p>Every web page fetched, every file read, every command's output lands in the history verbatim, forever. A single search result can be thousands of tokens (<a href="ch030-tokens-embeddings-context.html">tokens and context windows</a>, if you want the refresher), and after forty tool calls the transcript is enormous. Three things now go wrong at once.</p>
+      <p><strong>It gets expensive.</strong> The whole transcript is re-sent on every turn, so the total tokens billed grow far faster than the number of steps — <a href="ch041-tokens-and-cost.html">the meter is always running</a>, and Act VIII has a whole chapter on <a href="ch071-the-token-bill.html">the resulting bill</a>. <strong>It gets dumber.</strong> Even models with huge context windows attend less reliably to a crowded transcript; the goal, stated once at the top, is now buried under a landslide of raw tool output. Practitioners call this decay <dfn>context rot</dfn> — the model still technically <em>has</em> the information but can no longer find and weight what matters. <strong>It fails in familiar ways.</strong> Repeating tool calls it already made, forgetting constraints, drifting off-goal — the greatest hits from <a href="ch048-failure-modes.html">how agents fail</a>, every one of them more likely as the transcript bloats. Rohan, week three, is a shallow loop at turn forty.</p>
+
+      <div data-bars data-title="Main-context size after a 40-tool-call research task" data-unit="tokens (illustrative)"
+           data-note="Round, illustrative numbers — but the shape is real: a shallow transcript grows with every tool result, while a deep agent's main context stays close to flat.">
+        <div class="bar" data-label="Shallow loop" data-value="170000"></div>
+        <div class="bar" data-label="Deep agent, main context" data-value="22000"></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>A bigger context window does not solve this. A million-token window makes the drowning slower and pricier, not smarter. The fix is not a bigger head — it is the whiteboard, the binder, the assistants, and the playbook.</p></div>
+
+      <h2>Four additions, four habits</h2>
+      <p>A <dfn>deep agent</dfn> is the same ReAct loop upgraded with four things that let it work far beyond one comfortable context: <strong>explicit planning</strong>, <strong>a file system</strong>, <strong>subagents</strong>, and <strong>a detailed system prompt</strong>. The name comes from the <code>deepagents</code> library — which the <a href="ch067-create-deep-agent-anatomy.html">next chapter</a> dissects line by line — and the pattern itself was distilled from the applications that made long-running agents real: coding agents like Claude Code, and the Deep Research features in the major chat products. None of the four is exotic. Each one maps to a habit of the wedding planner, and each one exists to keep the main context small and the goal fresh. Flip the cards until the vocabulary feels like yours:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">explicit planning</span><span class="flip-back">The agent writes its own to-do list with a tool and keeps rewriting it — the whiteboard. Each rewrite puts the goal back into recent, high-attention context.</span></button>
+        <button class="flip" type="button"><span class="flip-front">file system</span><span class="flip-back">Tools like write_file and read_file park bulky results outside the transcript — the binder. Context keeps a one-line stub; the full content is retrievable on demand.</span></button>
+        <button class="flip" type="button"><span class="flip-front">subagent</span><span class="flip-back">A fresh agent loop with its own empty history, spawned for one job — the assistant. It burns tokens privately and hands back only a short summary.</span></button>
+        <button class="flip" type="button"><span class="flip-front">context quarantine</span><span class="flip-back">Why subagents work: the mess made while doing a job stays in the subagent's context and dies with it. Only the distilled answer crosses back to the parent.</span></button>
+        <button class="flip" type="button"><span class="flip-front">detailed system prompt</span><span class="flip-back">Thousands of words of standing instructions — the playbook. When to plan, how to use each tool, what good output looks like, what never to do.</span></button>
+        <button class="flip" type="button"><span class="flip-front">context rot</span><span class="flip-back">The quality decay of a huge transcript: the model technically has everything but attends poorly, forgets the goal, and starts repeating itself.</span></button>
+      </div>
+
+      <h2>Pillar one: a plan the agent writes for itself</h2>
+      <p>In <code>deepagents</code> the planning tool is called <code>write_todos</code>, and here is the surprise: mechanically, it barely does anything. It stores a list and replies "ok". No scheduler, no executor, no enforcement — nothing runs because an item is on the list. Its power is attentional. Every time the agent writes or rewrites its to-do list, the current plan lands in the <em>most recent</em> part of the transcript, exactly where the model attends best. Fifty turns in, the goal is not a faint memory from the top of a huge transcript; it was restated twelve messages ago, with item three marked in-progress.</p>
+      <p>You have watched this happen. When Claude Code prints a neat little task list before touching your code and ticks items off as it goes, that display is not for you — or not only for you. It is the agent reciting its plan back into its own context so it cannot lose the thread. A note-to-self that happens to be visible. <a href="ch068-planning-and-todos.html">Chapter 68</a> takes this tool apart properly.</p>
+
+      <h2>Pillar two: a file system to think outside its own head</h2>
+      <p>The second addition gives the agent file tools — in <code>deepagents</code>: <code>ls</code>, <code>read_file</code>, <code>write_file</code>, and <code>edit_file</code>. By default these files are <em>virtual</em>: they live in the agent's state object, not on your disk, so the agent can scribble freely with zero blast radius. (Real-disk and database-backed variants exist; <a href="ch069-virtual-filesystem.html">chapter 69</a> covers the backends.)</p>
+      <p>What matters is the move the tools enable: <dfn>offloading</dfn> — moving bulky information out of the transcript into storage, leaving only a pointer behind. When a search returns fourteen thousand tokens of raw text, a shallow loop swallows it into the history forever. A deep agent writes it to <code>research_notes.md</code>, and the observation that stays in context is one line: <em>"wrote research_notes.md (14,203 chars)"</em>. Nothing is lost — it is filed. Later the agent reads back only the section it needs, only when it needs it. The transcript carries pointers, not payloads, and that single habit is most of why the deep bar in the chart above stays low.</p>
+
+      <h2>Pillar three: subagents — hire help, quarantine the mess</h2>
+      <p>Some jobs are messy no matter how well you file. Researching one competitor might take twenty searches and sixty thousand tokens of reading, and the final useful yield is a paragraph. Do that inside the main loop and the mess of getting there poisons the main context for the rest of the run.</p>
+      <p>So the deep agent gets one more tool — in <code>deepagents</code> it is called <code>task</code> — that spawns a <dfn>subagent</dfn>: a brand-new agent loop with its own empty history, its own tools, and exactly one job. The subagent burns whatever tokens the job takes, privately. When it finishes, every page it read and every dead end it hit is thrown away, and precisely one thing crosses back to the parent: the final summary. That isolation is called <dfn>context quarantine</dfn>, and it is the whole trick — the mess dies with the messenger; the insight survives. As a bonus, several subagents can run in parallel: five competitors, five researchers, one afternoon. You met the multi-agent idea in <a href="ch063-subgraphs-multi-agent.html">subgraphs and multi-agent patterns</a>; the deep-agent version is that same idea put to work purely for context hygiene. <a href="ch070-subagents.html">Chapter 70</a> dissects it.</p>
+
+      <h2>Pillar four: the playbook — a system prompt that reads like a manual</h2>
+      <p>The quietest pillar, and the one people underrate. The toy agents of Act V ran on three lines of system prompt. The agents that work for hours run on <em>thousands of words</em>: what the agent is, how to judge when a task deserves a written plan, worked examples for every tool, how to structure output, what to do when stuck, what never to do. Claude Code's system prompt is famously long for exactly this reason. The other three pillars are just tools sitting in a dict — they create the <em>possibility</em> of deep behaviour. The prompt is what teaches the model to actually plan first, file early, and delegate the messy parts. Hand a novice the whiteboard, the binder, and two assistants, and you get chaos with better furniture. The playbook is what makes it a system.</p>
+
+      <h2>One long task, run deep</h2>
+      <p>Here is an afternoon-length research task with all four pillars working together. Step through it:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Task arrives">
+          <h3>1. A long-horizon task lands</h3>
+          <div class="diagram">
+            <div class="d-box hot">User<small>"Research the market, write a brief"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Agent</div>
+            <div class="d-col">
+              <div class="d-box dim">Plan<small>empty</small></div>
+              <div class="d-box dim">Files<small>empty</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The task cannot possibly finish in a handful of turns. A shallow loop would simply start searching. The deep agent's playbook — its system prompt — says: plan first.</p>
+        </div>
+        <div class="step" data-title="Plan first">
+          <h3>2. The plan goes on the whiteboard</h3>
+          <div class="diagram">
+            <div class="d-box">Agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">write_todos<small>1 research · 2 draft · 3 verify</small></div>
+            <div class="d-col">
+              <div class="d-box good">Plan<small>3 items</small></div>
+              <div class="d-box dim">Files<small>empty</small></div>
+            </div>
+          </div>
+          <p class="step-cap">The planning tool stores the list and says "ok" — nothing executes. But the plan now sits in recent context, and it will be rewritten and re-read all afternoon, keeping the goal fresh.</p>
+        </div>
+        <div class="step" data-title="Delegate the mess">
+          <h3>3. The messy research goes to a subagent</h3>
+          <div class="diagram">
+            <div class="d-box">Agent<small>main context stays clean</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Subagent<small>fresh, empty context</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">20 searches<small>~60k tokens, privately</small></div>
+          </div>
+          <p class="step-cap">The agent calls the task tool. The subagent grinds through searches and dead ends inside its own disposable context; the parent sees none of it. Quarantine in action.</p>
+        </div>
+        <div class="step" data-title="Only the summary returns">
+          <h3>4. One paragraph returns — and goes straight into a file</h3>
+          <div class="diagram">
+            <div class="d-box dim">Subagent<small>context discarded</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Agent<small>receives the summary</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box dim">Plan<small>item 1 done</small></div>
+              <div class="d-box good">Files<small>notes.md</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Sixty thousand tokens of research collapse into a paragraph; the agent files it as notes.md and ticks item one off the plan. The main transcript grew by a few hundred tokens, not sixty thousand.</p>
+        </div>
+        <div class="step" data-title="The rhythm repeats">
+          <h3>5. Consult plan, act or delegate, file, repeat</h3>
+          <div class="diagram">
+            <div class="d-box hot">Plan<small>re-read, rewritten</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Agent<small>drafts from notes.md</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Files<small>brief.md written</small></div>
+          </div>
+          <p class="step-cap">Drafting reads back only what it needs from the files. Each cycle touches the plan, does one focused thing, and files the result — the loop can keep this up for hours.</p>
+        </div>
+        <div class="step" data-title="Hours later">
+          <h3>6. Hours in, still sharp</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box good">Plan<small>all items done</small></div>
+              <div class="d-box good">Files<small>notes.md · brief.md</small></div>
+            </div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Agent<small>final answer</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">User<small>gets the brief</small></div>
+          </div>
+          <p class="step-cap">The main context stayed lean the whole way, so the model stayed smart in it. That — not any new intelligence — is what "deep" buys.</p>
+        </div>
+      </div>
+
+      <h2>Build one in miniature, right now</h2>
+      <p>Below is the fifty-line loop from <a href="ch045-react-loop-by-hand.html">chapter 45</a> with three of the four pillars bolted on: a to-do tool, a virtual file system (a humble dict), and a subagent with its own private history. The fourth pillar — the long system prompt — is played by the scripted <code>fake_llm</code>, which behaves the way a well-briefed model would. Press <strong>Run</strong> and watch the size of the main context after each turn.</p>
+
+      <div class="pyrun" data-title="A miniature deep agent — run me">
+<textarea class="py-src" spellcheck="false">
+# The ch45 ReAct loop, upgraded with three deep-agent pillars:
+# a plan, a virtual file system, and a subagent.
+
+FILES = {}   # pillar 2: the virtual file system (just a dict)
+PLAN = []    # pillar 1: the whiteboard
+
+def write_todos(arg):
+    PLAN[:] = [item.strip() for item in arg.split(";")]
+    return "plan saved: " + " / ".join(PLAN)
+
+def write_file(arg):
+    name, text = arg.split(";", 1)
+    FILES[name.strip()] = text.strip()
+    return f"wrote {name.strip()} ({len(text.strip())} chars)"
+
+def read_file(arg):
+    return FILES.get(arg.strip(), "ERROR: no such file")
+
+def web_search(arg):
+    # a realistically bulky result - far too big for context
+    return "RAW SEARCH DATA " + "row; " * 500
+
+def run_subagent(arg):
+    # pillar 3: a fresh, PRIVATE history - context quarantine
+    private = [f"TASK: {arg}"]
+    private.append("OBSERVATION: " + web_search(arg))
+    private.append("OBSERVATION: " + web_search(arg + " pricing"))
+    summary = ("Four rivals matter; prices fall about 10% a year; "
+               "support quality is the open flank.")
+    burned = sum(len(m) for m in private)
+    print(f"    [subagent burned {burned} chars in private]")
+    return summary   # ONLY this crosses back to the parent
+
+TOOLS = {"write_todos": write_todos, "write_file": write_file,
+         "read_file": read_file, "run_subagent": run_subagent}
+
+# ---- the 'model': scripted, like a well-prompted LLM ----
+SCRIPT = [
+    "THOUGHT: Long task. The plan goes on the whiteboard first.\n"
+    "ACTION: write_todos(research rivals; file findings; write brief)",
+    "THOUGHT: Research would flood my context - delegate it.\n"
+    "ACTION: run_subagent(research the payment-app market)",
+    "THOUGHT: File the findings; keep only a pointer in context.\n"
+    "ACTION: write_file(notes.md; Four rivals. Prices -10%/yr. "
+    "Attack on support quality.)",
+    "THOUGHT: Plan complete, evidence filed in notes.md.\n"
+    "FINAL ANSWER: Brief ready - compete on support, not price.",
+]
+
+def fake_llm(history):
+    step = sum(1 for m in history if m.startswith("THOUGHT"))
+    return SCRIPT[step]
+
+def run_deep_agent(task):
+    history = [f"TASK: {task}"]
+    for turn in range(1, len(SCRIPT) + 1):
+        reply = fake_llm(history)
+        history.append(reply)
+        size = sum(len(m) for m in history)
+        print(f"--- turn {turn} (main context: {size} chars) ---")
+        print(reply)
+        if "FINAL ANSWER:" in reply:
+            return reply.split("FINAL ANSWER:")[1].strip()
+        if "ACTION:" in reply:
+            call = reply.split("ACTION:")[1].strip()
+            name = call.split("(")[0].strip()
+            arg = call[call.index("(") + 1 : call.rindex(")")]
+            obs = "OBSERVATION: " + TOOLS[name](arg)
+            history.append(obs)
+            print(obs)
+
+answer = run_deep_agent("Research the payment-app market; write a brief")
+print()
+print("AGENT RETURNED:", answer)
+print("VIRTUAL FILES:", list(FILES))
+raw = len(web_search("x")) * 2
+print(f"A shallow loop would drag ~{raw} extra chars of raw search")
+print("output through its context on EVERY remaining turn.")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now sabotage it — that is where the learning is. Make the subagent lazy: have <code>run_subagent</code> return the raw <code>web_search</code> output instead of the summary, run it again, and watch the main-context number explode on the next turn. Then delete the <code>write_todos</code> step from the script and notice the run still works — planning changes what the <em>model</em> attends to, and a scripted model has no attention to lose. That difference is exactly why pillar four matters for real models.</p></div>
+
+      <h2>Shallow versus deep, side by side</h2>
+      <div class="tbl"><table>
+        <tr><th>Situation</th><th>Shallow loop</th><th>Deep agent</th></tr>
+        <tr><td>The goal, fifty turns in</td><td>Buried at the top of a huge transcript</td><td>Restated in the freshly rewritten to-do list</td></tr>
+        <tr><td>A 14,000-token search result</td><td>Swallowed into context, re-sent every turn</td><td>Filed to <code>notes.md</code>; a one-line stub stays behind</td></tr>
+        <tr><td>A messy research sub-job</td><td>All twenty searches pollute the main context</td><td>Quarantined in a subagent; one summary returns</td></tr>
+        <tr><td>Knowing <em>when</em> to do all this</td><td>Three-line prompt: "You are a helpful agent"</td><td>A playbook-length system prompt with rules and examples</td></tr>
+        <tr><td>Best at</td><td>Minutes-long tasks, a handful of tool calls</td><td>Hours-long tasks, hundreds of steps</td></tr>
+      </table></div>
+
+      <p>Keep that last row honest in your head: deep is not <em>better</em>, it is <em>longer</em>. For a five-step task, the planning and filing ceremony is pure waste — the "start simple, add complexity only when it earns its keep" rule from <a href="ch049-building-effective-agents.html">building effective agents</a> applies with full force. Reach for depth when the horizon demands it, not because it sounds impressive.</p>
+
+      <h2>You have been supervising deep agents for months</h2>
+      <p>Here is the pleasant twist: none of this is new to you as an <em>operator</em>. When Claude Code opens your request by printing a task list and ticking items off one by one — that is pillar one, a planning tool reciting the plan back into context. When it announces it is sending a subtask off to an agent and returns with a tidy summary of what the explorer found — pillar three, context quarantine, live on your screen. When it writes scratch notes and intermediate files instead of holding everything in the conversation — pillar two. And the reason it behaves this consistently on a million different machines is pillar four, the playbook-length system prompt you never see.</p>
+      <p>Same story with the Deep Research features in the big chat products: you ask one question, the agent visibly writes a plan, fans out to read dozens of sources over several minutes — each fan-out effectively a quarantined sub-task — and comes back with a cited report. That entire product category exists because a shallow loop physically cannot do the job. You have been supervising the four pillars all along; now you can name them. The <a href="ch067-create-deep-agent-anatomy.html">next chapter</a> shows you the code that implements them, and <a href="ch072-deep-agents-vs-claude-code.html">chapter 72</a> closes the circle by comparing the library to the product you use daily.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>In the <code>deepagents</code> library, all four pillars arrive in a single call: <code>from deepagents import create_deep_agent</code> gives you <code>write_todos</code>, the virtual file tools (<code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code>), a <code>task</code> tool for subagents, and a long built-in system prompt. In agent logs, look for a planning-tool call near the start of every long run and <code>task(...)</code> calls wherever the work gets messy. And in merge requests the pillars appear as fixes: "moved report generation into a subagent to keep the main context small", "write scraped pages to files instead of returning them inline", "expanded the system prompt with tool-usage examples". A team writing those sentences is practising <em>context engineering</em> — the discipline this whole act teaches.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Why does a shallow ReAct loop fail on an hours-long task, even with a huge context window?</p>
+          <div class="q-opts">
+            <button data-opt="a">The LLM's weights degrade during long runs</button>
+            <button data-opt="b">Tool APIs enforce a maximum number of calls per session</button>
+            <button data-opt="c">Every tool result stays in the transcript forever, so cost balloons and the model attends poorly to the bloated context</button>
+          </div>
+          <p class="q-explain">The transcript is re-sent on every turn and grows with every tool result — spending balloons and the goal drowns under raw output. A bigger window makes the drowning slower and pricier, not smarter.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Mechanically, what does the <code>write_todos</code> planning tool actually do?</p>
+          <div class="q-opts">
+            <button data-opt="a">It schedules the steps and executes them in order</button>
+            <button data-opt="b">Almost nothing — it stores a list; its value is that each rewrite puts the plan back into recent, high-attention context</button>
+            <button data-opt="c">It splits the task across multiple models automatically</button>
+          </div>
+          <p class="q-explain">There is no executor behind it. The plan is a note-to-self: every rewrite places the current goals in the freshest part of the transcript, exactly where the model attends best.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. A subagent spends 60,000 tokens researching and returns a one-paragraph summary. What happens to the 60,000 tokens of context it built up?</p>
+          <div class="q-opts">
+            <button data-opt="a">They are discarded with the subagent — only the summary crosses back to the parent</button>
+            <button data-opt="b">They are merged into the parent's history for the audit trail</button>
+            <button data-opt="c">They are automatically compressed and kept in the parent's context</button>
+          </div>
+          <p class="q-explain">That disposal is the whole point — context quarantine. The mess of doing the job dies with the subagent's context; the parent pays only for the distilled answer.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. What is the deep agent's file system primarily <em>for</em>?</p>
+          <div class="q-opts">
+            <button data-opt="a">Backing up the agent's work in case the process crashes</button>
+            <button data-opt="b">Letting the user download the agent's results afterwards</button>
+            <button data-opt="c">Offloading bulky intermediate results out of the transcript, leaving a short stub that can be read back on demand</button>
+          </div>
+          <p class="q-explain">Files turn payloads into pointers: a 14,000-token search result becomes a one-line "wrote notes.md" observation, and the agent reads back only the part it needs, when it needs it.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Your task takes five tool calls: fetch an invoice, compute tax, draft an email. Which architecture should you reach for?</p>
+          <div class="q-opts">
+            <button data-opt="a">Deep — planning and files make every agent more reliable</button>
+            <button data-opt="b">Shallow — the four pillars are overhead here; depth pays off only on long horizons</button>
+            <button data-opt="c">Neither — five steps needs a fixed pipeline, never an agent</button>
+          </div>
+          <p class="q-explain">Deep is not better, it is longer. On a five-step task the plan, files, and subagents add cost and latency without preventing any failure — the shallow loop remains exactly the right tool.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A deep agent is the same ReAct loop you built in chapter 45, plus four additions: explicit planning, a file system, subagents, and a detailed system prompt.</li>
+          <li>Shallow loops drown on long-horizon tasks because every tool result lives in the transcript forever — cost balloons and context rot sets in. Bigger windows do not fix it.</li>
+          <li>Planning tools like <code>write_todos</code> execute nothing; rewriting the plan keeps the goal in recent, high-attention context — the whiteboard.</li>
+          <li>File tools turn payloads into pointers: bulky results are filed and read back on demand instead of being re-sent every turn — the binder.</li>
+          <li>Subagents are context quarantine: they burn tokens in a disposable private context and return only a summary — the assistants.</li>
+          <li>The playbook-length system prompt is what makes the model actually use the other three pillars — tools create possibility; the prompt creates behaviour.</li>
+          <li>Depth is for long horizons only. For a five-step task, shallow remains the right answer — and you have been watching all four pillars at work every day in Claude Code and Deep Research.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

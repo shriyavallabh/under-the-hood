@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Just enough git to explore — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch021">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act II · The Engineering Layer</div>
+        <h1>Just enough git to explore</h1>
+        <p class="ch-tagline">Four moves — clone, pull, log, and reading a diff — and every codebase on the internet becomes a place you can walk into, wander around, and read like a story. No fear, nothing breakable, today.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 21 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A senior lawyer keeps the master file for a long-running contract. Every revision that was ever made is in that file — not just the current wording, but every earlier draft, each one stamped with who changed it, when, and a one-line note saying why. Nothing is ever torn out. The current contract is simply the top page; the history underneath is what makes it trustworthy.</p>
+        <p>A new associate joins. She does not borrow the master file — she gets a complete photocopy of it, history and all, to keep on her own desk. Each morning she collects whatever new pages were added overnight. When she wants to understand a clause, she flips back through the register of revisions. And when she wants to know exactly what changed between two drafts, she reads the redline: the old words struck out in red, the new words inked in green.</p>
+        <p>That master file is a <strong>repository</strong>. The photocopy is a <strong>clone</strong>. The morning collection is a <strong>pull</strong>. The register is the <strong>log</strong>. The redline is a <strong>diff</strong>. You already know how to work this way — you just have not met the commands yet.</p>
+      </section>
+
+      <h2>A folder that remembers everything</h2>
+      <p>A <dfn>repository</dfn> (everyone says <em>repo</em>) is a project folder that carries its own complete history — every version of every file, plus a record of who changed what, when, and why. From the outside it looks like any ordinary folder: the same <a href="ch011-imports-and-modules.html">packages and modules</a> and <a href="ch005-yaml-and-json.html">YAML and JSON config files</a> you already know, plus the <code>pyproject.toml</code> from the previous chapter. The history lives in one hidden subfolder called <code>.git</code>, a small database that the <code>git</code> command reads and writes. Delete that hidden folder and you have a plain folder with amnesia; keep it and the folder remembers everything back to day one.</p>
+      <p>History is recorded as a chain of <dfn>commits</dfn> — snapshots of the whole project at a moment in time, each stamped with an author, a date, and a short message explaining the change. A commit is the lawyer's stamped revision page. Pause on the word <em>snapshot</em>, because it flips how newcomers picture version control: git does not store "the changes". It stores whole snapshots, and when you ask "what changed?", it compares two snapshots on the spot. You will prove this with runnable code in a few minutes.</p>
+      <p>One more piece completes the map. Repos live in two kinds of places at once: one shared copy on a hosting service — GitLab, GitHub, and friends — called the <dfn>remote</dfn> (the master file in the senior lawyer's office), and any number of full personal copies on people's machines. Yours will be one of them. They stay in sync only through explicit commands — which is what makes git feel safe once you see it: nothing moves unless someone asks.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>This chapter is deliberately a visitor's pass, not a driving licence. Today you learn the moves that let you <em>read</em> any project: clone, pull, log, diff, plus one compass command called status. Making your own commits, pushing, branching, merge requests, and the whole GitLab workflow get their own full act — Act XII. You do not need any of that to explore, and exploring is the skill this act runs on.</p></div>
+
+      <h2>Six words that unlock every repository</h2>
+      <p>Flip each card until the back of it feels obvious. These six terms carry the whole chapter — and most conversations you will ever have near a codebase.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">repository</span><span class="flip-back">A project folder that carries its complete history in a hidden .git database. Looks like a normal folder; remembers like an archive.</span></button>
+        <button class="flip" type="button"><span class="flip-front">commit</span><span class="flip-back">One stamped snapshot of the whole project: author, date, a short "why" message, and a unique fingerprint. The unit history is made of.</span></button>
+        <button class="flip" type="button"><span class="flip-front">remote</span><span class="flip-back">The shared reference copy of the repo, hosted on a service like GitLab or GitHub. Everyone's personal copies sync with it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">clone</span><span class="flip-back">Your own full copy of a repo — current files AND the entire history. Made once per project with git clone.</span></button>
+        <button class="flip" type="button"><span class="flip-front">pull</span><span class="flip-back">Fetch whatever new commits landed on the remote since you last looked, and update your copy to match. The morning page collection.</span></button>
+        <button class="flip" type="button"><span class="flip-front">diff</span><span class="flip-back">The computed difference between two snapshots, shown line by line: removed lines in red with a minus, added lines in green with a plus.</span></button>
+      </div>
+
+      <h2>Move one: clone — take your own full copy</h2>
+      <p><dfn>Cloning</dfn> means downloading a complete copy of a repository — every file <em>and every commit ever made</em> — into a new folder on your machine. One command, run once per project:</p>
+
+      <div class="code-title">terminal</div>
+      <pre><code class="language-bash">$ git clone https://gitlab.com/acme-tools/invoice-agent.git
+Cloning into 'invoice-agent'...
+remote: Enumerating objects: 1284, done.
+Receiving objects: 100% (1284/1284), 2.1 MiB, done.
+
+$ cd invoice-agent
+$ ls
+README.md   pyproject.toml   src/   tests/</code></pre>
+
+      <p>Notice what you did not need: permission, an account on the project, or any understanding of its internals. If a repo is public — and an enormous amount of the AI tooling you operate daily is — cloning takes you from "I saw it on the internet" to "it is on my laptop and I can open every file". The frameworks of later acts, LangChain and LangGraph included, are all just repos you can clone and read.</p>
+      <p>Two things about a clone surprise people pleasantly. It is <em>complete</em>: you hold the full history offline, so log and diff work on a train with no network. And it is <em>yours</em>: a copy, not a borrowed original. Open files, run the code, scribble experiments — the remote does not feel a thing. The worst case in this entire chapter is deleting your clone folder and cloning again. That is the whole blast radius.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Where do you find the URL? Every GitLab or GitHub project page has a button labelled <strong>Code</strong> or <strong>Clone</strong> that shows a copyable HTTPS address ending in <code>.git</code>. Copy, paste after <code>git clone</code>, done. This is also the same address <code>pip</code> can install from directly — the package world of the previous chapter and the repo world of this one are two views of the same folder.</p></div>
+
+      <h2>The compass: status — where am I, is my copy clean?</h2>
+      <p>Before and between the other moves, one command tells you where you stand. <code>git status</code> answers three questions: which line of history am I on (you will usually see <code>main</code> — think "the master file", formally a <em>branch</em>, a word Act XII unpacks properly), have I edited anything locally, and has my copy drifted behind the remote?</p>
+
+      <div class="code-title">terminal</div>
+      <pre><code class="language-bash">$ git status
+On branch main
+Your branch is up to date with 'origin/main'.
+
+nothing to commit, working tree clean</code></pre>
+
+      <p>"Working tree clean" means <em>your copy exactly matches the last snapshot — no local edits lying around</em>. That sentence is your green light. Status never changes anything; it only reports. Run it habitually — before a pull, after an experiment, in any unfamiliar folder — and you will never be surprised.</p>
+
+      <h2>Move two: pull — collect the new pages</h2>
+      <p>Your clone was perfect the moment you made it, and started going stale the moment after. Teammates (or an open-source community, or an AI coding agent) keep adding commits to the remote. <dfn>Pulling</dfn> downloads those new commits and updates your files to match — the associate collecting the overnight pages. Watch the whole rhythm:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Cloned and current">
+          <h3>1. Right after cloning, all copies match</h3>
+          <div class="diagram">
+            <div class="d-box">Remote on GitLab<small>commits 1 to 47</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Your clone<small>commits 1 to 47</small></div>
+            <div class="d-box dim">Teammate's clone<small>commits 1 to 47</small></div>
+          </div>
+          <p class="step-cap">Three complete, independent copies of the same history. Nothing syncs on its own — each copy changes only when its owner runs a command.</p>
+        </div>
+        <div class="step" data-title="The remote moves on">
+          <h3>2. A teammate publishes commit 48</h3>
+          <div class="diagram">
+            <div class="d-box hot">Remote on GitLab<small>commits 1 to 48</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box dim">Your clone<small>still 1 to 47</small></div>
+            <div class="d-box">Teammate's clone<small>commits 1 to 48</small></div>
+          </div>
+          <p class="step-cap">The teammate pushes their new commit to the remote (pushing is their move, from Act XII). Your clone is now one commit behind — and completely unaware of it.</p>
+        </div>
+        <div class="step" data-title="You pull">
+          <h3>3. You run git pull</h3>
+          <div class="diagram">
+            <div class="d-box">Remote on GitLab<small>commits 1 to 48</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Your clone<small>downloading commit 48</small></div>
+          </div>
+          <p class="step-cap">Git asks the remote "anything new since commit 47?", downloads commit 48, and updates the files in your folder to the newest snapshot.</p>
+        </div>
+        <div class="step" data-title="Current again">
+          <h3>4. Up to date — until next time</h3>
+          <div class="diagram">
+            <div class="d-box good">Remote on GitLab<small>commits 1 to 48</small></div>
+            <div class="d-box good">Your clone<small>commits 1 to 48</small></div>
+          </div>
+          <p class="step-cap">Your copy matches the reference again. Clone once, pull often: that is the entire maintenance routine of a reader.</p>
+        </div>
+      </div>
+
+      <div class="code-title">terminal</div>
+      <pre><code class="language-bash">$ git pull
+Updating 9b2d1e4..4f2a9c1
+Fast-forward
+ config.yaml | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)</code></pre>
+
+      <p>Read that output like a receipt: git moved you from one snapshot fingerprint to a newer one, one file changed, two lines added, one removed. Even the summary speaks in pluses and minuses — the redline language you are about to learn properly.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Of the moves in this chapter, <code>git pull</code> is the only one that rewrites files in your folder — which is exactly its job. It is entirely safe when <code>git status</code> says "working tree clean". If you have scribbled local edits, git will refuse to trample them and print a warning instead of guessing. If that ever happens, nothing is broken: your edits are intact, git simply paused. Handling that gracefully is an Act XII skill; today, the rule of thumb is status first, then pull.</p></div>
+
+      <h2>Move three: log — read the story backwards</h2>
+      <p>The <dfn>log</dfn> is the register of commits, newest first. It is the most underrated command in this chapter, because it answers the question every operator actually has when something changes behaviour overnight: <em>what happened here recently?</em></p>
+
+      <div class="code-title">terminal</div>
+      <pre><code class="language-bash">$ git log --oneline -5
+4f2a9c1 (HEAD -&gt; main) Raise the LLM timeout and add retries
+9b2d1e4 Fix crash when the invoice has no line items
+c37b8a0 Set a calmer default temperature
+a1f9d33 Add the agent config file
+8e04b71 Initial project skeleton</code></pre>
+
+      <p>Each line is one commit: a short version of its unique fingerprint (the <em>hash</em> — a 40-character ID computed from the snapshot's contents, usually shown as its first seven characters), then the author's one-line message. The <code>-5</code> limits it to the latest five; plain <code>git log</code> gives the full view with authors and dates, one screenful at a time (press <code>q</code> to leave it — the number-one "am I stuck?" moment for newcomers, and now you are immune). <code>HEAD -&gt; main</code> marks the snapshot your folder currently shows.</p>
+      <p>A well-kept log reads like a project diary, and teams that write good commit messages are handing you free documentation. When you wonder why a config value is what it is, the log often answers before any human does: someone changed it, on a date, and wrote down why. That history-first curiosity is the most professional-looking move a code reader can make.</p>
+
+      <h2>Move four: reading a diff — red and green</h2>
+      <p>Now the payoff. A <dfn>diff</dfn> is the redline between two snapshots: line by line, what was removed and what was added. Removed lines start with <code>-</code> (shown red in every tool); added lines start with <code>+</code> (shown green). A <em>changed</em> line appears as a pair — old version removed, new version added — because git thinks in whole lines, not edits within them.</p>
+      <p>You will meet diffs in three places: <code>git diff</code> (your local edits, if any), <code>git show &lt;hash&gt;</code> (what one commit changed), and — most often — in a code-review screen, because a GitLab merge request is essentially a diff with a comment thread attached. The skill is identical everywhere. Here is the commit from the top of our log. Click each line to unfold its meaning:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">git show 4f2a9c1 — one commit, printed as a diff</div>
+        <div class="wl-line"><code>commit 4f2a9c1e8b03d7f2a41c96d5e0b8a7c3d2f1e0a9</code>
+          <div class="wl-note">The commit's full fingerprint. Computed from the snapshot's contents, so it is globally unique — quote the first seven characters (4f2a9c1) in a chat message and a teammate can look at exactly the same change.</div></div>
+        <div class="wl-line"><code>Author: Priya Nair &lt;priya@example.com&gt;</code>
+          <div class="wl-note">Who made it. Git records this on every commit — accountability is built into the data itself, not bolted on by the hosting site.</div></div>
+        <div class="wl-line"><code>Date:   Tue Mar 3 09:14:22 2026 +0530</code>
+          <div class="wl-note">When. Together with the author line, this is why git log can answer "what happened here last Tuesday" years later.</div></div>
+        <div class="wl-line"><code>    Raise the LLM timeout and add retries</code>
+          <div class="wl-note">The commit message — the author's one-line "why". Everything below shows WHAT changed; this line is the only place that says what it was FOR.</div></div>
+        <div class="wl-line"><code>diff --git a/config.yaml b/config.yaml</code>
+          <div class="wl-note">The change touches one file: config.yaml. By convention "a/" is the before version and "b/" is the after. A commit touching many files repeats this whole block per file.</div></div>
+        <div class="wl-line"><code>--- a/config.yaml</code>
+          <div class="wl-note">Minus signs label the BEFORE side. Any line prefixed with a single "-" below belongs to this older snapshot.</div></div>
+        <div class="wl-line"><code>+++ b/config.yaml</code>
+          <div class="wl-note">Plus signs label the AFTER side. Any "+" line below is new. Red/minus = old, green/plus = new — the entire colour code in one sentence.</div></div>
+        <div class="wl-line"><code>@@ -4,7 +4,8 @@ agent:</code>
+          <div class="wl-note">A hunk header — it locates this excerpt inside the file. Decoded: in the old file this excerpt starts at line 4 and spans 7 lines; in the new file it starts at line 4 and spans 8 (one line longer, because one was added). You never need to compute these; just read them as "we are near line 4".</div></div>
+        <div class="wl-line"><code>   model: claude-sonnet</code>
+          <div class="wl-note">No + or -, just a space: a context line. Unchanged, shown only so you can see where you are. Diffs include a few of these around every change for orientation.</div></div>
+        <div class="wl-line"><code>-  timeout_seconds: 30</code>
+          <div class="wl-note">Red: this line existed before and is gone after. Paired with the + line below it, this is git's way of saying the value CHANGED from 30...</div></div>
+        <div class="wl-line"><code>+  timeout_seconds: 90</code>
+          <div class="wl-note">...to 90. A changed line always shows as this remove-and-add pair. Reading the pair together — "timeout went from 30 to 90" — is the core skill of diff literacy.</div></div>
+        <div class="wl-line"><code>+  retries: 2</code>
+          <div class="wl-note">Green with no red partner: a genuinely new line. The agent's config gained a retries setting that never existed before.</div></div>
+        <div class="wl-line"><code>   temperature: 0.2</code>
+          <div class="wl-note">Another context line closing the excerpt. Total story of this commit, read fluently: "timeout raised 30 to 90, retries: 2 added, nothing else touched." You just reviewed a change.</div></div>
+      </div>
+
+      <p>That is all a diff is. Once the minus/plus pairing clicks, you can skim a colleague's change — or an AI coding agent's proposed change, which arrives in exactly this format — and say what it does in one sentence. That sentence is the beginning of code review.</p>
+
+      <h2>Prove it in Python: git stores snapshots, computes diffs</h2>
+      <p>Earlier I claimed git does not store the red and green lines anywhere — it stores whole snapshots and computes the diff the moment you ask. Python's standard library ships the same comparison machinery in a module called <code>difflib</code>, so you can watch the trick happen: a toy three-commit repository built from plain data structures, a hand-rolled <code>log</code>, and a diff computed live between the last two snapshots. Press <strong>Run</strong>, then try the experiments in the comments.</p>
+
+      <div class="pyrun" data-title="A toy git: snapshots in, log and diff out">
+<textarea class="py-src" spellcheck="false">
+# A toy repository. Each commit = (id, message, FULL snapshot).
+# Note: no diffs stored anywhere -- only whole file contents.
+import difflib
+
+repo = [
+    ("a1f9d33", "Add the agent config file",
+     "agent:\n  model: claude-sonnet\n  timeout_seconds: 30\n"),
+    ("c37b8a0", "Set a calmer default temperature",
+     "agent:\n  model: claude-sonnet\n  timeout_seconds: 30\n"
+     "  temperature: 0.2\n"),
+    ("4f2a9c1", "Raise the LLM timeout and add retries",
+     "agent:\n  model: claude-sonnet\n  timeout_seconds: 90\n"
+     "  retries: 2\n  temperature: 0.2\n"),
+]
+
+print("$ git log --oneline")
+for commit_id, message, _ in reversed(repo):
+    print(f"{commit_id}  {message}")
+
+print()
+print("$ git show 4f2a9c1   (diff computed NOW, from two snapshots)")
+before = repo[-2][2].splitlines()
+after  = repo[-1][2].splitlines()
+for line in difflib.unified_diff(before, after,
+        fromfile="a/config.yaml", tofile="b/config.yaml",
+        lineterm=""):
+    print(line)
+
+# Try it yourself:
+# 1. Add a fourth commit tuple that changes the model name,
+#    then diff repo[-2] vs repo[-1] again.
+# 2. Diff the FIRST two commits instead (repo[0] vs repo[1]).
+# 3. Make a snapshot identical to the previous one -- what
+#    does the diff print when nothing changed?
+</textarea>
+      </div>
+
+      <p>Compare the output with the walkthrough above: same <code>---</code>/<code>+++</code> labels, same <code>@@</code> hunk header, same minus/plus lines. That is not imitation — unified diff is a standard format, and git, difflib, and GitLab's review screen all speak it. You have now produced a diff by hand, which means no diff will ever again look like machine noise.</p>
+
+      <h2>What you do not need yet</h2>
+      <p>Everything today flowed one way: from the remote, to you, to your eyes. That is deliberate. The writing half of git — making commits, pushing, branching so parallel work does not collide, merge requests, the etiquette of shared history — is a genuinely bigger topic, and it gets the space it deserves in <strong>Act XII, the full git and GitLab story</strong>, where you run the whole contributor loop yourself with the GitLab screens walked through element by element.</p>
+      <p>Until then, your safety card is short: clone copies, status and log and diff only read, and pull updates a clean copy safely. Nothing in this chapter can damage a shared project — you hold a photocopy, and the master file is in another office entirely. So explore greedily. Clone the framework you operate. Read its log over coffee. Open a commit that mentions something you recognise and read the redline. The codebases you depend on stop being weather and become geography: fixed, mapped, walkable.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>These four moves are ambient in every engineering conversation. "Clone the repo and poke around" is the standard onboarding sentence — now a ten-second task. "Did you pull?" is the first question when your copy behaves differently from a teammate's. "Check the log" is how people answer "when did this break?", and <code>git status</code> is the first command a senior engineer types in any unfamiliar folder — a glance at the dashboard before driving. Above all: every GitLab merge request you will ever be asked to look at, including the ones AI coding agents open, is presented as a diff — red and green, exactly as you read it here. "Have a look at the diff" is now an invitation, not a test.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. You run <code>git clone</code> on a public framework repo. What lands on your machine?</p>
+          <div class="q-opts">
+            <button data-opt="a">The current files only — history stays on the server</button>
+            <button data-opt="b">A read-only window into the remote that needs a connection</button>
+            <button data-opt="c">A complete independent copy: current files plus the entire commit history</button>
+          </div>
+          <p class="q-explain">A clone is the associate's full photocopy — every file and every commit ever made, stored locally in the hidden .git database. That is why log and diff keep working with no network at all.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. In a diff, what does this pair of lines tell you?<br><code>-  timeout_seconds: 30</code><br><code>+  timeout_seconds: 90</code></p>
+          <div class="q-opts">
+            <button data-opt="a">Two different files disagree about the timeout</button>
+            <button data-opt="b">One line changed: the timeout used to be 30 and is now 90</button>
+            <button data-opt="c">Both lines were added, in that order</button>
+          </div>
+          <p class="q-explain">Git thinks in whole lines, so a changed line shows as a remove-and-add pair: red minus is the before, green plus is the after. Reading the pair as one edit — "30 became 90" — is the heart of diff literacy.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Your clone is a week old and a teammate says the config changed yesterday. Which command brings your copy up to date?</p>
+          <div class="q-opts">
+            <button data-opt="a">git pull</button>
+            <button data-opt="b">git status</button>
+            <button data-opt="c">git log</button>
+          </div>
+          <p class="q-explain">Pull downloads the new commits from the remote and updates your files to the latest snapshot. Status only reports where you stand, and log only lists the history you already have — neither fetches anything new.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Which of this chapter's commands could damage the shared project on the remote?</p>
+          <div class="q-opts">
+            <button data-opt="a">git log, if the history is very long</button>
+            <button data-opt="b">git clone, because it copies so much</button>
+            <button data-opt="c">None of them — they read from the remote or update your own copy; nothing here writes to it</button>
+          </div>
+          <p class="q-explain">Clone, status, log, and diff are read-only; pull changes only your local folder, and refuses rather than trample local edits. Commands that write to the shared remote — commit, push, merge — arrive with full training in Act XII.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. A config value looks strange and you want to know why it was set that way. What is the history-first move?</p>
+          <div class="q-opts">
+            <button data-opt="a">Delete the value and see what breaks</button>
+            <button data-opt="b">Check the log for the commit that touched it, then read that commit's message and diff</button>
+            <button data-opt="c">Re-clone the repository to get a fresh copy</button>
+          </div>
+          <p class="q-explain">The log tells you who changed it, when, and — via the commit message — why; git show on that commit gives you the exact redline. Someone already wrote the answer down at the moment they made the change.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A repository is a folder that remembers everything: current files plus the full chain of commits — stamped snapshots with an author, a date, and a "why" message — kept in a hidden .git database.</li>
+          <li>Clone once, pull often: <code>git clone</code> gives you a complete independent copy of any repo, and <code>git pull</code> collects whatever new commits landed on the remote since.</li>
+          <li><code>git status</code> is your compass — run it before pulling and in any unfamiliar folder; "working tree clean" is the green light.</li>
+          <li><code>git log --oneline</code> reads the project's diary newest-first, and is usually the fastest answer to "what changed recently and why".</li>
+          <li>A diff is a computed redline between two snapshots: minus/red lines are the before, plus/green lines are the after, and a changed line always appears as a remove-and-add pair.</li>
+          <li>Nothing in this chapter can harm a shared project — these are a reader's moves. Writing history (commit, push, branch, merge requests, the GitLab workflow) is Act XII's full story.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

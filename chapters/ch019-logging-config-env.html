@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logging, config, and env vars — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch019">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act II · The Engineering Layer</div>
+        <h1>Logging, config, and env vars</h1>
+        <p class="ch-tagline">The unglamorous plumbing that fills half of every real merge request — loggers instead of print, settings that layer neatly, and secrets that appear in code only by name, never by value.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 19 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A hotel chain opens a new branch. Head office ships every branch the same operations manual — breakfast at seven, checkout at eleven. Each branch keeps a local addendum binder on top of it: <em>our</em> breakfast starts at six thirty, because the airport crowd leaves early. And on any given morning, the duty manager can trump both with a note taped to the front desk: <em>pool closed today</em>. Three layers. The closer a rule sits to today, the more it wins.</p>
+        <p>Behind that desk sits the logbook. Every entry gets a timestamp, the writer's name, and a severity — routine note, guest complaint, fire alarm. Nobody rips out pages, and when something goes wrong at 2 a.m., the logbook is the only witness that was actually there.</p>
+        <p>And the safe? Its combination appears nowhere in any manual. The manual says only: <em>"the combination is in the sealed envelope held by the duty manager."</em> A reference by name — never the number itself.</p>
+        <p>That hotel is every production Python service you have ever operated. This chapter is the logbook, the three layers of rules, and the sealed envelope.</p>
+      </section>
+
+      <h2>Why print() doesn't survive the night shift</h2>
+      <p><code>print()</code> writes text to the screen, and that is its whole feature — plenty for a script at your desk, but a service running unattended needs more, and print fails it four ways at once. A print line carries no timestamp, so you cannot tell whether it happened at 2 a.m. or 2 p.m. It carries no severity, so a routine "loaded 3 invoices" looks exactly as urgent as "payment gateway unreachable". It carries no origin, so you cannot tell which of your forty modules said it. And it cannot be turned down: the only way to silence a noisy print is to edit the code and redeploy.</p>
+      <p>The <dfn>logging module</dfn> — Python's built-in logbook — fixes all four. Every message you log gets a timestamp, a severity level, and the name of the module that wrote it, and how much of it actually appears is decided by <em>configuration</em>, not code. That last part is the superpower: when your agent misbehaves in production, you flip one setting from <code>INFO</code> to <code>DEBUG</code>, the logs turn verbose, you find the bug, and you flip it back. No redeploy.</p>
+      <p>Severity comes in five standard levels. Flip each card until they feel obvious — you will read these words in log files for the rest of your career:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">DEBUG</span><span class="flip-back">Forensic detail for developers — raw payloads, intermediate values. Off in production by default; switched on when hunting a bug.</span></button>
+        <button class="flip" type="button"><span class="flip-front">INFO</span><span class="flip-back">Normal life, narrated. "Invoice INV-042 loaded." Confirms the system is doing what it should.</span></button>
+        <button class="flip" type="button"><span class="flip-front">WARNING</span><span class="flip-back">Something odd but survivable — a fallback was used, a retry happened. The system carried on. Worth a glance, not a phone call.</span></button>
+        <button class="flip" type="button"><span class="flip-front">ERROR</span><span class="flip-back">An operation actually failed. A request was lost, a file could not be written. Someone should look today.</span></button>
+        <button class="flip" type="button"><span class="flip-front">CRITICAL</span><span class="flip-back">The building is on fire — the whole service may be going down. Rare, and usually wired to wake a human up.</span></button>
+        <button class="flip" type="button"><span class="flip-front">logger</span><span class="flip-back">A named channel you write messages into — one per module, by convention. The configuration decides which channels, at which levels, actually reach the output.</span></button>
+      </div>
+
+      <p>The levels are a threshold, not a menu. When a program is configured at <code>INFO</code>, it shows everything at INFO <em>and above</em> — INFO, WARNING, ERROR, CRITICAL — and hides DEBUG. Configure at <code>WARNING</code> and INFO disappears too. One dial, and the noise level of the whole system moves together.</p>
+
+      <h2>Three lines to a real logger</h2>
+      <p>Using the logging module properly takes exactly two habits. First, at the top of every module, create that module's named logger:</p>
+
+      <div class="code-title">any module in the project</div>
+      <pre><code class="language-python">import logging
+
+log = logging.getLogger(__name__)</code></pre>
+
+      <p><code>getLogger(name)</code> returns the logger with that name, creating it the first time. Passing <code>__name__</code> — the module's own dotted path, like <code>invoice_bot.gst</code> — means every message is automatically stamped with where it came from, and configuration can later target one module ("turn <em>only</em> the GST module up to DEBUG") because logger names form a hierarchy along the dots.</p>
+      <p>Second, <em>once</em>, at the program's entry point, configure what happens to all those messages. The simplest tool is <dfn>basicConfig</dfn> — a one-call setup that picks the minimum level and the line format:</p>
+
+      <div class="code-title">main.py — the one place configuration happens</div>
+      <pre><code class="language-python">import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s - %(message)s",
+)</code></pre>
+
+      <p>There is a classic trap hiding here, and it produces the single most-asked logging question on the internet: <em>"why does my logging.info show nothing?"</em> If nobody calls <code>basicConfig</code>, the default threshold is WARNING — so INFO and DEBUG messages are silently dropped. The program is fine; the dial was just left at its factory position.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The etiquette that keeps large codebases sane: <em>applications</em> configure logging, <em>libraries</em> never do. A library just calls <code>getLogger(__name__)</code> and writes messages; whoever runs the final program decides the level, format, and destination. If a library called <code>basicConfig</code> itself, it would be a houseguest rearranging your furniture.</p></div>
+
+      <p>Enough theory — run it. The "model" here is your eyes: watch which lines survive the INFO threshold, then change <code>logging.INFO</code> to <code>logging.DEBUG</code> and run again.</p>
+
+      <div class="pyrun" data-title="A logger in action — run me, then change the level">
+<textarea class="py-src" spellcheck="false">
+import logging, sys
+
+# One-time setup, at the program's entrance.
+# (force=True lets you re-run this cell with a new level;
+#  stream=sys.stdout just makes output visible on this page.)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s - %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
+
+# In every module: a named logger.
+log = logging.getLogger("invoice_bot.gst")
+
+log.debug("raw payload: {'invoice': 'INV-042', 'items': 3}")
+log.info("invoice INV-042 loaded, 3 line items")
+log.warning("GST number missing on line 2 - using registry lookup")
+log.error("registry lookup failed after 3 retries")
+
+print()
+print("Notice: the DEBUG line never appeared.")
+print("Change level=logging.INFO to logging.DEBUG and run again.")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Try two more experiments. Set the level to <code>logging.ERROR</code> and watch three of the four lines vanish. Then change the format string — delete <code>%(asctime)s</code>, or add <code>%(lineno)d</code> to stamp each message with its line number. The messages in the code never changed; only configuration did. That separation is the whole point.</p></div>
+
+      <h2>Reading a log line like a local</h2>
+      <p>Half of operating any production system is reading its logs under pressure. Here is a realistic five-line excerpt from an agent service. Click each line — every one has a story:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">app.log — ninety seconds in the life of a production agent</div>
+        <div class="wl-line"><code>2026-07-02 09:14:03,118 INFO     invoice_bot.api - request received: summarise INV-042</code>
+          <div class="wl-note">Anatomy, left to right: timestamp (the comma introduces milliseconds — 118 of them), level, logger name, message. The name <code>invoice_bot.api</code> tells you which module spoke without opening any code. This line is the system saying "all normal".</div></div>
+        <div class="wl-line"><code>2026-07-02 09:14:03,904 INFO     invoice_bot.llm - model call 1 finished in 0.78s, 812 tokens</code>
+          <div class="wl-note">Good INFO messages carry numbers you will want later — durations, counts, token totals. When someone asks "did the agent get slower this week?", lines like this one are the evidence.</div></div>
+        <div class="wl-line"><code>2026-07-02 09:14:04,101 WARNING  invoice_bot.gst - GST number missing on line 2 - using registry lookup</code>
+          <div class="wl-note">A WARNING means the code hit something odd and <em>handled it</em> — here, a fallback path. Nothing failed yet. But when an ERROR appears seconds later, the preceding WARNINGs are usually the trail of breadcrumbs that explains it.</div></div>
+        <div class="wl-line"><code>2026-07-02 09:14:09,566 ERROR    invoice_bot.gst - registry lookup failed after 3 retries</code>
+          <div class="wl-note">The fallback itself failed — an operation was actually lost. Note the five-second gap in the timestamps: that is the three retries happening. You just diagnosed a timing problem from timestamps alone. This is what "reading logs" means.</div></div>
+        <div class="wl-line"><code>Traceback (most recent call last):</code>
+          <div class="wl-note">When code logs an exception with <code>log.exception("...")</code>, the full traceback — the same one you learned to read in earlier chapters — is written into the log below the message. Multi-line entries like this almost always mark the exact spot the incident report will quote.</div></div>
+        <div class="wl-line"><code>ConnectionError: registry.gst.gov.in timed out</code></div>
+      </div>
+
+      <h2>Config: where a setting's value really comes from</h2>
+      <p>Now the second half of the plumbing. Every real service has knobs — which model to call, how long to wait, how loud to log. The amateur move is to write those values straight into the code; then every change is a code change. Real projects instead resolve each setting through <em>layers</em>, exactly like the hotel: manual, binder, sticky note. In software the layers are, from weakest to strongest: <strong>defaults in code &lt; a settings file &lt; environment variables</strong>. Step through one setting — <code>log_level</code> — finding its value:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Code default">
+          <h3>1. The default, written in code</h3>
+          <div class="diagram">
+            <div class="d-box hot">Code default<small>log_level = "INFO"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">settings.yaml</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Environment</div>
+          </div>
+          <p class="step-cap">The head-office manual. Every setting gets a sensible default in code so the program can start with no configuration at all. If nothing overrides it, INFO it is.</p>
+        </div>
+        <div class="step" data-title="Settings file">
+          <h3>2. The settings file gets a say</h3>
+          <div class="diagram">
+            <div class="d-box dim">Code default<small>"INFO"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">settings.yaml<small>log_level: "WARNING"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Environment</div>
+          </div>
+          <p class="step-cap">The branch binder. A YAML or TOML file checked into the project (formats from the <a href="ch005-yaml-and-json.html">YAML and JSON chapter</a>) overrides the default — this deployment wants quieter logs. File beats code.</p>
+        </div>
+        <div class="step" data-title="Environment variable">
+          <h3>3. The environment gets the last word</h3>
+          <div class="diagram">
+            <div class="d-box dim">Code default<small>"INFO"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">settings.yaml<small>"WARNING"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Environment<small>APP_LOG_LEVEL=DEBUG</small></div>
+          </div>
+          <p class="step-cap">The sticky note on the desk. An environment variable set on this one machine, for this one run — an engineer is debugging a live incident and cranked the logs up. Environment beats file beats code.</p>
+        </div>
+        <div class="step" data-title="Resolved">
+          <h3>4. Resolved: DEBUG wins</h3>
+          <div class="diagram">
+            <div class="d-box good">log_level = "DEBUG"<small>source: environment variable</small></div>
+          </div>
+          <p class="step-cap">Why this order? Distance. The default was written months ago for everyone; the file was written for this deployment; the env var was set minutes ago, on this exact machine, by the person standing closest to the problem. The nearest layer wins — and when the incident ends, deleting the variable restores everything, with zero code changed.</p>
+        </div>
+      </div>
+
+      <p>So what is an <dfn>environment variable</dfn>? It is a named piece of text that the operating system hands to a program at launch — settings that live <em>outside</em> the program, attached to the machine or the session instead. Python exposes them as <code>os.environ</code>, which behaves like a dictionary (the same key-lookup you know from the <a href="ch004-collections.html">collections chapter</a>):</p>
+
+      <div class="code-title">reading the environment</div>
+      <pre><code class="language-python">import os
+
+os.environ["HOME"]                        # KeyError if missing
+os.environ.get("APP_LOG_LEVEL", "INFO")   # default if missing — usually what you want</code></pre>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>Environment variables are <em>always strings</em>. <code>TIMEOUT=30</code> arrives as the text <code>"30"</code>, not the number 30, and <code>DEBUG=false</code> arrives as <code>"false"</code> — which, being a non-empty string, counts as <em>true</em> in an <code>if</code> test. Whole outages have been caused by that one. Hold the thought; the fix is two sections away.</p></div>
+
+      <h2>The .env file: environment variables you can keep</h2>
+      <p>Typing environment variables into a terminal works, but they evaporate when the window closes. So development settled on a convention: a plain-text file named <dfn>.env</dfn> in the project folder, one <code>NAME=value</code> per line, which is loaded into the environment when the program starts. It is the sticky note that survives a restart:</p>
+
+      <div class="code-title">.env — local development only, and ALWAYS in .gitignore</div>
+      <pre><code class="language-bash"># Settings for my machine
+APP_LOG_LEVEL=DEBUG
+DATABASE_URL=postgresql://localhost:5432/invoices
+
+# Secrets — values exist ONLY here, never in code
+OPENAI_API_KEY=sk-...my-real-key...</code></pre>
+
+      <p>The most popular loader is the small <code>python-dotenv</code> package: call <code>load_dotenv()</code> at startup and every line lands in <code>os.environ</code>. Under the hood it simply opens the file with the same <a href="ch018-context-managers.html"><code>with</code> block</a> you met last chapter and parses each line — and it has one thoughtful default: it will <em>not</em> overwrite a variable the real environment already set. The layering survives: real environment beats <code>.env</code> beats everything below.</p>
+      <p>Two rituals travel with every <code>.env</code> file. First, it is listed in <code>.gitignore</code>, always, because it contains secrets. Second, the project commits a sibling called <code>.env.example</code> containing only the <em>names</em> with the values blanked out — so a new teammate knows which envelopes to fill, without ever seeing what was inside yours.</p>
+      <p>Now feel the layering with your own hands. This program resolves three settings through all three layers — change any layer and watch the winners change:</p>
+
+      <div class="pyrun" data-title="The three layers, resolved — run me">
+<textarea class="py-src" spellcheck="false">
+import os
+
+# Layer 1 - defaults written in code (weakest)
+DEFAULTS = {"log_level": "INFO", "model": "small-1", "timeout_s": "30"}
+
+# Layer 2 - pretend we parsed this from settings.yaml
+SETTINGS_FILE = {"log_level": "WARNING", "model": "large-2"}
+
+# Layer 3 - the environment (strongest). A .env loader or an
+# ops engineer would normally set this; we set it directly here.
+os.environ["APP_LOG_LEVEL"] = "DEBUG"
+
+def resolve(key):
+    env_name = "APP_" + key.upper()
+    if env_name in os.environ:
+        return os.environ[env_name], "environment (" + env_name + ")"
+    if key in SETTINGS_FILE:
+        return SETTINGS_FILE[key], "settings file"
+    return DEFAULTS[key], "code default"
+
+print(f"{'setting':<12}{'value':<12}won by")
+print("-" * 44)
+for key in DEFAULTS:
+    value, source = resolve(key)
+    print(f"{key:<12}{value:<12}{source}")
+
+# Try: delete the os.environ line -- log_level falls back to the
+# file's WARNING. Delete it from SETTINGS_FILE too -- back to INFO.
+# Set os.environ["APP_TIMEOUT_S"] = "5" and watch timeout_s flip.
+</textarea>
+      </div>
+
+      <h2>pydantic-settings: the layering, with a seatbelt</h2>
+      <p>Writing that <code>resolve()</code> function by hand was good for the soul, but nobody does it in production, because a library already does it better. In the <a href="ch016-type-hints-and-pydantic.html">type hints and Pydantic chapter</a> you met Pydantic — the library that checks data against declared types the moment it arrives. Its sibling package, <dfn>pydantic-settings</dfn>, applies the same idea to configuration: you declare your settings as a typed class, and it fills the values in from the layers — field defaults, then a <code>.env</code> file, then real environment variables, strongest last — <em>and validates every one of them</em>. Click through the file; this exact shape appears in thousands of repositories:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">settings.py — the whole configuration story in one class</div>
+        <div class="wl-line"><code>from pydantic_settings import BaseSettings, SettingsConfigDict</code>
+          <div class="wl-note">A separate package (<code>pydantic-settings</code>) built on Pydantic. <code>BaseSettings</code> is the class that knows how to read the environment; you inherit from it, just like the models in the Pydantic chapter.</div></div>
+        <div class="wl-line"><code>class Settings(BaseSettings):</code>
+          <div class="wl-note">One class, usually in one file, is the single source of truth for every knob the service has. When a reviewer wants to know "what can we configure?", they open this file and nothing else.</div></div>
+        <div class="wl-line"><code>    model_config = SettingsConfigDict(env_file=".env")</code>
+          <div class="wl-note">Wires in the <code>.env</code> file so local development just works. Real environment variables still win over the file's values — the layering you just built by hand, preserved.</div></div>
+        <div class="wl-line"><code>    app_name: str = "invoice-bot"</code>
+          <div class="wl-note">A default in code — the weakest layer. Runs fine with no configuration at all.</div></div>
+        <div class="wl-line"><code>    log_level: str = "INFO"</code>
+          <div class="wl-note">Set the environment variable <code>LOG_LEVEL=DEBUG</code> (matching is case-insensitive by default) and this field silently becomes <code>"DEBUG"</code>. Nobody edits code to change the volume.</div></div>
+        <div class="wl-line"><code>    timeout_s: int = 30</code>
+          <div class="wl-note">The seatbelt. The environment can only supply strings, but the type hint says <code>int</code> — so pydantic-settings converts <code>"30"</code> to 30 for you, and if someone sets <code>TIMEOUT_S=banana</code>, the program refuses to start with a clear error. The stringly-typed trap from the warning above: solved.</div></div>
+        <div class="wl-line"><code>    openai_api_key: str</code>
+          <div class="wl-note">No default — this field is <em>required</em>, so it MUST come from the environment or the <code>.env</code> file. And look at what is in the repo: only the NAME. The value exists solely in the environment. This one line is the sealed-envelope rule, enforced by a type checker.</div></div>
+        <div class="wl-line"><code></code></div>
+        <div class="wl-line"><code>settings = Settings()</code>
+          <div class="wl-note">Constructing the class is the moment all layers get read, merged, converted, and validated. If anything required is missing or malformed, the crash happens HERE — at startup, loudly — not three hours into a run when the key is first used. Engineers call this failing fast, and it is a kindness to your future self.</div></div>
+      </div>
+
+      <h2>Secrets: named, never spelled</h2>
+      <p>One rule in this chapter is absolute. A <dfn>secret</dfn> — an API key, a database password, a token — appears in code and config files <em>by name only</em>. The code says <code>os.environ["OPENAI_API_KEY"]</code> or declares <code>openai_api_key: str</code>; the actual value is injected from outside — a gitignored <code>.env</code> on a laptop, the deployment platform's secret store or a vault in production. The manual names the envelope; the manual never contains the combination.</p>
+      <p>Why so strict? Because code travels — committed, pushed, forked, pasted into tickets, reviewed by people who should never hold production keys. And git makes it worse: even after you delete the line, the key lives on in the repository's history, retrievable by anyone with a checkout. Automated bots scan public repositories around the clock and can find a freshly pushed key within minutes. The only real remedy for a committed secret is to <em>rotate</em> it — revoke the old key, issue a new one — not to delete the line and hope.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>This gives you a reviewer's reflex you can apply today, before you write much Python: scan any diff for strings that look like credentials — <code>sk-</code>, <code>token</code>, <code>password</code>, long random-looking text in quotes. If a value is present rather than a name, that is a change-request comment, every single time, no matter how senior the author.</p></div>
+
+      <h2>Half the lines of every merge request</h2>
+      <p>Here is the payoff for operators. Open almost any merge request in an enterprise Python repository and count what the diff actually contains. The headline logic is maybe a third of it. The rest is this chapter: <code>log = logging.getLogger(__name__)</code> at the top of a new file, <code>log.info(...)</code> lines narrating each step, a <code>log.warning(...)</code> on the fallback path, a new field on the <code>Settings</code> class, a matching name appended to <code>.env.example</code>, and a review thread saying "please add logging around the retry" or "move that URL into settings". None of it is glamorous. All of it is what makes the feature operable at 2 a.m. by someone who did not write it.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will now recognise this plumbing everywhere. Every framework you operate emits through the same named loggers — LangChain, FastAPI, and friends — which is why one <code>basicConfig</code> level change makes a whole agent stack chattier. Deployment platforms have a screen literally titled "Environment variables" — that is <code>os.environ</code> being filled in; CI pipelines have "secrets" or masked variables — the sealed envelopes. And when a colleague says "it works locally but not in staging", the first professional question is the one this chapter taught you: <em>what is different in the environment?</em> Nine times out of ten, a missing variable or a wrong layer is the whole bug.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. A program calls <code>logging.basicConfig(level=logging.WARNING)</code>. Which messages will appear in the output?</p>
+          <div class="q-opts">
+            <button data-opt="a">Only WARNING messages, exactly</button>
+            <button data-opt="b">Everything — all five levels</button>
+            <button data-opt="c">WARNING, ERROR, and CRITICAL — the level is a threshold, and everything below it is hidden</button>
+          </div>
+          <p class="q-explain">The level is a floor, not a filter for one severity: whatever you set, that level and everything more severe gets through, while DEBUG and INFO are dropped. This is also why an unconfigured program (default threshold WARNING) mysteriously "loses" all its <code>log.info</code> messages.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. The code defaults <code>log_level</code> to <code>"INFO"</code>, <code>settings.yaml</code> says <code>WARNING</code>, and the machine has <code>APP_LOG_LEVEL=DEBUG</code> set. What does the running program use, and why?</p>
+          <div class="q-opts">
+            <button data-opt="a">WARNING — files are more official than environment variables</button>
+            <button data-opt="b">DEBUG — the environment is the nearest layer to this machine and this run, so it wins</button>
+            <button data-opt="c">INFO — code always has the final say</button>
+          </div>
+          <p class="q-explain">The layering is defaults &lt; file &lt; environment, and the nearest layer wins because it was set most recently, most specifically, by the person closest to the problem — and can be removed again without touching code or files.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. A teammate's diff adds the line <code>api_key = "sk-live-8f3a..."</code> to a Python file. What is the correct fix?</p>
+          <div class="q-opts">
+            <button data-opt="a">Move the key into settings.yaml so it is at least out of the code</button>
+            <button data-opt="b">Keep only the NAME in code (an env var or a required Settings field), inject the value from the environment — and rotate this key, since it has now been in the diff</button>
+            <button data-opt="c">Add a comment above it warning people not to share the file</button>
+          </div>
+          <p class="q-explain">Secrets appear in code by name only; values live in the environment, a gitignored .env, or a secret store. And because the value already appeared in a commit, deleting the line is not enough — git history remembers, so the key must be rotated.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. Why does every module start with <code>log = logging.getLogger(__name__)</code> instead of just using <code>print</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">Each message is stamped with time, severity, and which module wrote it — and configuration can silence or amplify modules individually, with no code change</button>
+            <button data-opt="b">print is slower than logging</button>
+            <button data-opt="c">print only works when a human is watching the terminal</button>
+          </div>
+          <p class="q-explain">The named logger is what buys filtering, formatting, levels, and per-module control from the outside. Speed is not the issue — operability is: at 2 a.m. you want to turn one module up to DEBUG through configuration, not edit and redeploy code.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. The environment sets <code>TIMEOUT_S=30</code>. What does plain <code>os.environ["TIMEOUT_S"]</code> hand your program, and what does the pydantic-settings field <code>timeout_s: int</code> hand it?</p>
+          <div class="q-opts">
+            <button data-opt="a">Both give the number 30 — the OS knows it is numeric</button>
+            <button data-opt="b">Both give the text "30" — nothing can convert it safely</button>
+            <button data-opt="c">os.environ gives the text "30"; pydantic-settings converts it to the number 30 because the type hint says int — and refuses to start if the value is not a valid number</button>
+          </div>
+          <p class="q-explain">Environment variables are always strings. pydantic-settings uses your declared types to convert and validate them at startup, so a malformed value crashes loudly at launch instead of misbehaving quietly at runtime.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>print is for scripts; logging is for systems. Every logged message carries a timestamp, a severity level, and the name of the module that wrote it — and how much appears is decided by configuration, not code edits.</li>
+          <li>The two habits: <code>log = logging.getLogger(__name__)</code> at the top of every module, one <code>basicConfig</code> (level + format) at the application's entry point. Libraries write messages; only applications configure. Unconfigured, the default threshold is WARNING — INFO and DEBUG vanish.</li>
+          <li>Settings resolve through layers — defaults in code &lt; settings file &lt; environment variables — and the layer nearest to the running machine wins, so behaviour can change per deployment or per incident without touching code.</li>
+          <li><code>os.environ</code> is a dict-like view of the environment, and every value in it is a string; a gitignored <code>.env</code> file (plus a committed <code>.env.example</code> of names only) makes local environments repeatable.</li>
+          <li>pydantic-settings turns the whole story into one typed <code>Settings</code> class: layers merged, strings converted to real types, required fields enforced — and any problem crashes the program at startup, loudly, instead of at 2 a.m., quietly.</li>
+          <li>Secrets appear in code by NAME only; values are injected from the environment or a secret store. A secret that ever touches git history is compromised — rotate it.</li>
+          <li>This plumbing is half the lines of every real merge request. You can now read that half fluently — next stop, where the packages themselves come from: <a href="ch020-environments-and-packaging.html">environments, pip, and pyproject.toml</a>.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

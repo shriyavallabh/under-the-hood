@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fine-tuning: when to train, when to just prompt — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch117">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act III · The Data Scientist's World</div>
+        <h1>Fine-tuning: when to train, when to just prompt</h1>
+        <p class="ch-tagline">Epochs, learning rates, LoRA, VRAM budgets — what a training run really involves, and an honest ladder for deciding when changing the model itself is worth it. (Spoiler: less often than people hope.)</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 33 of 117</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>The wedding is three weeks away, and the suit in your cupboard is not right for it. Your options cost wildly different amounts. Cheapest: wear it differently — a crisper shirt, a pocket square, clear instructions to yourself in the mirror. Next: carry photos of the exact look you want and copy it. Next: check the invitation on the morning itself, since the dress-code note keeps changing. Last resort: a tailor, recutting the cloth itself.</p>
+        <p>The tailor is brilliant but blunt. How many fitting sessions? Too few and nothing changes; too many and she pins the suit so tightly to the body you had on one particular Tuesday that it fails after one good lunch. How much to take in per fitting? Big alterations risk ruining the garment; timid ones need endless sessions. And once recut, she warns, this is a <em>different suit</em>. Keep the original safe.</p>
+        <p>That tailor is fine-tuning. The fittings are epochs, the alteration size is the learning rate, the over-pinned suit is overfitting — and everything you considered first is prompting, few-shot examples, and RAG. This chapter is about when to visit the tailor. Usually: not yet.</p>
+      </section>
+
+      <h2>Changing what it wears vs changing the cloth</h2>
+      <p>Quick recap, because everything here stands on earlier chapters. In <a href="ch024-what-is-a-model.html">chapter 24</a> you learned that a model is a file full of numbers called weights, plus a bit of code that uses them. In <a href="ch029-transformers-plainly.html">chapter 29</a> you saw where those numbers live: stacked transformer layers, billions of little dials that decide what the model says next. And you have just come from <a href="ch032-model-landscape.html">the model landscape</a>, where you met the cast, hosted and open. The key fact for today: when you prompt a model, <em>none of those numbers move</em>. Not one.</p>
+      <p>Instructions, examples in the prompt, retrieved documents — all of it changes only the <em>input</em>; the model stays frozen, the same file on the same disk. <dfn>Fine-tuning</dfn> is the one move that is different: you continue the model's training, briefly, on your own examples, so the weights themselves shift. In wardrobe terms: prompting chooses what to wear; fine-tuning recuts the cloth. One is reversible in seconds. The other produces a genuinely new garment — with all the power and risk that implies.</p>
+      <p>The mechanics are the training machinery from <a href="ch027-ds-vocabulary.html">chapter 27</a> — show examples, measure the error, nudge the weights downhill, repeat — just started from a finished model instead of from random numbers, and run briefly on a small dataset. Nothing mystical. Which is why the interesting question is not <em>how</em> (a script does that) but <em>when it is worth it</em>.</p>
+
+      <h2>The decision ladder: fine-tuning comes last</h2>
+      <p>Teams reach for fine-tuning early because it <em>sounds</em> serious — "we trained our own model" plays better in a meeting than "we wrote a better prompt". The professional move is a ladder: each rung cheaper and more reversible than the one above, climbed only when the current rung has demonstrably failed. Walk it with a worked example — an assistant drafting replies to insurance customers.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Rung 1: prompt">
+          <h3>Rung 1 — Say what you want (prompt engineering)</h3>
+          <div class="diagram">
+            <div class="d-box hot">Prompt<small>instructions</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Few-shot<small>examples</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">RAG<small>retrieved facts</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Fine-tune<small>new weights</small></div>
+          </div>
+          <p class="step-cap">The drafts are too chatty and keep promising settlement dates. Fix: write it down. "Reply in formal English, under 120 words, never commit to a timeline." Cost: one afternoon. Undo: delete a sentence. A shocking fraction of "we need to fine-tune" requests die right here.</p>
+        </div>
+        <div class="step" data-title="Rung 2: few-shot">
+          <h3>Rung 2 — Show what you want (few-shot examples)</h3>
+          <div class="diagram">
+            <div class="d-box good">Prompt</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Few-shot<small>3 gold replies pasted in</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">RAG</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Fine-tune</div>
+          </div>
+          <p class="step-cap">The tone is right now, but the format drifts — bullets one day, paragraphs the next. Instructions describe; examples <em>demonstrate</em>. Paste three gold-standard replies into the prompt and the model — a world-class imitator — locks onto the pattern. Cost: an hour of choosing your best three.</p>
+        </div>
+        <div class="step" data-title="Rung 3: RAG">
+          <h3>Rung 3 — Hand it the facts (RAG)</h3>
+          <div class="diagram">
+            <div class="d-box good">Prompt</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Few-shot</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">RAG<small>policy clause fetched at question time</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Fine-tune</div>
+          </div>
+          <p class="step-cap">Style is solved, but the assistant misquotes the refund policy — forty pages, revised quarterly. Retrieval-augmented generation (<a href="ch042-rag.html">chapter 42</a>) fetches the relevant clause at question time, quote-able and citable. Update the documents, and the assistant is current the same minute.</p>
+        </div>
+        <div class="step" data-title="Rung 4: fine-tune">
+          <h3>Rung 4 — Change the model (fine-tune)</h3>
+          <div class="diagram">
+            <div class="d-box good">Prompt</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Few-shot</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">RAG</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Fine-tune<small>bake the style into a small model</small></div>
+          </div>
+          <p class="step-cap">Everything works — but the prompt is now six thousand tokens of house rules, sent with fifty thousand emails a day on a large rented model. Now fine-tuning earns its keep: train a small open model on two thousand gold replies, bake the style into the weights, shrink the prompt to two lines. Cheaper, faster, consistent.</p>
+        </div>
+        <div class="step" data-title="The rule">
+          <h3>The rule of the ladder</h3>
+          <div class="diagram">
+            <div class="d-box">Cheap, reversible<small>rungs 1-3: change the inputs</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Expensive, sticky<small>rung 4: change the model</small></div>
+          </div>
+          <p class="step-cap">Climb a rung only with evidence — failing examples, not vibes — that the rung below cannot do the job. Most enterprise problems end happily at rungs 1 to 3. Fine-tuning is not the advanced option; it is the <em>last</em> option.</p>
+        </div>
+      </div>
+
+      <h2>When fine-tuning wins — and when it loses</h2>
+      <p>The ladder gives the order; this table gives the destinations. Fine-tuning is superb at teaching a model <em>how to behave</em> and unreliable at teaching it <em>what is true</em>. Behaviour lives comfortably in weights. Facts live badly there — un-updatable without another run, un-citable, and easily blurred.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Fine-tuning wins</th><th>Fine-tuning loses</th></tr>
+        <tr><td>A consistent voice, tone, and format on every output</td><td>Injecting fresh knowledge — RAG beats it, citations included</td></tr>
+        <tr><td>Domain vocabulary and phrasing (clinical notes, legal drafting, industry jargon)</td><td>Fast-changing facts — would you retrain every Monday?</td></tr>
+        <tr><td>Specialising a small model for one narrow job, cutting cost and latency</td><td>Tiny datasets — a few dozen examples get memorised, not learned</td></tr>
+        <tr><td>Replacing pages of prompt instructions you pay for on every call</td><td>Anything needing a source or audit trail — weights cannot cite</td></tr>
+        <tr><td>Strict output shapes (always-valid JSON, fixed report sections)</td><td>Most enterprise cases, honestly — the ladder ends earlier</td></tr>
+      </table></div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>The most common fine-tuning mistake: treating it as a knowledge upload. "We will fine-tune on our product catalogue so it knows our products." It will not <em>know</em> them — it will absorb their flavour, misremember specifics, and be stale at the first price change. Catalogues, policies, and rate sheets belong in <a href="ch042-rag.html">retrieval</a>. Fine-tune for the <em>voice</em> of your answers; retrieve the <em>facts</em>.</p></div>
+
+      <h2>The vocabulary of a training run</h2>
+      <p>Suppose the ladder genuinely says rung 4. A small set of words now appears on every training dashboard, each mapping straight back to the tailor's shop.</p>
+      <p>An <dfn>epoch</dfn> is one full pass over your training dataset — one complete fitting session. LLM fine-tunes typically run just 1 to 5; you are adjusting a finished suit, not weaving cloth. The <dfn>batch size</dfn> is how many examples the model sees before making one weight adjustment — measurements per pinning. And the <dfn>learning rate</dfn> is the size of each adjustment: too high overshoots and can ruin the garment outright; too low crawls through a thousand fittings to move a hem. It is the most temperamental number in the affair.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">epoch</span><span class="flip-back">One complete pass over the training dataset. LLM fine-tunes usually run 1-5. More epochs is not more learning — past a point it is memorisation.</span></button>
+        <button class="flip" type="button"><span class="flip-front">batch size</span><span class="flip-back">How many examples are averaged into each weight update. Bigger: steadier, more memory. Smaller: noisier, cheaper.</span></button>
+        <button class="flip" type="button"><span class="flip-front">learning rate</span><span class="flip-back">The step size of each weight nudge. Too high overshoots and the loss explodes; too low crawls and never arrives.</span></button>
+        <button class="flip" type="button"><span class="flip-front">training loss</span><span class="flip-back">The error score on the examples being trained on. Falls steadily — and alone proves nothing.</span></button>
+        <button class="flip" type="button"><span class="flip-front">validation loss</span><span class="flip-back">The error on held-out examples never trained on. The honest number: when it stops falling, learning has stopped.</span></button>
+        <button class="flip" type="button"><span class="flip-front">early stopping</span><span class="flip-back">Keep the checkpoint from the epoch where validation loss was best; discard everything after. Stop at the bottom of the curve.</span></button>
+      </div>
+
+      <p>The two loss curves are where beginners get fooled. <dfn>Training loss</dfn> is the model's error on the examples it is learning from; <dfn>validation loss</dfn> is its error on a held-out set it never sees during training. Training loss falls more or less forever — the model is rewarded for fitting exactly those examples. The validation curve is the honest one: it falls while the model learns the genuine pattern, bottoms out, then <em>turns upward</em> as the model starts memorising quirks — noise, typos, one annotator's pet phrasing — none of which generalise.</p>
+      <p>You met this villain in <a href="ch027-ds-vocabulary.html">chapter 27</a>: overfitting, the suit pinned so tightly to one Tuesday's body that it fits nothing else. The epoch-flavoured lesson: <strong>more epochs is not more learning.</strong> Past the bottom of the validation curve, every extra epoch makes the model worse at its real job while the dashboard cheerfully reports progress. The standard defence is <dfn>early stopping</dfn> — keep the checkpoint from the epoch where validation loss was lowest and throw the rest away.</p>
+
+      <h2>Watch overfitting happen, epoch by epoch</h2>
+      <p>Reading about the two curves is one thing; watching them cross is another. Below is a complete training loop in miniature. The "model" is a tiny polynomial with ten adjustable knobs; the truth hiding in the data is a straight line plus random noise. Ten knobs for eight training points is far more capacity than the truth requires — exactly the situation of a billion-weight model and your two thousand examples. Press <strong>Run</strong> and read the two columns.</p>
+
+      <div class="pyrun" data-title="A training run that goes too long — run me">
+<textarea class="py-src" spellcheck="false">
+# Watch a model overfit, epoch by epoch ----------------------
+# The "model": a tiny polynomial with 10 knobs (weights).
+# The honest pattern in the data is a simple straight line;
+# everything else in the points is random noise.
+import random
+
+rng = random.Random(21)
+
+def make_point(x):                    # true signal + noise
+    return (x, 0.8 * x + rng.gauss(0, 0.25))
+
+train = [make_point(-1 + i * 2 / 7) for i in range(8)]
+val   = [make_point(-0.9 + i * 1.8 / 7) for i in range(8)]  # held out
+
+DEGREE = 9      # 10 knobs for only 8 examples: plenty of room to memorise
+LR     = 0.005  # learning rate: how big each adjustment is
+
+# scale each power of x so every knob learns at the same speed
+scale = [(sum((x ** j) ** 2 for x, _ in train) / 8) ** 0.5 or 1.0
+         for j in range(DEGREE + 1)]
+w = [0.0] * (DEGREE + 1)              # all knobs start at zero
+
+def predict(x):
+    return sum(w[j] * x ** j / scale[j] for j in range(len(w)))
+
+def loss(data):
+    return sum((predict(x) - y) ** 2 for x, y in data) / len(data)
+
+def one_epoch():                      # one full pass over the training set
+    g = [0.0] * len(w)
+    for x, y in train:
+        err = predict(x) - y
+        for j in range(len(w)):
+            g[j] += 2 * err * (x ** j / scale[j]) / len(train)
+    for j in range(len(w)):
+        w[j] -= LR * g[j]             # nudge every knob a little
+
+best_val, best_epoch = 1e9, 0
+print("epoch   train     val")
+for epoch in range(1, 3001):
+    one_epoch()
+    if any(abs(k) &gt; 1e30 for k in w):   # runaway training
+        print(f"{epoch:&gt;5}  loss exploded -- the learning rate is too high:")
+        print("       every step overshot and bounced further away. Lower LR.")
+        best_epoch = 0
+        break
+    if epoch == 1 or epoch % 150 == 0:
+        t, v = loss(train), loss(val)
+        note = ""
+        if v &lt; best_val:
+            best_val, best_epoch = v, epoch
+        else:
+            note = "   &lt;- val rising: memorising now"
+        print(f"{epoch:&gt;5}  {t:8.4f}  {v:8.4f}  {'#' * min(int(v * 150), 60)}{note}")
+
+print()
+if best_epoch == 0:
+    print("No usable model was trained on this run.")
+elif best_epoch &lt; 3000:
+    print(f"Train loss fell the whole time. Validation was best at epoch")
+    print(f"{best_epoch} -- early stopping should have frozen the model there.")
+    print(f"Every epoch after {best_epoch} bought memorisation, not learning.")
+else:
+    print("Train loss fell, and validation never turned upward: this model")
+    print("is too small to memorise the noise. Capacity and epochs conspire")
+    print("together to cause overfitting.")
+</textarea>
+      </div>
+
+      <p>Look at what happened. The train column fell the entire run — pure good news, says the dashboard. The val column told the truth: it bottomed out around epoch 450 and then climbed, print after print, as the ten knobs bent the curve through every noisy point. In a real fine-tune, every rupee of compute after epoch 450 made the model <em>worse</em>.</p>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Now break it, both ways. Set <code>DEGREE = 2</code>: a three-knob model is too small to memorise the noise, and validation never turns upward — overfitting needs both capacity <em>and</em> excess epochs. Restore <code>DEGREE = 9</code> and set <code>LR = 0.5</code>: the loss explodes within a few dozen epochs — "learning rate too high" on a real dashboard looks just like this. Then try <code>LR = 0.0001</code> and watch it crawl.</p></div>
+
+      <h2>Full fine-tuning, LoRA, and QLoRA</h2>
+      <p>So far, "fine-tuning" has meant unlocking every weight — billions of dials adjustable at once. That is <dfn>full fine-tuning</dfn>: the most powerful and by far the most expensive version, recutting every seam of the suit. In practice, most teams do something cleverer.</p>
+      <p><dfn>LoRA</dfn> (Low-Rank Adaptation) freezes the entire base model and clips small trainable adapter layers alongside it — detachable, custom-tailored panels snapped onto an off-the-rack suit. Only the adapters train, and they are tiny: typically well under one percent of the model's size, megabytes on disk. For the style-format-vocabulary jobs where fine-tuning wins anyway, results are usually close to full fine-tuning. And because the base never changed, you can un-clip the adapter to get the original back instantly — or keep one adapter per client and swap at load time.</p>
+      <p><dfn>QLoRA</dfn> is the same trick with one more squeeze: the frozen base is first <dfn>quantised</dfn> — its weights compressed to lower-precision numbers (typically 4-bit), roughly a quarter of the memory — while the little adapters train in comfortable precision. A sliver of quality traded for a huge drop in hardware. It is why "fine-tune an open model on the workstation under the desk" is now a sentence people say without laughing.</p>
+
+      <h2>The memory bill: VRAM budgets</h2>
+      <p>Why does anyone need LoRA at all? Memory. <dfn>VRAM</dfn> is the memory on a graphics card — the fast, scarce, expensive kind — and training eats far more of it than running. To merely <em>run</em> a model you hold its weights. To <em>train</em> it you also hold, for every unlocked weight, a gradient (which way to nudge it) and the optimiser's bookkeeping (running averages that steady the nudges), plus working memory for the examples flowing through. For full fine-tuning, a fair rule of thumb is 8-10 times the raw weight bytes.</p>
+      <p>Concretely, for a ~7-8B open model whose weights alone are roughly 14-16 GB at standard precision — and these are honest rules of thumb, not gospel:</p>
+
+      <div data-bars data-title="Rule-of-thumb VRAM to fine-tune a ~7-8B open model" data-unit="GB"
+           data-note="Illustrative midpoints of honest ranges: full fine-tune ~60-80 GB, LoRA ~16-24 GB, QLoRA ~8-12 GB. Your mileage will vary with sequence length, batch size and optimiser.">
+        <div class="bar" data-label="Full fine-tune (weights + gradients + optimiser)" data-value="70"></div>
+        <div class="bar" data-label="LoRA (frozen base + small adapters)" data-value="20"></div>
+        <div class="bar" data-label="QLoRA (quantised base + adapters)" data-value="10"></div>
+      </div>
+
+      <p>Read the bars as hardware classes. Full fine-tuning at ~60-80 GB is multi-GPU territory — a rented cluster and a budget conversation. LoRA at ~16-24 GB fits one serious workstation card. QLoRA at ~8-12 GB fits a high-end gaming GPU. That single chart is why parameter-efficient methods took over the world.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>There is a fourth bar with no hardware at all: <em>hosted fine-tuning</em>. The big API providers let you upload a dataset file, pick epochs and a learning-rate multiplier, and train on their GPUs; you get back a new model name to call. The hardware problem vanishes. The price is lock-in: the tuned weights live inside the provider — you cannot download them, self-host them, or take them to a competitor. Recall the open-versus-closed split from <a href="ch032-model-landscape.html">the model landscape</a>.</p></div>
+
+      <h2>The dataset is the product</h2>
+      <p>Everything above is machinery. What determines whether your fine-tune works is the dataset, because fine-tuning has one behaviour: <em>the model becomes its training data</em>. The standard format is instruction/response pairs — an input, and exactly the output you want — one JSON object per line in a JSONL file:</p>
+
+      <div class="code-title">train.jsonl — two of your two thousand examples</div>
+      <pre><code class="language-json">{"messages": [{"role": "user", "content": "Customer writes: I was charged twice for my March premium."}, {"role": "assistant", "content": "Dear customer, thank you for flagging this. We have raised a review of the duplicate debit against your policy (ref: PL-88231) and will confirm the outcome within five working days. No action is needed from your side."}]}
+{"messages": [{"role": "user", "content": "Customer writes: how do I add my daughter to my health cover?"}, {"role": "assistant", "content": "Dear customer, adding a dependant takes one step: please submit her details through the Manage Policy page, and we will confirm the updated cover by email. Note that the change applies from the next billing cycle."}]}</code></pre>
+
+      <p>Three rules carry the whole discipline. First, <strong>quality beats quantity</strong>, and it is not close: five hundred excellent, consistent examples beat fifty thousand scraped mediocre ones, because the model faithfully learns your mediocrity too — every wrong answer and sloppy sign-off is a lesson you are paying to teach. Second, the workable scale is <strong>hundreds to a few thousand curated examples</strong> — if you have forty, stay on rung 2 and paste your best into the prompt. Third, <strong>hold out a validation set</strong> — 10-20 percent, set aside before training and never trained on. You just watched why: without it there is no honest curve, no early stopping, and no way to know whether you trained a specialist or a parrot.</p>
+
+      <h2>Catastrophic forgetting</h2>
+      <p>One paragraph, because it deserves exactly that. A model's abilities all live in the same shared weights — the ones you are now nudging. Push them hard toward your ticket format and abilities nobody was watching can quietly degrade: other languages, arithmetic, caution around risky requests. This is <dfn>catastrophic forgetting</dfn> — while learning task B, the model loses some of task A — and it is the standing reason fine-tunes use gentle learning rates, very few epochs, and broad before-and-after evaluation rather than testing only the shiny new skill. LoRA helps: with the base frozen, the damage an adapter can do is bounded, and removing it restores the original exactly.</p>
+
+      <h2>At a bank, a fine-tuned model is a new model</h2>
+      <p>If you work anywhere regulated, one sentence here matters most: <strong>a fine-tuned model is a new model.</strong> Not a configuration change — a new artifact with new behaviour, some of it unknown. Model-risk teams at a large bank are right to treat it that way. The training data needs provenance: who wrote those two thousand replies, who approved them, do they contain customer data that cannot leave the region? The new model needs evaluation before rollout — the discipline you will build in <a href="ch104-agent-evals.html">the evals chapter</a>. And it needs versioning and a rollback path: a version number, the previous model kept warm, a switch to throw when Tuesday's model does something Monday's never did. LoRA makes that part pleasantly boring — version the adapter file like code, and rollback is unclipping it.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this chapter in config files and merge requests before you ever run a training job. Fine-tuning configs carry the vocabulary verbatim: <code>num_train_epochs: 3</code>, <code>learning_rate: 2e-5</code>, <code>per_device_train_batch_size: 4</code>, LoRA settings like <code>r: 16</code>. In an MR you will read "val loss turned at epoch 2, shipping the epoch-2 checkpoint" — early stopping, exactly as you watched it. And when someone says "we QLoRA'd an 8B on one card over the weekend", you can unpack every word: a quantised 8-billion-weight base, clip-on adapters, a single GPU, a few epochs — and, done right, a held-out set that said when to stop.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Your assistant must quote this week's home-loan rates accurately. The rates change every Monday. What is the right move?</p>
+          <div class="q-opts">
+            <button data-opt="a">Fine-tune the model on the rate sheet every Monday morning</button>
+            <button data-opt="b">Keep the rate sheet in a retrieval system and fetch it at question time</button>
+            <button data-opt="c">Add more epochs so the rates sink in more deeply</button>
+          </div>
+          <p class="q-explain">Fast-changing facts are the textbook case where fine-tuning loses. Weights are a terrible database — expensive to update, impossible to cite. RAG updates the minute the sheet changes and can quote it verbatim.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Training loss is falling steadily, but validation loss stopped falling at epoch 2 of 5 and is now rising. What should you do?</p>
+          <div class="q-opts">
+            <button data-opt="a">Keep training — falling training loss means the model is still learning</button>
+            <button data-opt="b">Raise the learning rate so it learns faster before the run ends</button>
+            <button data-opt="c">Stop and ship the epoch-2 checkpoint — the model is now memorising, not learning</button>
+          </div>
+          <p class="q-explain">Training loss falls almost forever because the model is scored on the very examples it is fitting. Once the honest curve — validation — turns upward, every further epoch buys memorisation. Early stopping keeps the checkpoint from the validation minimum.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What does LoRA actually train?</p>
+          <div class="q-opts">
+            <button data-opt="a">Small add-on adapter layers, while the base model's weights stay frozen</button>
+            <button data-opt="b">All of the model's weights, but at a lower learning rate</button>
+            <button data-opt="c">Only the model's tokenizer and output formatting rules</button>
+          </div>
+          <p class="q-explain">LoRA clips tiny trainable adapters onto a frozen base — under one percent of the model's size. Hence the fraction of the VRAM, the adapter file you can version like code, and rollback by simply removing it.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. Which of these actually changes the model's weights?</p>
+          <div class="q-opts">
+            <button data-opt="a">A carefully engineered system prompt</button>
+            <button data-opt="b">RAG retrieving documents into the context</button>
+            <button data-opt="c">Fine-tuning on instruction/response pairs</button>
+          </div>
+          <p class="q-explain">Prompting and RAG only change the inputs — the model file never moves. Fine-tuning produces a genuinely new set of weights, which is why a bank's model-risk team treats the result as a new model needing evals, a version, and a rollback plan.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. You have 40 hand-written gold examples of the reply style you want. What is the honest next step?</p>
+          <div class="q-opts">
+            <button data-opt="a">Fine-tune on the 40 — small datasets train faster anyway</button>
+            <button data-opt="b">Stay on the ladder's second rung: put your best examples in the prompt as few-shot demonstrations</button>
+            <button data-opt="c">Duplicate each example a hundred times to make a 4,000-row dataset</button>
+          </div>
+          <p class="q-explain">Forty examples is memorisation territory — the ten-knobs-for-eight-points situation from the demo. Duplicating rows adds no new information; it re-teaches the same quirks harder. Few-shot uses a small gold set at full strength; graduate to fine-tuning once curation reaches the hundreds-to-thousands range.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Prompting, few-shot examples, and RAG change a model's <em>inputs</em>; fine-tuning is the one move that changes the <em>weights</em> — choosing what to wear versus recutting the cloth.</li>
+          <li>Climb the ladder in order — prompt, few-shot, RAG, fine-tune — only with evidence the rung below failed. Most enterprise problems end before rung 4.</li>
+          <li>Fine-tuning wins at behaviour (voice, format, vocabulary, small-model specialisation for cost and latency) and loses at knowledge (fresh facts, citations, fast-changing data — retrieval wins those).</li>
+          <li>More epochs is not more learning: training loss falls forever, but the held-out validation curve turns upward when memorisation starts — hold out a validation set and stop at its minimum.</li>
+          <li>LoRA trains tiny clip-on adapters against a frozen base; QLoRA does the same on a quantised base — turning a ~60-80 GB multi-GPU job into a ~10-20 GB one. Hosted fine-tuning removes hardware entirely, at the price of lock-in.</li>
+          <li>The dataset is the product: hundreds to thousands of curated instruction/response pairs, quality over quantity — the model becomes whatever you feed it.</li>
+          <li>A fine-tuned model is a new model: provenance, evals before rollout, a version number, a rollback path — and watch for catastrophic forgetting beyond the skill you trained.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>
