@@ -1,10 +1,13 @@
 # Under the Hood — the agent engineer's academy
 
-An interactive, story-driven learning website: 108 chapters across 12 acts, from
-"why Python looks the way it does" to "build your own mini-harness", including
+An interactive, story-driven learning website: 117 chapters across 13 acts, from
+"why Python looks the way it does" to deploying an agent as a pod on Azure AKS,
+including classical ML vs transformers, fine-tuning (epochs, LoRA, VRAM budgets),
 LangChain, LangGraph, deep agents, MCP/A2A, harness anatomy (context engineering,
-memory, durability), the 2026 harness landscape, and the full GitLab workflow
-(branches, merge requests, pipelines).
+memory, durability), the 2026 harness landscape, the full GitLab workflow
+(branches, merge requests, pipelines), and Kubernetes/AKS deployment.
+
+Live: https://shriyavallabh.github.io/under-the-hood/
 
 ## Run it locally
 
