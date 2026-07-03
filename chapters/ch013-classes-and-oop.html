@@ -178,7 +178,7 @@ print(Outlet.sell(pune, 1))   # what Python does under the hood
       </div>
 
       <div class="callout tip"><span class="co-label">Tip</span>
-      <p>Now break it on purpose — the errors you cause here are ones you will meet in real logs for years. Delete <code>self</code> from <code>def sell(self, cups):</code> and run: you get <em>TypeError: sell() takes 1 positional argument but 2 were given</em>. Baffling until today; obvious now — Python invisibly passed <code>pune</code> as the first argument and found no parameter waiting for it. Then try misspelling an attribute (<code>pune.til</code>) and meet <em>AttributeError</em>, the "no such thing on this object" error you have seen a hundred times in agent stack traces.</p></div>
+      <p>Now break it on purpose — the errors you cause here are ones you will meet in real logs for years. Delete <code>self</code> from <code>def sell(self, cups):</code> and run: you get <em>TypeError: Outlet.sell() takes 1 positional argument but 2 were given</em>. Baffling until today; obvious now — Python invisibly passed <code>pune</code> as the first argument and found no parameter waiting for it. Then try misspelling an attribute (<code>pune.til</code>) and meet <em>AttributeError</em>, the "no such thing on this object" error you have seen a hundred times in agent stack traces.</p></div>
 
       <h2>Attributes and methods: the nouns and the verbs</h2>
       <p>Everything you reach through the dot falls into two families. An <dfn>attribute</dfn> is data parked on the object — a noun you look at. A method is behaviour the object can perform — a verb you invoke. The reading cue is the brackets:</p>

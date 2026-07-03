@@ -38,8 +38,8 @@
 
       <h2>A desk, not a warehouse</h2>
       <p>First, place yourself in Act VIII. In <a href="ch067-create-deep-agent-anatomy.html">the anatomy chapter</a> you opened <code>create_deep_agent</code> and found the same <a href="ch045-react-loop-by-hand.html">ReAct loop you built by hand</a> wearing four upgrades: a planning tool, a file system, subagents, and a serious system prompt. <a href="ch068-planning-and-todos.html">The previous chapter</a> gave the agent a to-do list, so a long run cannot lose the plot. This chapter gives it a filing cabinet, so a long run cannot drown in its own research. <a href="ch070-subagents.html">The next one</a> gives it colleagues.</p>
-      <p>Why does a long-running agent need files at all? Because of the sting you felt in chapter 45: the conversation history is re-sent to the model on <em>every single turn</em>. When a tool returns something huge — a scraped documentation site, a 300-row query result, three market-research reports — that text lands in the history and is then carried, and paid for, on every turn that follows. You read it once; you pay for it forever. Over a twenty-minute run that is annoying. Over the hours-long runs this Act is about, it is fatal: the context fills, the model starts forgetting the plan, and <a href="ch071-the-token-bill.html">the token bill</a> climbs like a taxi meter in traffic.</p>
-      <p><a href="ch047-memory-and-context.html">Chapter 47</a> named this the context problem. Deep agents answer it with a move called <dfn>context offload</dfn> — moving bulky information out of the message history into external storage that the agent can reach through tools. The discipline is exactly the detective's: <strong>write findings to a file, keep only a one-line stub in context, and read back only the slice you need, only when you need it.</strong> Watch one full cycle:</p>
+      <p>Why does a long-running agent need files at all? Because of the sting you felt in chapter 46: the conversation history is re-sent to the model on <em>every single turn</em>. When a tool returns something huge — a scraped documentation site, a 300-row query result, three market-research reports — that text lands in the history and is then carried, and paid for, on every turn that follows. You read it once; you pay for it forever. Over a twenty-minute run that is annoying. Over the hours-long runs this Act is about, it is fatal: the context fills, the model starts forgetting the plan, and <a href="ch071-the-token-bill.html">the token bill</a> climbs like a taxi meter in traffic.</p>
+      <p><a href="ch047-memory-and-context.html">Chapter 48</a> named this the context problem. Deep agents answer it with a move called <dfn>context offload</dfn> — moving bulky information out of the message history into external storage that the agent can reach through tools. The discipline is exactly the detective's: <strong>write findings to a file, keep only a one-line stub in context, and read back only the slice you need, only when you need it.</strong> Watch one full cycle:</p>
 
       <div class="stepper">
         <div class="step" data-title="Big result arrives">
@@ -102,7 +102,7 @@
       <p>Files buy a second, quieter superpower: <strong>safety under trimming</strong>. Context-management middleware that summarises or evicts old messages (Act X territory) can compact the history aggressively when the real content is safe on the shelf. A summary can lose detail; a file never does.</p></div>
 
       <h2>The trick: these files may never touch a disk</h2>
-      <p>Now the part that surprises people. When a deep agent calls <code>write_file("/notes/plan.md", ...)</code>, there is — by default — <em>no file called plan.md anywhere on any disk</em>. A <dfn>virtual file system</dfn> is an interface that looks and behaves like files and folders — paths, listings, reads, writes — while the actual bytes live wherever a storage layer chooses to put them. The agent sees four tools:</p>
+      <p>Now the part that surprises people. When a deep agent calls <code>write_file("/notes/plan.md", ...)</code>, there is — by default — <em>no file called plan.md anywhere on any disk</em>. A <dfn>virtual file system</dfn> is an interface that looks and behaves like files and folders — paths, listings, reads, writes — while the actual bytes live wherever a storage layer chooses to put them. The agent sees four core tools (recent versions add <code>glob</code> and <code>grep</code> for searching):</p>
       <ul>
         <li><code>ls</code> — list what is on the shelf</li>
         <li><code>read_file</code> — bring a file's content into context</li>
@@ -183,7 +183,7 @@ print("and nothing was lost - every report is still readable.")
       <p>Experiment: add three more queries to <code>QUERIES</code> and run again — the hoarder's number balloons while the filer's barely moves. Then raise <code>LATER_TURNS</code> to 50 and watch the gap widen further. That widening gap <em>is</em> the reason deep agents can run for hours: cost per turn stays roughly flat while accumulated knowledge grows without limit.</p></div>
 
       <h2>Four places the shelf can live</h2>
-      <p>Now the second half of the promise: the backends. The deepagents library ships four, and choosing between them is really answering one question — <em>how long should these files outlive the conversation?</em></p>
+      <p>Now the second half of the promise: the backends. The deepagents library ships four core ones (plus sandbox and shell variants), and choosing between them is really answering one question — <em>how long should these files outlive the conversation?</em></p>
 
       <div class="tbl"><table>
         <tr><th>Backend</th><th>Where the bytes live</th><th>How long they last</th><th>Reach for it when</th></tr>
@@ -214,9 +214,9 @@ print("and nothing was lost - every report is still readable.")
       <div class="walkthrough">
         <div class="wl-head">memory_agent.py — one namespace, three fates</div>
         <div class="wl-line"><code>from deepagents import create_deep_agent</code>
-          <div class="wl-note">The same factory you met in <a href="ch067-create-deep-agent-anatomy.html">chapter 67</a>. Planning tool, file tools, and subagents come built in; today we are configuring where the file tools point.</div></div>
+          <div class="wl-note">The same factory you met in <a href="ch067-create-deep-agent-anatomy.html">chapter 68</a>. Planning tool, file tools, and subagents come built in; today we are configuring where the file tools point.</div></div>
         <div class="wl-line"><code>from deepagents.backends import (</code>
-          <div class="wl-note">All four backends live in one module. You will usually import two or three and compose them.</div></div>
+          <div class="wl-note">All four of these backends live in one module. You will usually import two or three and compose them.</div></div>
         <div class="wl-line"><code>    CompositeBackend, StateBackend, StoreBackend, FilesystemBackend,</code></div>
         <div class="wl-line"><code>)</code></div>
         <div class="wl-line"><code>from langgraph.store.memory import InMemoryStore</code>
@@ -364,7 +364,7 @@ for path in ["/scratch/draft.md", "/workspace/report.md",
         <h2>Key takeaways</h2>
         <ul>
           <li>Files are the deep agent's answer to a finite context: write findings out, keep a one-line stub in the history, and read back only the slice you need, when you need it.</li>
-          <li>The four file tools — <code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code> — are an interface; a pluggable backend decides where the bytes actually live. That indirection is what makes the file system "virtual".</li>
+          <li>The four core file tools — <code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code> — are an interface; a pluggable backend decides where the bytes actually live. That indirection is what makes the file system "virtual".</li>
           <li>StateBackend (the default) keeps files inside the agent's state: thread-scoped, checkpointer-persisted per thread, gone in a new conversation — perfect for scratch.</li>
           <li>FilesystemBackend touches real disk: essential for real deliverables, dangerous by default. <code>virtual_mode=True</code> jails paths under <code>root_dir</code>; without it, root_dir provides no protection — and disk writes are always irreversible.</li>
           <li>StoreBackend puts files in a LangGraph store — in-memory for development, Postgres or Redis in production — so they survive restarts and are shared across threads.</li>

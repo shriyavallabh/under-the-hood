@@ -66,7 +66,7 @@ graph = builder.compile(checkpointer=InMemorySaver())</code></pre>
 
       <p>That <code>checkpointer</code> argument is the firm's whole philosophy: every step is saved, so a run can crash, pause on an <code>interrupt()</code> for <a href="ch062-human-in-the-loop.html">human approval</a>, and resume days later with <code>Command(resume=...)</code> — exactly the <a href="ch061-checkpointing.html">checkpointing</a> machinery you have already studied. Swap <code>InMemorySaver</code> for a Postgres or Redis checkpointer and durability becomes a database row, not a hope.</p>
       <p><strong>Sweet spot.</strong> Long-running, auditable, resumable workflows where you need to own the control flow: loan processing with approval gates, multi-day research pipelines, anything a regulator might ask you to replay. It is model-agnostic, and the surrounding tooling (LangSmith tracing, LangGraph Studio, a managed deployment platform) is mature.</p>
-      <p><strong>Honest weakness.</strong> Ceremony. For a simple tool-calling assistant, defining state schemas, nodes, and edges is scaffolding you did not need — which is why LangChain's own <a href="ch054-create-agent.html"><code>create_agent</code></a> exists as the quick path on top. The ecosystem has also churned across versions, so tutorials age fast. You will run a full scorecard on it in <a href="ch093-is-langgraph-right.html">chapter 93</a>.</p>
+      <p><strong>Honest weakness.</strong> Ceremony. For a simple tool-calling assistant, defining state schemas, nodes, and edges is scaffolding you did not need — which is why LangChain's own <a href="ch054-create-agent.html"><code>create_agent</code></a> exists as the quick path on top. The ecosystem has also churned across versions, so tutorials age fast. You will run a full scorecard on it in <a href="ch093-is-langgraph-right.html">chapter 94</a>.</p>
 
       <h2>OpenAI Agents SDK and AgentKit — the supplier's fast-track crew</h2>
       <p><strong>What it is.</strong> The OpenAI Agents SDK is a deliberately light Python (and TypeScript) library — the production successor to OpenAI's earlier Swarm experiment. Its atoms are <code>Agent</code> (instructions + tools), <code>Runner</code> (the loop), <dfn>guardrails</dfn> — validation checks that run alongside the agent — and its signature idea, the <dfn>handoff</dfn>: an agent transferring the whole conversation to a specialist.</p>
@@ -87,7 +87,7 @@ print(result.final_output)</code></pre>
       <p><strong>Honest weakness.</strong> Model gravity. Other providers are usable (via its LiteLLM integration), but the polish, the tracing dashboard, and all of AgentKit point homeward to OpenAI's platform. Durability is also thinner than LangGraph's — long-running resumable workflows typically mean bolting on an external engine rather than a built-in checkpointer.</p>
 
       <h2>Claude Agent SDK — the famous kitchen's crew, for hire</h2>
-      <p><strong>What it is.</strong> The engine inside Claude Code — the best-known agent harness in the world, dissected fully in <a href="ch091-claude-code-dissected.html">the next chapter</a> — packaged as a Python and TypeScript library. It was renamed from "Claude Code SDK" in late 2025 precisely because people were building far more than coding agents with it. Where the other contenders give you parts, this one gives you the whole assembled machine: the tool loop, file and shell tools, the permission system, hooks, subagents, MCP client support (<a href="ch074-why-mcp-exists.html">chapter 74</a>), <a href="ch084-agent-skills.html">skills</a>, and automatic context compaction.</p>
+      <p><strong>What it is.</strong> The engine inside Claude Code — the best-known agent harness in the world, dissected fully in <a href="ch091-claude-code-dissected.html">the next chapter</a> — packaged as a Python and TypeScript library. It was renamed from "Claude Code SDK" in late 2025 precisely because people were building far more than coding agents with it. Where the other contenders give you parts, this one gives you the whole assembled machine: the tool loop, file and shell tools, the permission system, hooks, subagents, MCP client support (<a href="ch074-why-mcp-exists.html">chapter 75</a>), <a href="ch084-agent-skills.html">skills</a>, and automatic context compaction.</p>
 
       <div class="code-title">the Claude Agent SDK shape</div>
       <pre><code class="language-python">import asyncio
@@ -112,11 +112,11 @@ asyncio.run(main())</code></pre>
       <p><strong>What it is.</strong> Microsoft's open-source framework for agents and multi-agent workflows in both Python and .NET, announced in late 2025 as the convergence of two older projects: AutoGen (the research-grade multi-agent library) and Semantic Kernel (the enterprise SDK). One thing to fix in your mental map right now: if a tutorial teaches AutoGen as the current thing, it is stale — AutoGen's orchestration ideas and Semantic Kernel's enterprise plumbing now live on <em>inside</em> Agent Framework, which is where Microsoft's investment goes.</p>
 
       <div class="code-title">the Agent Framework shape (Python)</div>
-      <pre><code class="language-python">from agent_framework import ChatAgent
+      <pre><code class="language-python">from agent_framework import Agent
 from agent_framework.openai import OpenAIChatClient
 
-agent = ChatAgent(
-    chat_client=OpenAIChatClient(model_id="gpt-4o"),
+agent = Agent(
+    client=OpenAIChatClient(model="gpt-4o"),
     name="expense-checker",
     instructions="Check expense claims against policy.",
     tools=check_policy,          # a plain Python function
@@ -125,7 +125,7 @@ agent = ChatAgent(
 response = await agent.run("Is a 4,000 rupee team dinner claimable?")
 print(response.text)</code></pre>
 
-      <p>Two layers matter: <code>ChatAgent</code> for single agents, and typed, graph-based <em>workflows</em> (with checkpointing support) for orchestrating several — a philosophy closer to LangGraph than to CrewAI. It speaks the open standards you know: MCP for tools, <a href="ch080-a2a-protocol.html">A2A</a> for agent-to-agent calls, OpenTelemetry for tracing, and it plugs natively into Azure AI Foundry for hosted deployment.</p>
+      <p>Two layers matter: <code>Agent</code> (formerly <code>ChatAgent</code>) for single agents, and typed, graph-based <em>workflows</em> (with checkpointing support) for orchestrating several — a philosophy closer to LangGraph than to CrewAI. It speaks the open standards you know: MCP for tools, <a href="ch080-a2a-protocol.html">A2A</a> for agent-to-agent calls, OpenTelemetry for tracing, and it plugs natively into Azure AI Foundry for hosted deployment.</p>
       <p><strong>Sweet spot.</strong> Enterprise estates — especially .NET shops and Azure-centric organisations — that need identity, telemetry, and compliance to be first-class citizens rather than afterthoughts. It is the only contender treating .NET as an equal partner to Python.</p>
       <p><strong>Honest weakness.</strong> Youth and gravity. It is the newest major entrant, so patterns and docs are still settling, and Microsoft's naming history (Semantic Kernel, AutoGen, now this) makes teams reasonably wary of churn. And while it runs anywhere, the whole experience quietly points toward Azure.</p>
 
@@ -175,7 +175,7 @@ agent.run("Which of these two laptops is lighter, and by how much?")</code></pre
         <tr><td>LangGraph</td><td>LangChain team</td><td>State graph + checkpointer</td><td>Low — any provider</td><td>Best in class: checkpoints, resume, replay</td><td>Long-running, auditable workflows</td><td>Ceremony; version churn</td></tr>
         <tr><td>OpenAI Agents SDK + AgentKit</td><td>OpenAI</td><td>Agent + Runner + handoffs</td><td>High — pulls to OpenAI platform</td><td>Sessions; heavy lifting via integrations</td><td>Speed to product in the OpenAI stack</td><td>Ecosystem lock-in pull</td></tr>
         <tr><td>Claude Agent SDK</td><td>Anthropic</td><td>Claude Code's harness as a library</td><td>High — pulls to Claude</td><td>Session resume; compaction built in</td><td>Production harness with batteries: permissions, hooks, subagents</td><td>Opinionated; Claude-first</td></tr>
-        <tr><td>Microsoft Agent Framework</td><td>Microsoft</td><td>ChatAgent + typed workflows</td><td>Medium — runs anywhere, points to Azure</td><td>Workflow checkpointing</td><td>Enterprise fit: .NET + Python, telemetry, standards</td><td>Young; naming-churn history</td></tr>
+        <tr><td>Microsoft Agent Framework</td><td>Microsoft</td><td>Agent + typed workflows</td><td>Medium — runs anywhere, points to Azure</td><td>Workflow checkpointing</td><td>Enterprise fit: .NET + Python, telemetry, standards</td><td>Young; naming-churn history</td></tr>
         <tr><td>CrewAI</td><td>CrewAI (startup)</td><td>Role-based Crews + Flows</td><td>Low — any provider</td><td>Flow state persistence (lighter than LangGraph)</td><td>Readable multi-agent prototypes, fast</td><td>Abstractions leak under precise control</td></tr>
         <tr><td>smolagents</td><td>Hugging Face</td><td>CodeAgent — actions as Python code</td><td>Lowest — open models first-class</td><td>Minimal — yours to build</td><td>Hackable, tiny, auditable core</td><td>DIY batteries; sandbox mandatory</td></tr>
       </table></div>

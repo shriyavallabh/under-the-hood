@@ -61,7 +61,7 @@
           <div class="wl-note">Lint passed too. Not a formatting problem. Two suspects down.</div></div>
         <div class="wl-line"><code>$ pytest -q tests/</code>
           <div class="wl-note">The command that was running when the job died — it matches a line under <code>script:</code> in <code>.gitlab-ci.yml</code>. This is what you will re-run locally.</div></div>
-        <div class="wl-line"><code>........................................F</code></div>
+        <div class="wl-line"><code>.........................................F</code></div>
         <div class="wl-line"><code>FAILED tests/test_retry.py::test_gives_up_after_three - AssertionError: assert 5 == 3</code>
           <div class="wl-note">THE CULPRIT — the first genuinely explanatory line on your walk up from the bottom. It names the file, the exact test, and the broken expectation: the code retried five times, the test expected three. Ninety percent of triage is finding this one line.</div></div>
         <div class="wl-line"><code>1 failed, 41 passed in 14.20s</code>

@@ -140,6 +140,8 @@ from itertools import product
 names = list(INDEX)
 print("Resolving:", ", ".join(REQUEST))
 
+# product() = every combination of one version per package (a stdlib helper,
+# not part of the ramp — read it as "try each possible combo in turn").
 for combo in product(*[list(INDEX[n]) for n in names]):
     picked = dict(zip(names, combo))            # one version per package
     print("  trying:", ", ".join(f"{n} {v}" for n, v in picked.items()))

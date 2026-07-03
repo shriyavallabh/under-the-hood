@@ -71,7 +71,7 @@
             <span class="d-arrow">&#8594;</span>
             <div class="d-box">langchain-core<small>the standard plug</small></div>
           </div>
-          <p class="step-cap">Each provider gets its own small package that wraps that provider's raw API (the one you called directly in <a href="ch033-first-api-call.html">chapter 33</a>) in the standard interface from core. They are versioned and released separately — when a provider ships a new model or changes a parameter, only its adapter needs an update, not the whole ecosystem.</p>
+          <p class="step-cap">Each provider gets its own small package that wraps that provider's raw API (the one you called directly in <a href="ch033-first-api-call.html">chapter 34</a>) in the standard interface from core. They are versioned and released separately — when a provider ships a new model or changes a parameter, only its adapter needs an update, not the whole ecosystem.</p>
         </div>
         <div class="step" data-title="langchain">
           <h3>3. langchain — the assembly plant</h3>
@@ -81,7 +81,7 @@
             <div class="d-box">langchain-core</div>
             <div class="d-box">adapters</div>
           </div>
-          <p class="step-cap">The main framework package. Its star export, <code>create_agent</code>, is your fifty-line ReAct loop industrialised: native tool calling, retries, streaming, and hook points called middleware where you can intercept each turn. You hand it a model and some tools; it hands you a running agent. Chapters <a href="ch054-create-agent.html">54</a> and <a href="ch055-middleware.html">55</a> take it apart.</p>
+          <p class="step-cap">The main framework package. Its star export, <code>create_agent</code>, is your fifty-line ReAct loop industrialised: native tool calling, retries, streaming, and hook points called middleware where you can intercept each turn. You hand it a model and some tools; it hands you a running agent. Chapters <a href="ch054-create-agent.html">55</a> and <a href="ch055-middleware.html">56</a> take it apart.</p>
         </div>
         <div class="step" data-title="langgraph">
           <h3>4. langgraph — the control tower</h3>
@@ -90,7 +90,7 @@
             <span class="d-arrow">&#8594;</span>
             <div class="d-box hot">langgraph<small>StateGraph · checkpointers · interrupts</small></div>
           </div>
-          <p class="step-cap">The orchestration engine, for when one loop is not enough: multi-step workflows with branches, parallel paths, pause-for-a-human, and saved state you can resume next week. Here is the quiet twist: <code>create_agent</code> itself runs on the LangGraph runtime under the hood. The plant's machines are driven by the tower even when you never look at it. Act VII lives here, starting at <a href="ch057-why-graphs.html">chapter 57</a>.</p>
+          <p class="step-cap">The orchestration engine, for when one loop is not enough: multi-step workflows with branches, parallel paths, pause-for-a-human, and saved state you can resume next week. Here is the quiet twist: <code>create_agent</code> itself runs on the LangGraph runtime under the hood. The plant's machines are driven by the tower even when you never look at it. Act VII lives here, starting at <a href="ch057-why-graphs.html">chapter 58</a>.</p>
         </div>
         <div class="step" data-title="langsmith">
           <h3>5. langsmith — the camera room</h3>
@@ -156,7 +156,7 @@
         <div class="wl-line"><code>from langchain_anthropic import ChatAnthropic</code>
           <div class="wl-note">Stamp: <strong>integration</strong>. One vendor pavilion. If a merge request bumps only this package's version "for the new model", now you know why nothing else had to change.</div></div>
         <div class="wl-line"><code>from langgraph.checkpoint.memory import InMemorySaver</code>
-          <div class="wl-note">Stamp: <strong>orchestration</strong>. A checkpointer from the control tower — the thing that lets an agent's state survive between runs. Full story in <a href="ch061-checkpointing.html">chapter 61</a>. Its presence tells you this agent remembers.</div></div>
+          <div class="wl-note">Stamp: <strong>orchestration</strong>. A checkpointer from the control tower — the thing that lets an agent's state survive between runs. Full story in <a href="ch061-checkpointing.html">chapter 62</a>. Its presence tells you this agent remembers.</div></div>
       </div>
 
       <p>Now do it yourself, on anything. The runner below is a working customs officer: it stamps every import line with its layer and flags the museum pieces. Paste imports from any tutorial you have bookmarked and see what it says.</p>
@@ -193,6 +193,7 @@ STALE = {
     "AgentExecutor":            "pre-1.0 loop runner, replaced by create_agent",
     "LLMChain":                 "pre-1.0 chain class, retired",
     "ConversationBufferMemory": "pre-1.0 memory class, checkpointers do this now",
+    "langchain.llms":           "pre-1.0 bundled provider import, providers are separate packages now",
 }
 
 stale_hits = 0

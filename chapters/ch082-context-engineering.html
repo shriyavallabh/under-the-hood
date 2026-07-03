@@ -25,7 +25,7 @@
       <header class="ch-hero">
         <div class="ch-kicker">Act X · Harness Anatomy</div>
         <h1>Context engineering</h1>
-        <p class="ch-tagline">Chapter 47's survival tricks, promoted to a named discipline — the one that lets Claude Code work for days inside a window that fills up in hours.</p>
+        <p class="ch-tagline">Chapter 48's survival tricks, promoted to a named discipline — the one that lets Claude Code work for days inside a window that fills up in hours.</p>
         <div class="ch-meta"><span>~35 min</span><span>Chapter 83 of 117</span></div>
       </header>
 
@@ -42,7 +42,7 @@
       <p><em>Prompt</em> engineering asks: how do I word one instruction well? <em>Context</em> engineering asks a logistics question: of everything that <em>could</em> go in front of the model this turn — system prompt, tool definitions, history, tool results, retrieved files, notes — what actually should?</p>
 
       <h2>The attention budget</h2>
-      <p>Why does this deserve the word "engineering"? Because of a physical constraint. Inside a transformer (<a href="ch029-transformers-plainly.html">chapter 29</a>, plainly), every token attends to every other token — the relationships to track grow roughly with the <em>square</em> of context length, and models are trained mostly on shorter sequences. The practical result is <dfn>context rot</dfn> — as the token count climbs, the model's ability to recall and use any one fact in the context measurably drops. You met its most famous symptom in chapter 47: "lost in the middle", where facts buried mid-transcript get recalled worse than facts at the edges.</p>
+      <p>Why does this deserve the word "engineering"? Because of a physical constraint. Inside a transformer (<a href="ch029-transformers-plainly.html">chapter 29</a>, plainly), every token attends to every other token — the relationships to track grow roughly with the <em>square</em> of context length, and models are trained mostly on shorter sequences. The practical result is <dfn>context rot</dfn> — as the token count climbs, the model's ability to recall and use any one fact in the context measurably drops. You met its most famous symptom in chapter 48: "lost in the middle", where facts buried mid-transcript get recalled worse than facts at the edges.</p>
       <p>So the window is not a warehouse. It is an <dfn>attention budget</dfn> — a finite pool of the model's focus, and every token you add makes a withdrawal, whether or not that token helps. A 190,000-token transcript that "still fits" in a 200,000-token window is a model paying attention to everything a little and to nothing well. Hence the discipline's creed: <strong>curate, not cram</strong>. Past a point, more context is less thinking.</p>
       <p>Here is roughly what a coding agent's window already carries the moment a session starts — before you have typed a single word (round, illustrative numbers):</p>
 
@@ -74,7 +74,7 @@
       </div>
 
       <h3>Move 1 — compaction, now with taste</h3>
-      <p>You already know compaction's mechanics from <a href="ch047-memory-and-context.html">chapter 47</a>: summarise the old middle, keep the tail verbatim. The discipline adds the part that separates a good harness from a naive one: <em>what the summary must keep</em>. When Claude Code compacts — manually via <code>/compact</code>, or automatically as the window nears its limit — the summariser is instructed to preserve the load-bearing facts: architectural decisions taken, bugs found and not yet fixed, the current state of the task, the next steps. What goes first is bulk already spent: repeated tool outputs, files quoted in full, dead-end explorations.</p>
+      <p>You already know compaction's mechanics from <a href="ch047-memory-and-context.html">chapter 48</a>: summarise the old middle, keep the tail verbatim. The discipline adds the part that separates a good harness from a naive one: <em>what the summary must keep</em>. When Claude Code compacts — manually via <code>/compact</code>, or automatically as the window nears its limit — the summariser is instructed to preserve the load-bearing facts: architectural decisions taken, bugs found and not yet fixed, the current state of the task, the next steps. What goes first is bulk already spent: repeated tool outputs, files quoted in full, dead-end explorations.</p>
       <p>The cost: a summary is lossy, and whatever the summariser judged unimportant is gone. That is why compaction is the <em>last</em> resort in the playbook — the remaining four moves all exist to postpone it.</p>
 
       <h3>Move 2 — tool-result pruning</h3>
@@ -270,14 +270,14 @@ print(notes[0], "...", notes[-1])
         <div class="wl-line"><code>if used(msgs) &gt; 0.8 * WINDOW:</code>
           <div class="wl-note">The trigger sits at 80%, not 100%. Harnesses act early: the model needs room to write its reply, and context rot degrades quality long before the hard limit rejects the call.</div></div>
         <div class="wl-line"><code>    head, tail = msgs[:2], msgs[-4:]</code>
-          <div class="wl-note">Pin the head (system prompt and original task — chapter 47's hard-won lesson about what must never fall off) and keep the freshest turns verbatim.</div></div>
+          <div class="wl-note">Pin the head (system prompt and original task — chapter 48's hard-won lesson about what must never fall off) and keep the freshest turns verbatim.</div></div>
         <div class="wl-line"><code>    summary = (f"SUMMARY of turns 1-{i}: sections read in order; ...")</code>
           <div class="wl-note">A string literal plays the summariser here. In Claude Code this is a real LLM call instructed on what to preserve: decisions, open bugs, current state, next steps. The quality of that prompt is the quality of the agent's memory.</div></div>
         <div class="wl-line"><code>    msgs = head + [summary] + tail</code>
-          <div class="wl-note">The rebuilt window: pinned head, one summary, recent tail. To the stateless model, this tidy transcript simply is the world — same power, same danger as in chapter 47.</div></div>
+          <div class="wl-note">The rebuilt window: pinned head, one summary, recent tail. To the stateless model, this tidy transcript simply is the world — same power, same danger as in chapter 48.</div></div>
       </div>
 
-      <p>Step back and notice what you just did. In <a href="ch047-memory-and-context.html">chapter 47</a> these were emergency responses to an overflowing list. Here they are policies, running <em>every turn</em>, tuned and cooperating: notes make compaction safe, and pruning postpones it. That shift — from coping to curating — is what earned the practice its name. The money follows the same curve: every token evicted is a token you stop re-paying on every subsequent call, the mechanism behind <a href="ch071-the-token-bill.html">the token bill</a>.</p>
+      <p>Step back and notice what you just did. In <a href="ch047-memory-and-context.html">chapter 48</a> these were emergency responses to an overflowing list. Here they are policies, running <em>every turn</em>, tuned and cooperating: notes make compaction safe, and pruning postpones it. That shift — from coping to curating — is what earned the practice its name. The money follows the same curve: every token evicted is a token you stop re-paying on every subsequent call, the mechanism behind <a href="ch071-the-token-bill.html">the token bill</a>.</p>
 
       <div class="callout note"><span class="co-label">Note</span>
       <p>None of these moves is free. Pruning bets the agent will not need the old payload; compaction is lossy and adds an LLM call; sub-agents cost latency and their own tokens; just-in-time retrieval trades preloading's predictability for exploration at runtime. Context engineering is choosing, deliberately, which costs to pay — because the failure it prevents, a concussed or crashed agent, is worse than every one of those prices.</p></div>
@@ -342,7 +342,7 @@ print(notes[0], "...", notes[-1])
           <li>Five moves make up the playbook: compaction (summarise old turns, keep decisions and open issues), tool-result pruning (stub out re-fetchable payloads first), just-in-time retrieval (carry references, fetch payloads when needed), sub-agent isolation (burn exploration tokens in a disposable window), and structured note-taking (state in files, outside the window).</li>
           <li>Claude Code runs all five at once — grep-then-read navigation, Task-tool scouts, stale-result clearing, auto-compact near the limit, notes and todos on disk — which is how a days-long session survives a fixed window.</li>
           <li>Every move has a cost (lossiness, re-fetches, extra calls); the discipline is choosing those costs deliberately because a crashed or concussed agent costs more.</li>
-          <li>Chapter 47 taught you to survive a full window; this chapter taught you to govern one. Notes that outlive the session are the bridge to what comes next: long-term memory.</li>
+          <li>Chapter 48 taught you to survive a full window; this chapter taught you to govern one. Notes that outlive the session are the bridge to what comes next: long-term memory.</li>
         </ul>
       </section>
 

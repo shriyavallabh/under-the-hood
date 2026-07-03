@@ -88,7 +88,7 @@ E       AssertionError: assert '300.0' == '300.00'
       <p>Each dot is a passing test; the <code>F</code> is the failure, and pytest replays the failing line with the real values filled in: the code returned <code>'300.0'</code>, the test expected <code>'300.00'</code>. No detective work. Sometimes the fix is in the code; sometimes, as here, the test encoded a wrong expectation. Both are useful discoveries.</p>
 
       <h2>Build a tiny pytest, test the agent you already know</h2>
-      <p>The best way to demystify a tool is to sketch it in twenty lines. Below is the agent you read line-by-line in <a href="ch050-reading-real-code-5.html">Reading real code 5</a> — the <a href="ch045-react-loop-by-hand.html">ReAct loop</a> with its calculator tool — then four real tests, then a miniature test runner doing what pytest does: collect every <code>test_*</code> function, run it, catch <code>AssertionError</code>, print a scoreboard. Press <strong>Run</strong>.</p>
+      <p>The best way to demystify a tool is to sketch it in twenty lines. Below is the agent you read line-by-line in <a href="ch050-reading-real-code-5.html">Reading real code 5</a> — the <a href="ch045-react-loop-by-hand.html">ReAct loop</a> with its calculator tool — then four real tests, then a miniature test runner doing what pytest does: collect every <code>test_*</code> function, run it, catch any error it raises, print a scoreboard. Press <strong>Run</strong>.</p>
 
       <div class="pyrun" data-title="Four tests for the ch050 agent, plus a 15-line pytest">
 <textarea class="py-src" spellcheck="false">
@@ -142,7 +142,7 @@ def run_tests():
                 fn()
                 print(f"PASSED  {name}")
                 passed += 1
-            except AssertionError:
+            except Exception:
                 print(f"FAILED  {name}")
                 failed += 1
     print()
@@ -153,7 +153,7 @@ run_tests()
       </div>
 
       <div class="callout tip"><span class="co-label">Tip</span>
-      <p>Now earn the lesson: break something. Change the agent's final answer to <code>301.0</code> and watch two tests catch it. Delete the <code>allowed</code> check inside <code>calculate</code> and watch the safety test go red while the others stay green — that red line tells a reviewer exactly which promise broke. Then change a test's expectation to something wrong and notice the suite cannot tell which side is lying; only a human reading the test's <em>name</em> can.</p></div>
+      <p>Now earn the lesson: break something. Change the agent's final answer to <code>301.0</code> and watch one test catch it. Delete the <code>allowed</code> check inside <code>calculate</code> and watch the safety test go red while the others stay green — that red line tells a reviewer exactly which promise broke. Then change a test's expectation to something wrong and notice the suite cannot tell which side is lying; only a human reading the test's <em>name</em> can.</p></div>
 
       <p>Look at what those four tests document, without a single comment: the calculator does arithmetic; it refuses anything else (a security promise); the agent ends with the right number in its answer; and the turn limit actually stops it. If a teammate changed <code>run_agent</code> tomorrow, these four sentences of executable documentation would referee the change within seconds.</p>
 
@@ -291,7 +291,7 @@ run_tests()
       <h2>Why teams block merges on red — the economics</h2>
       <p>The gate can feel bureaucratic until you price the alternative. The <a href="ch021-just-enough-git.html">main branch</a> is shared plumbing: everyone branches from it, every deploy is cut from it. Merge one silently-broken change and the breakage does not stay yours: everyone who branches from main inherits your bug, their tests fail for reasons they did not cause, and an hour of shortcut becomes a day of team-wide archaeology. Keeping main green is not perfectionism; it is cheap insurance, paid in seconds per merge.</p>
       <p>The gate also does something subtler: it depersonalises quality. Without it, "your change broke things" is an accusation between colleagues, and a risky merge can go in because of who asked. With it, the pipeline is the referee — tireless, unbribable, and equally rude to everyone. A red X on a principal engineer's MR blocks exactly as hard as one on an intern's. Teams that block on red argue less, not more.</p>
-      <p>And the gate compounds. The suite is the team's laminated checklist: every incident that mattered got a test, so the whole history of past failures is re-checked on every push, for free. This is why reviewers grumble when a bug fix arrives without a test — the fix repairs today; only the test prevents the sequel. You saw agent failure modes catalogued in <a href="ch048-failure-modes.html">chapter 48</a>; a mature agent codebase has a test pinning each one it has survived.</p>
+      <p>And the gate compounds. The suite is the team's laminated checklist: every incident that mattered got a test, so the whole history of past failures is re-checked on every push, for free. This is why reviewers grumble when a bug fix arrives without a test — the fix repairs today; only the test prevents the sequel. You saw agent failure modes catalogued in <a href="ch048-failure-modes.html">chapter 49</a>; a mature agent codebase has a test pinning each one it has survived.</p>
 
       <div class="callout warn"><span class="co-label">Careful</span>
       <p>Green means "every promise we wrote down still holds" — nothing more. A suite full of weak asserts is a checklist that says "plate exists" instead of "taste the dal": comfortably green, catching nothing. When you review, weigh the tests, not the tick. And be suspicious of an MR that "fixes" a red pipeline by deleting or loosening the failing test: sometimes the expectation really was wrong, but that deletion deserves an explaining comment, every time.</p></div>

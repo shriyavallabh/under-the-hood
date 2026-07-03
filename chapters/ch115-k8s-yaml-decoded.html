@@ -38,7 +38,7 @@
 
       <h2>You already read this language</h2>
       <p>Cast your mind back to <a href="ch005-yaml-and-json.html">chapter 5</a>: YAML is not a programming language, it is <em>dicts and lists in costume</em>. A line like <code>replicas: 3</code> is a dict entry. Indentation means nesting — a dict inside a dict. A leading dash means a list item. That is the entire grammar; there is nothing else to learn.</p>
-      <p>Here is the payoff, ten acts later: <strong>every Kubernetes manifest is one dict.</strong> A 40-line Deployment that makes newcomers' eyes glaze over is a single nested dictionary — the structure you have built in Python since <a href="ch004-collections.html">chapter 4</a>. <a href="ch114-kubectl-fluency.html">kubectl, last chapter</a>, was you <em>asking</em> the cluster questions; a manifest is how you <em>tell</em> it things. And <a href="ch111-kubernetes-plainly.html">chapter 111</a> gave you the idea underneath: declare a desired state, and controllers loop forever making reality match it. The manifest <em>is</em> that desired state, written down.</p>
+      <p>Here is the payoff, ten acts later: <strong>every Kubernetes manifest is one dict.</strong> A 40-line Deployment that makes newcomers' eyes glaze over is a single nested dictionary — the structure you have built in Python since <a href="ch004-collections.html">chapter 4</a>. <a href="ch114-kubectl-fluency.html">kubectl, last chapter</a>, was you <em>asking</em> the cluster questions; a manifest is how you <em>tell</em> it things. And <a href="ch111-kubernetes-plainly.html">chapter 112</a> gave you the idea underneath: declare a desired state, and controllers loop forever making reality match it. The manifest <em>is</em> that desired state, written down.</p>
       <p>Better still, every manifest opens with the same four keys — learn these and you can orient yourself in any Kubernetes file ever written:</p>
 
       <div class="flipgrid">
@@ -72,7 +72,7 @@
         <div class="wl-line"><code>      app: support-agent</code>
           <div class="wl-note">"My pods are the ones tagged <code>app: support-agent</code>." This line and the label line eleven rows down are a pair — they MUST match. A whole section below covers what happens when they don't.</div></div>
         <div class="wl-line"><code>  template:</code>
-          <div class="wl-note">The pod template — a full pod description nested inside the Deployment, the rubber stamp that prints every replica. Everything you learned about pods in <a href="ch113-agent-in-a-pod.html">chapter 113</a> reappears from here down.</div></div>
+          <div class="wl-note">The pod template — a full pod description nested inside the Deployment, the rubber stamp that prints every replica. Everything you learned about pods in <a href="ch113-agent-in-a-pod.html">chapter 114</a> reappears from here down.</div></div>
         <div class="wl-line"><code>    metadata:</code></div>
         <div class="wl-line"><code>      labels:</code></div>
         <div class="wl-line"><code>        app: support-agent</code>
@@ -80,7 +80,7 @@
         <div class="wl-line"><code>    spec:</code>
           <div class="wl-note">A second <code>spec</code>! This one is the <em>pod's</em> desired state, nested inside the Deployment's — dicts in dicts, business as usual.</div></div>
         <div class="wl-line"><code>      containers:</code>
-          <div class="wl-note">A YAML list (see the dash below) — a pod can hold several containers, like the <a href="ch113-agent-in-a-pod.html">MCP sidecar pattern from chapter 113</a>. Ours holds one.</div></div>
+          <div class="wl-note">A YAML list (see the dash below) — a pod can hold several containers, like the <a href="ch113-agent-in-a-pod.html">MCP sidecar pattern from chapter 114</a>. Ours holds one.</div></div>
         <div class="wl-line"><code>      - name: agent</code></div>
         <div class="wl-line"><code>        image: myregistry.azurecr.io/support-agent:1.4.2</code>
           <div class="wl-note">The uniform: which <a href="ch110-containers-and-images.html">container image</a> to run, pulled from your Azure Container Registry, pinned to tag <code>1.4.2</code>. Pin versions — <code>:latest</code> is a different surprise every pull.</div></div>
@@ -104,7 +104,7 @@
         <div class="wl-line"><code>            memory: "512Mi"</code></div>
         <div class="wl-line"><code>          limits:</code></div>
         <div class="wl-line"><code>            cpu: "1"</code>
-          <div class="wl-note"><strong>Limits are a ceiling.</strong> Exceed the CPU limit and the container is throttled — slowed, not killed. Exceed the <em>memory</em> limit and it is killed on the spot: the <code>OOMKilled</code> state from <a href="ch114-kubectl-fluency.html">chapter 114</a> is this line being enforced.</div></div>
+          <div class="wl-note"><strong>Limits are a ceiling.</strong> Exceed the CPU limit and the container is throttled — slowed, not killed. Exceed the <em>memory</em> limit and it is killed on the spot: the <code>OOMKilled</code> state from <a href="ch114-kubectl-fluency.html">chapter 115</a> is this line being enforced.</div></div>
         <div class="wl-line"><code>            memory: "1Gi"</code></div>
         <div class="wl-line"><code>        livenessProbe:</code>
           <div class="wl-note">The awake-check. Kubernetes calls this endpoint on a schedule; if it keeps failing, the container is judged wedged and <em>restarted</em>. Liveness asks one question: "is this process beyond saving?"</div></div>
@@ -187,7 +187,7 @@ lint_selector(deployment)
             <div class="d-box">API server<small>validates, stores desired state</small></div>
             <div class="d-box dim">Controllers</div>
           </div>
-          <p class="step-cap">kubectl sends the manifest to the API server — the front desk from <a href="ch111-kubernetes-plainly.html">chapter 111</a> — which validates it (where a selector mismatch bounces) and records the desired state. Nothing runs yet; a wish has been filed.</p>
+          <p class="step-cap">kubectl sends the manifest to the API server — the front desk from <a href="ch111-kubernetes-plainly.html">chapter 112</a> — which validates it (where a selector mismatch bounces) and records the desired state. Nothing runs yet; a wish has been filed.</p>
         </div>
         <div class="step" data-title="Controller wakes">
           <h3>2. The Deployment controller notices the gap</h3>
@@ -252,7 +252,7 @@ lint_selector(deployment)
         <div class="wl-line"><code>kind: Service</code></div>
         <div class="wl-line"><code>metadata:</code></div>
         <div class="wl-line"><code>  name: support-agent</code>
-          <div class="wl-note">This name becomes a DNS entry inside the cluster: any pod in the namespace can call <code>http://support-agent</code> — no IPs, ever. It is how an agent's pod reaches a shared MCP server's Service in <a href="ch113-agent-in-a-pod.html">chapter 113</a>.</div></div>
+          <div class="wl-note">This name becomes a DNS entry inside the cluster: any pod in the namespace can call <code>http://support-agent</code> — no IPs, ever. It is how an agent's pod reaches a shared MCP server's Service in <a href="ch113-agent-in-a-pod.html">chapter 114</a>.</div></div>
         <div class="wl-line"><code>spec:</code></div>
         <div class="wl-line"><code>  selector:</code>
           <div class="wl-note">The same label-query trick, third appearance — with one small difference: a Service writes its selector directly, no <code>matchLabels</code> wrapper.</div></div>
@@ -315,7 +315,7 @@ print("Re-encoding it         :", base64.b64encode(plain.encode()).decode())
       <div class="callout warn"><span class="co-label">Careful</span>
       <p>Anyone who can run <code>kubectl get secret agent-keys -o yaml</code> reads every key in seconds — and a Secret committed to git is a leaked credential, full stop. Secrets buy separation and access control, not confidentiality from anyone holding cluster access.</p></div>
 
-      <p>So where do real credentials live? Exactly where <a href="ch113-agent-in-a-pod.html">chapter 113</a> put them: outside the cluster, in Azure Key Vault, reached via <em>workload identity</em> — the pod proves who it is with a federated identity token and fetches secrets at runtime, so no API key is ever baked into an image or parked in a manifest. Secret objects still appear in that world (the Key Vault CSI driver can materialise vault values as short-lived Secrets), but the source of truth sits in the vault, behind audit logs and rotation. Rule of thumb: ConfigMap for anything you could say out loud; Key Vault plus workload identity for anything you couldn't.</p>
+      <p>So where do real credentials live? Exactly where <a href="ch113-agent-in-a-pod.html">chapter 114</a> put them: outside the cluster, in Azure Key Vault, reached via <em>workload identity</em> — the pod proves who it is with a federated identity token and fetches secrets at runtime, so no API key is ever baked into an image or parked in a manifest. Secret objects still appear in that world (the Key Vault CSI driver can materialise vault values as short-lived Secrets), but the source of truth sits in the vault, behind audit logs and rotation. Rule of thumb: ConfigMap for anything you could say out loud; Key Vault plus workload identity for anything you couldn't.</p>
 
       <h2>Shipping it: kubectl apply and kubectl diff</h2>
       <p>Four files sit in a folder — <code>deployment.yaml</code>, <code>service.yaml</code>, <code>configmap.yaml</code>, <code>secret.yaml</code>. Shipping them takes two commands, one of which you half-know from <a href="ch021-just-enough-git.html">git</a>:</p>

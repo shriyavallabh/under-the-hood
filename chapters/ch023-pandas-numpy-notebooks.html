@@ -184,7 +184,7 @@ orders.groupby("city").agg(
         <tr><td><code>"outer"</code></td><td>Every row from both sides, NaN in the gaps</td><td>Full union — nothing lost, lots of holes</td></tr>
       </table></div>
 
-      <p>The quiet danger with merges is not syntax, it is <em>row count</em>. If the key is duplicated on the right-hand side, each left row matches multiple partners and the table silently grows — the classic "why did my revenue double?" bug. Careful authors add <code>validate="one_to_many"</code> (or <code>"one_to_one"</code>) so pandas errors out if the key relationship is not what they believed. Spotting <code>validate=</code> in a merge request means the author wore a seatbelt.</p>
+      <p>The quiet danger with merges is not syntax, it is <em>row count</em>. If the key is duplicated on the right-hand side, each left row matches multiple partners and the table silently grows — the classic "why did my revenue double?" bug. Careful authors add <code>validate="many_to_one"</code> (or <code>"one_to_one"</code>) so pandas errors out if the key relationship is not what they believed. Spotting <code>validate=</code> in a merge request means the author wore a seatbelt.</p>
 
       <h2>Vectorised operations: the end of the for-loop</h2>
       <p>By now you may have noticed what is <em>missing</em> from every example: loops. In the engineering dialect, processing six values means a <code>for</code> loop or a <a href="ch008-comprehensions.html">comprehension</a>. In the data dialect, you write the operation <em>once</em>, against the whole column, and it applies to every row simultaneously — the style called <dfn>vectorised</dfn>:</p>

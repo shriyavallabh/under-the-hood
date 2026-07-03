@@ -51,7 +51,7 @@
       </div>
 
       <h2>Three lines between your server and your agent</h2>
-      <p>Here is the whole bridge, in real code. One server runs locally over stdio (the invoice server you could have built last chapter); another is a shared team server reached over streamable HTTP. Read it once, then click through the annotated version below it.</p>
+      <p>Here is the whole bridge, in real code. One server runs locally over stdio (an invoice server of your own, built the same way as last chapter's finance desk); another is a shared team server reached over streamable HTTP. Read it once, then click through the annotated version below it.</p>
 
       <div class="code-title">agent_with_mcp.py</div>
       <pre><code class="language-python">from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -180,7 +180,7 @@ result = await agent.ainvoke(
             <span class="d-arrow">&#8594;</span>
             <div class="d-box good">LLM<small>writes the answer</small></div>
           </div>
-          <p class="step-cap">The server's answer comes back over the wire, lands in the transcript as a tool result, and the loop continues. Think, act, observe — the heartbeat from chapter 45, with a longer arm.</p>
+          <p class="step-cap">The server's answer comes back over the wire, lands in the transcript as a tool result, and the loop continues. Think, act, observe — the heartbeat from chapter 46, with a longer arm.</p>
         </div>
       </div>
 
@@ -258,7 +258,7 @@ print("Same toolbox, two harnesses, zero rewiring.")
       <p>Now extend it. Add an <code>InvoiceServer</code> with a <code>get_total</code> tool and watch it appear in the toolbox without touching either harness — that is the m-plus-n arithmetic happening under your fingers. Then rename a tool in <code>list_tools</code> but not in <code>call_tool</code>'s logic and see which side breaks. Schema drift between what a server advertises and what it executes is a real production failure you will now recognise.</p></div>
 
       <h2>The strategic argument: your toolbox outlives your harness</h2>
-      <p>Here is the part worth repeating in a leadership meeting. Agent harnesses churn. In this course alone you have watched LangChain deprecate one agent API for another, and the wider landscape (<a href="ch090-the-contenders.html">chapter 90</a> maps it) saw two major Microsoft frameworks merge into a third. Betting your company's integrations on any single harness means rewriting them every time the framework world lurches.</p>
+      <p>Here is the part worth repeating in a leadership meeting. Agent harnesses churn. In this course alone you have watched LangChain deprecate one agent API for another, and the wider landscape (<a href="ch090-the-contenders.html">chapter 91</a> maps it) saw two major Microsoft frameworks merge into a third. Betting your company's integrations on any single harness means rewriting them every time the framework world lurches.</p>
       <p>But look at what your tools actually contain: access to the invoice database, the CRM query, the deployment script, the document store. That is <em>business logic</em> — the durable, expensive, audited part. The harness is just the loop around it, and you built one yourself in fifty lines. MCP's quiet trick is to move the durable part out of the framework and into servers that you own, speak a public protocol, and answer to any client. The harness stops being a marriage and becomes a rental.</p>
 
       <div class="tbl"><table>
@@ -286,7 +286,7 @@ print("Same toolbox, two harnesses, zero rewiring.")
         <div class="bar" data-label="Code execution with MCP" data-value="2000"></div>
       </div>
 
-      <p>Feel the difference yourself. The runnable below simulates both patterns against the same 2,000-row "sales sheet" server and counts how many tokens pass through the model's context in each. The token counter is a crude characters-divided-by-four estimate — the standard back-of-envelope from chapter 41 — but the shape of the result is exactly what production teams see.</p>
+      <p>Feel the difference yourself. The runnable below simulates both patterns against the same 2,000-row "sales sheet" server and counts how many tokens pass through the model's context in each. The token counter is a crude characters-divided-by-four estimate — the standard back-of-envelope from chapter 42 — but the shape of the result is exactly what production teams see.</p>
 
       <div class="pyrun" data-title="Classic tool calling vs code execution — count the tokens">
 <textarea class="py-src" spellcheck="false">

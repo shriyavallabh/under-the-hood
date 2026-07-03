@@ -142,7 +142,7 @@ if __name__ == "__main__":
             <div class="d-box hot">history<small>{"role": "user", ...}</small></div>
             <div class="d-box dim">API</div>
           </div>
-          <p class="step-cap">Your text is wrapped in the message shape from <a href="ch033-first-api-call.html">chapter 33</a> — a dict with a <code>role</code> and <code>content</code> — and appended to the <code>history</code> list. The rail grows by one ticket.</p>
+          <p class="step-cap">Your text is wrapped in the message shape from <a href="ch033-first-api-call.html">chapter 34</a> — a dict with a <code>role</code> and <code>content</code> — and appended to the <code>history</code> list. The rail grows by one ticket.</p>
         </div>
         <div class="step" data-title="Whole rail to the cook">
           <h3>4. The WHOLE rail goes to the kitchen</h3>
@@ -185,7 +185,7 @@ if __name__ == "__main__":
         <div class="wl-line"><code>MODEL = "claude-opus-4-8"</code>
           <div class="wl-note">Configuration lives at the top as a named constant, not buried inside a function call. When the next model generation ships, this file needs a one-line change. Small file, professional habit.</div></div>
         <div class="wl-line"><code>SYSTEM = "You are a concise, friendly assistant."</code>
-          <div class="wl-note">The standing instructions — the system prompt from <a href="ch037-prompting-that-matters.html">chapter 37</a>. It rides along on every request but never appears in <code>history</code>; the SDK sends it as a separate field.</div></div>
+          <div class="wl-note">The standing instructions — the system prompt from <a href="ch037-prompting-that-matters.html">chapter 38</a>. It rides along on every request but never appears in <code>history</code>; the SDK sends it as a separate field.</div></div>
         <div class="wl-line"><code>def make_client():</code>
           <div class="wl-note">A tiny function with one job (<a href="ch007-functions.html">chapter 7</a>): build the client, or die with a useful message. Failing loudly at startup beats a confusing crash mid-conversation.</div></div>
         <div class="wl-line"><code>    if not os.environ.get("ANTHROPIC_API_KEY"):</code>
@@ -197,9 +197,9 @@ if __name__ == "__main__":
         <div class="wl-line"><code>    parts = []</code>
           <div class="wl-note">Streaming gives you the reply in fragments, but the history needs the complete text. So every chunk is printed AND collected here, to be reassembled at the end.</div></div>
         <div class="wl-line"><code>    with client.messages.stream(</code>
-          <div class="wl-note">Two old friends in one line: the streaming call from <a href="ch040-streaming-responses.html">chapter 40</a>, wrapped in a <code>with</code> block — a context manager (<a href="ch018-context-managers.html">chapter 18</a>) that guarantees the network connection is closed properly even if something goes wrong mid-stream.</div></div>
+          <div class="wl-note">Two old friends in one line: the streaming call from <a href="ch040-streaming-responses.html">chapter 41</a>, wrapped in a <code>with</code> block — a context manager (<a href="ch018-context-managers.html">chapter 18</a>) that guarantees the network connection is closed properly even if something goes wrong mid-stream.</div></div>
         <div class="wl-line"><code>        max_tokens=1024,</code>
-          <div class="wl-note">The hard ceiling on the reply's length, in tokens (<a href="ch041-tokens-and-cost.html">chapter 41</a>). Chat replies are short, so a modest cap doubles as a cost guardrail — a runaway answer cannot bill you forever.</div></div>
+          <div class="wl-note">The hard ceiling on the reply's length, in tokens (<a href="ch041-tokens-and-cost.html">chapter 42</a>). Chat replies are short, so a modest cap doubles as a cost guardrail — a runaway answer cannot bill you forever.</div></div>
         <div class="wl-line"><code>        messages=history,</code>
           <div class="wl-note">The most important argument in the file. Not the latest message — the WHOLE list, every turn. The server keeps no memory of you between calls; this list IS the conversation.</div></div>
         <div class="wl-line"><code>        for text in stream.text_stream:</code>
@@ -217,7 +217,7 @@ if __name__ == "__main__":
         <div class="wl-line"><code>        if user.lower() in ("quit", "exit"):</code>
           <div class="wl-note">The quit command. <code>.lower()</code> makes it case-insensitive, and membership in a tuple checks both spellings at once. Every REPL-style tool you have used has a line like this.</div></div>
         <div class="wl-line"><code>        history.append({"role": "user", "content": user})</code>
-          <div class="wl-note">Your words become a message dict — the exact wire shape from <a href="ch033-first-api-call.html">chapter 33</a> — and go onto the rail BEFORE the API call, because the call needs to include them.</div></div>
+          <div class="wl-note">Your words become a message dict — the exact wire shape from <a href="ch033-first-api-call.html">chapter 34</a> — and go onto the rail BEFORE the API call, because the call needs to include them.</div></div>
         <div class="wl-line"><code>        except anthropic.APIError as err:</code>
           <div class="wl-note">Networks fail, rate limits bite, servers overload. This catches any API failure, prints a short notice instead of a scary traceback, and lets the loop continue — the app survives. Production code would catch specific subclasses (rate limit vs auth) and retry differently for each.</div></div>
         <div class="wl-line"><code>            history.pop()  # forget the turn that never got an answer</code>
@@ -229,7 +229,7 @@ if __name__ == "__main__":
       </div>
 
       <h2>Why the bill grows: the history tax</h2>
-      <p>Look again at <code>messages=history</code>. Because the whole rail is re-sent every turn, the input size — and therefore the input cost from <a href="ch041-tokens-and-cost.html">chapter 41</a> — grows with every message. Turn one sends one message; turn ten sends nineteen (ten of yours, nine replies). The numbers below are illustrative round figures, but the shape is real and it is the shape of every chat bill in existence:</p>
+      <p>Look again at <code>messages=history</code>. Because the whole rail is re-sent every turn, the input size — and therefore the input cost from <a href="ch041-tokens-and-cost.html">chapter 42</a> — grows with every message. Turn one sends one message; turn ten sends nineteen (ten of yours, nine replies). The numbers below are illustrative round figures, but the shape is real and it is the shape of every chat bill in existence:</p>
 
       <div data-bars data-title="Input tokens sent per turn as a chat grows" data-unit="tokens"
            data-note="Illustrative numbers. Each turn re-sends everything before it, so input grows faster and faster — this is why long conversations get expensive and why context management is a whole discipline.">
@@ -313,7 +313,7 @@ main()
         <tr><td><a href="ch039-async-await.html">Async</a></td><td>Swap the client for its async twin so a server can hold hundreds of these conversations at once</td></tr>
       </table></div>
 
-      <p>Add the tool-calling branch to this loop and you have built something with a grander name — that is literally the subject of <a href="ch044-what-is-an-agent.html">the next chapter</a>, and in <a href="ch045-react-loop-by-hand.html">chapter 45</a> you will build it with your own hands.</p>
+      <p>Add the tool-calling branch to this loop and you have built something with a grander name — that is literally the subject of <a href="ch044-what-is-an-agent.html">the next chapter</a>, and in <a href="ch045-react-loop-by-hand.html">chapter 46</a> you will build it with your own hands.</p>
 
       <div class="callout wild"><span class="co-label">In the wild</span>
       <p>This file's skeleton is everywhere once you know its face. Every LLM SDK ships a quickstart that is a shorter version of it; every chat product — web, Slack bot, WhatsApp bridge — is this loop with the terminal swapped for a nicer front end and the <code>history</code> list swapped for a database table. In repositories, look for files named <code>chat.py</code>, <code>cli.py</code>, or <code>repl.py</code>. In merge requests, when someone says "we now truncate the history after 50 turns" or "the streaming handler drops the partial reply on disconnect", you can now picture the exact lines they changed. And when a teammate reports "the bot forgot the whole conversation", your first question is one you can ask with confidence: what exactly is in the messages list being sent?</p></div>
@@ -354,7 +354,7 @@ main()
             <button data-opt="b">Between reading the user's input and calling the API — retrieve relevant text and include it in the message</button>
             <button data-opt="c">Inside <code>make_client()</code>, when the program starts</button>
           </div>
-          <p class="q-explain">RAG (chapter 42) fetches relevant context and puts it in front of the model, so it must happen before the API call that needs it: read the question, retrieve, stuff the findings into the message, then send. The rest of the file does not change.</p>
+          <p class="q-explain">RAG (chapter 43) fetches relevant context and puts it in front of the model, so it must happen before the API call that needs it: read the question, retrieve, stuff the findings into the message, then send. The rest of the file does not change.</p>
         </div>
         <div class="q" data-answer="c">
           <p class="q-text">5. What breaks if you remove <code>flush=True</code> from the streaming print?</p>

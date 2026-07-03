@@ -39,10 +39,10 @@
       <p>Before any syntax, one distinction that will serve you for the rest of your career: a <strong>bug</strong> is not the same as a <strong>handled error</strong>.</p>
       <p>An empty cream tub is not a scandal. Fridges run empty; customers mistype their email; a model replies with slightly broken JSON. These are <em>expected</em> failures — things a well-run kitchen has a plan for. Handling them is just another kind of control flow, a sibling of the <a href="ch006-control-flow.html">if/else decisions</a> you already know: <em>if this goes wrong, do that instead</em>.</p>
       <p>A bug is different. A bug is the recipe itself being wrong — the code asked for something that can never work. You do not want a plan for bugs. You want them to fail <em>loudly</em>, with a full incident report, so you can fix the recipe. A program that hides its bugs is more dangerous than one that crashes, because it keeps serving wrong food with a smile.</p>
-      <p>Python's mechanism for both is the same. When something cannot continue, Python <dfn>raises</dfn> an <dfn>exception</dfn> — it stops normal execution on the spot and sends an error object shooting back up through the chain of function calls, looking for someone with a plan. If some code catches it, that was a handled error: the program carries on. If nothing catches it, the program stops and Python prints the incident slip — the <dfn>traceback</dfn>, a listing of every function call the error travelled through. Remember from <a href="ch007-functions.html">the functions chapter</a> that functions call functions, building a stack of "who is waiting on whom"? A traceback is that stack, printed at the moment of the crash.</p>
+      <p>Python's mechanism for both is the same. When something cannot continue, Python <dfn>raises</dfn> an <dfn>exception</dfn> — it stops normal execution on the spot and sends an error object shooting back up through the chain of function calls, looking for someone with a plan. If some code catches it, that was a handled error: the program carries on. If nothing catches it, the program stops and Python prints the incident slip — the <dfn>traceback</dfn>, a listing of every function call the error travelled through. Functions call functions, building a stack of "who is waiting on whom": a traceback is that stack, printed at the moment of the crash.</p>
 
       <div class="callout note"><span class="co-label">Note</span>
-      <p>The Zen of Python — the design philosophy you met in <a href="ch001-why-python-looks-like-that.html">chapter 1</a> — has a line for this: <em>"Errors should never pass silently. Unless explicitly silenced."</em> Loud by default, quiet only on purpose. Hold that thought; it is the moral of this whole chapter.</p></div>
+      <p>The Zen of Python — the language's built-in design philosophy (run <code>import this</code> to see it) — has a line for this: <em>"Errors should never pass silently. Unless explicitly silenced."</em> Loud by default, quiet only on purpose. Hold that thought; it is the moral of this whole chapter.</p></div>
 
       <h2>Every error carries a type</h2>
       <p>Python does not throw one generic "error". Each exception has a <em>type</em> — a name that tells you the category of failure before you read another word. Seasoned readers get most of their diagnosis from this one word. Flip these cards until each name conjures a picture:</p>
@@ -197,7 +197,7 @@ except KeyError:
               <div class="d-box">KeyError: 'SENSEX'</div>
             </div>
           </div>
-          <p class="step-cap">Each frame above answers one question: "and who asked for THAT?" This is the call stack from the functions chapter, photographed at the instant of the crash. Climb only as far as you need.</p>
+          <p class="step-cap">Each frame above answers one question: "and who asked for THAT?" This is the call stack, photographed at the instant of the crash. Climb only as far as you need.</p>
         </div>
         <div class="step" data-title="The top is the front door">
           <h3>5. The top is just the front door</h3>

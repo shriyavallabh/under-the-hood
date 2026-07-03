@@ -135,6 +135,8 @@ class Toolbox:
         return self.tools[name]
 
 def calculate(expr):
+    # eval() runs a string as Python -- beyond this course's ramp; here it is
+    # caged to pure arithmetic. Just read it as "compute the expression".
     return str(eval(expr, {"__builtins__": {}}, {}))
 
 llm = FakeLLM([
@@ -148,6 +150,8 @@ reply = llm("What is 20% GST on 1500?")       # __call__ on an object!
 print("model said:", reply)
 
 name = reply.split("(")[0].split()[-1]        # 'calculate'
+# .index/.rindex find the first "(" and last ")" positions -- string
+# search, beyond this course's ramp; read it as "grab what's in the brackets".
 arg = reply[reply.index("(") + 1 : reply.rindex(")")]
 print("observation:", tools[name](arg))       # __getitem__, then a call
 print("model state:", llm)                    # __repr__

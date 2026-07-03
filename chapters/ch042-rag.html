@@ -274,7 +274,7 @@ rag_answer("What is the dress code?")
       </table></div>
 
       <h2>What production RAG code looks like</h2>
-      <p>Your toy and a production system differ in three swaps: hand-made vectors become calls to a real embedding model, the <code>DOCS</code> dict becomes a real vector database (FAISS, Chroma, pgvector inside Postgres, Pinecone — different clients, identical verbs), and <code>fake_llm</code> becomes the chat call from <a href="ch033-first-api-call.html">chapter 33</a>. The shape below is deliberately generic pseudocode — vendor names differ, but you will recognise this skeleton in any codebase. Click the lines:</p>
+      <p>Your toy and a production system differ in three swaps: hand-made vectors become calls to a real embedding model, the <code>DOCS</code> dict becomes a real vector database (FAISS, Chroma, pgvector inside Postgres, Pinecone — different clients, identical verbs), and <code>fake_llm</code> becomes the chat call from <a href="ch033-first-api-call.html">chapter 34</a>. The shape below is deliberately generic pseudocode — vendor names differ, but you will recognise this skeleton in any codebase. Click the lines:</p>
 
       <div class="walkthrough">
         <div class="wl-head">rag_service.py — the shape you will meet in real repos</div>

@@ -106,7 +106,7 @@
             <span class="d-arrow">&#8594;</span>
             <div class="d-box dim">whistle past the cap</div>
           </div>
-          <p class="step-cap">Both verbs take a config dict as their second argument. Today's key: recursion_limit — the cap on steps per run before LangGraph blows the whistle. The default is a modest 25, so any serious run sets its own.</p>
+          <p class="step-cap">Both verbs take a config dict as their second argument. Today's key: recursion_limit — the cap on steps per run before LangGraph blows the whistle. In LangGraph 1.x the built-in default is enormous (~10,000, up from 25 in the old 0.x line), so any serious run sets its own tight cap.</p>
         </div>
       </div>
 
@@ -159,7 +159,7 @@ for chunk in graph.stream(inputs, stream_mode="values"):
       <p>And here is the punchline that makes the whole API click: <strong><code>.invoke()</code> is not a separate engine</strong>. In LangGraph's own source, invoke simply consumes the values stream and keeps the last chunk. The keys-drop customer's car went through the identical glass-walled tunnel — he just chose not to look. One engine, two ways of watching it.</p>
 
       <h2>The job ticket: config and recursion_limit</h2>
-      <p>Both verbs accept a second argument: <code>config</code>, a plain dict of settings about <em>this run</em> — as opposed to state, the data <em>inside</em> it. Two compartments matter. <code>"configurable"</code> is a free-form bag of run-scoped values; its star tenant is <code>thread_id</code>, the key that gives a run a durable identity — the doorway to <a href="ch061-checkpointing.html">checkpointing</a>, shut for one more chapter. Today's compartment is <code>"recursion_limit"</code>, sitting at the <em>top level</em> of the dict: the cap on how many steps a run may take. The default is a deliberately modest <strong>25</strong> — a backstop against infinite loops, not a generous budget — tight enough that a genuinely deep agent can bump into it, which is why serious runs raise the cap explicitly rather than leaning on the default.</p>
+      <p>Both verbs accept a second argument: <code>config</code>, a plain dict of settings about <em>this run</em> — as opposed to state, the data <em>inside</em> it. Two compartments matter. <code>"configurable"</code> is a free-form bag of run-scoped values; its star tenant is <code>thread_id</code>, the key that gives a run a durable identity — the doorway to <a href="ch061-checkpointing.html">checkpointing</a>, shut for one more chapter. Today's compartment is <code>"recursion_limit"</code>, sitting at the <em>top level</em> of the dict: the cap on how many steps a run may take. Mind the version here: LangGraph 0.x shipped a deliberately modest default of <strong>25</strong>, but LangGraph 1.x raised it to a very loose <strong>~10,000</strong> (env-overridable via <code>LANGGRAPH_DEFAULT_RECURSION_LIMIT</code>) — a backstop so wide a runaway cycle would rack up thousands of steps, and a real bill, before it ever fired. Which is why serious runs set their own tight cap explicitly rather than leaning on the default.</p>
 
       <div class="code-title">setting your own cap for an agent run</div>
       <pre><code class="language-python">config = {"recursion_limit": 50}          # top level, NOT inside configurable
@@ -182,7 +182,7 @@ for chunk in graph.stream(inputs, config, stream_mode="updates"):
         <button class="flip" type="button"><span class="flip-front">.stream(state)</span><span class="flip-back">A generator over the same run: one chunk after every step. The glass wall. invoke() is literally this stream, drained to its last chunk.</span></button>
         <button class="flip" type="button"><span class="flip-front">stream_mode="values"</span><span class="flip-back">Each chunk is a full snapshot of the state after that step — the whole car after each station. The mode invoke() drains internally.</span></button>
         <button class="flip" type="button"><span class="flip-front">stream_mode="updates"</span><span class="flip-back">Each chunk is {node_name: what it returned} — just the delta. The default mode, and the one for watching which node ran and what it changed.</span></button>
-        <button class="flip" type="button"><span class="flip-front">recursion_limit</span><span class="flip-back">Top-level config key capping steps per run (default 25). Exceed it and GraphRecursionError fires — max_turns reborn at the engine level.</span></button>
+        <button class="flip" type="button"><span class="flip-front">recursion_limit</span><span class="flip-back">Top-level config key capping steps per run (LangGraph 1.x default ~10,000, up from 25 in 0.x — so loose you set your own). Exceed it and GraphRecursionError fires — max_turns reborn at the engine level.</span></button>
       </div>
 
       <h2>Build all three verbs yourself</h2>
@@ -411,7 +411,7 @@ except GraphRecursionError as e:
           <li>A StateGraph builder is a drawing; <code>.compile()</code> is the commissioning inspection that validates the wiring (unknown destinations, missing entrypoint) and hands back a runnable graph — in milliseconds, with no nodes run and no models called.</li>
           <li><code>.invoke(state)</code> is one blocking call: the whole run happens inside, and you get the final state back — the full schema-shaped dict, from which you pluck the answer yourself.</li>
           <li><code>.stream(state)</code> is a generator over the same run: <code>stream_mode="values"</code> yields a full state snapshot after each step, <code>"updates"</code> yields just <code>{node: what_it_returned}</code>, and <code>"messages"</code> yields token-level LLM output. invoke() is literally the values stream, drained to its last chunk.</li>
-          <li>The config dict rides along as the second argument: <code>recursion_limit</code> at the top level (default 25 steps — set your own cap; exceed it and <code>GraphRecursionError</code> fires), and the <code>configurable</code> bag for run-scoped values like <code>thread_id</code> — next chapter's key.</li>
+          <li>The config dict rides along as the second argument: <code>recursion_limit</code> at the top level (LangGraph 1.x defaults to a very loose ~10,000 steps — up from 25 in 0.x — so set your own tight cap; exceed it and <code>GraphRecursionError</code> fires), and the <code>configurable</code> bag for run-scoped values like <code>thread_id</code> — next chapter's key.</li>
           <li>An updates-mode trace is your execution log: the keys are the route, the values are the work, and an identical repeating pair is a stuck cycle — fix the loop's contents, not the limit.</li>
           <li><code>ainvoke</code> and <code>astream</code> are the async twins; same behaviour, awaitable — the shape every production chat service actually uses.</li>
         </ul>

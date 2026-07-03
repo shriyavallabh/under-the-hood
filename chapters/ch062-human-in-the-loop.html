@@ -175,7 +175,7 @@
         <div class="wl-line"><code>builder.add_edge("send", END)</code>
           <div class="wl-note">Plain edges throughout — the gate is not a <a href="ch059-conditional-edges.html">conditional edge</a>. Routing decides <em>where</em> to go; an interrupt decides <em>whether the run may continue at all</em>. They compose nicely, but they are different tools.</div></div>
         <div class="wl-line"><code>graph = builder.compile(checkpointer=InMemorySaver())</code>
-          <div class="wl-note">Compile with the checkpointer attached. Forget this and the first interrupt() raises an error at runtime — a pause with nowhere to save is a contradiction.</div></div>
+          <div class="wl-note">Compile with the checkpointer attached. Forget this and the pause still fires — invoke() returns an <code>__interrupt__</code> — but the frozen state has nowhere to live: the resume call fails with <code>RuntimeError: Cannot use Command(resume=...) without checkpointer</code>, and a restart loses the run entirely.</div></div>
       </div>
 
       <p>And here is what running it looks like — two invocations, possibly days apart, possibly from different processes:</p>
@@ -319,7 +319,7 @@ invoke("thread-42", resume="yes")
           <p class="q-explain">Resume replays the interrupted node from the top; only then does interrupt() return the answer. Any side effect placed before the interrupt runs twice. The fix is structural: irreversible actions live in their own node, after the gate.</p>
         </div>
         <div class="q" data-answer="b">
-          <p class="q-text">4. Why does <code>interrupt()</code> refuse to work without a checkpointer attached at compile time?</p>
+          <p class="q-text">4. Why does resuming an interrupt require a checkpointer attached at compile time?</p>
           <div class="q-opts">
             <button data-opt="a">The checkpointer is where the human's answer is validated against a schema</button>
             <button data-opt="b">Pausing means freezing state for later — with nowhere to save it, there would be nothing to resume</button>

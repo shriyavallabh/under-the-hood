@@ -78,7 +78,7 @@
       <p>Instead, mine reality:</p>
       <ul>
         <li><strong>Real transcripts and traces.</strong> Pull a month of runs from the agents your teams already operate. Which capabilities actually fired? If every production agent uses <a href="ch062-human-in-the-loop.html">human-in-the-loop interrupts</a> daily, that is a heavyweight row. If nobody has ever launched a ten-agent swarm, that gets one polite row, not a section.</li>
-        <li><strong>Support tickets and incident reports.</strong> Every past outage is a sub-row: "recovers when the model API times out mid-tool-call" earns its place because it once cost you a weekend. Chapter <a href="ch048-failure-modes.html">48's failure modes</a> are a ready-made quarry.</li>
+        <li><strong>Support tickets and incident reports.</strong> Every past outage is a sub-row: "recovers when the model API times out mid-tool-call" earns its place because it once cost you a weekend. The <a href="ch048-failure-modes.html">failure-modes chapter</a> is a ready-made quarry.</li>
         <li><strong>The requirements sheet.</strong> Every non-negotiable from <a href="ch094-bank-grade-requirements.html">bank-grade requirements</a> becomes at least one row, usually several.</li>
       </ul>
       <p>A healthy matrix for a serious platform decision lands between forty and eighty sub-rows. Fewer, and you are probably still at the mood level; many more, and you are cataloguing rather than deciding.</p>
@@ -176,7 +176,7 @@
       <p>Let us run the method on two <em>fictional</em> harnesses, sized down so the whole thing fits on one screen. <strong>Aviary</strong> is batteries-included and opinionated: an agent running in ten minutes, lovely tracing, strong tool allow-lists — but young around persistence. <strong>Foundry</strong> is a build-your-own graph kit in the spirit of <a href="ch057-why-graphs.html">graph-based frameworks</a>: more assembly required, but checkpointing, interrupts and scale-out are load-bearing features its production users hammer daily.</p>
       <p>The evaluating team runs payment-adjacent workloads, so the room has already agreed on weights: State and Security count triple, Serving counts single. Below is their (miniature) matrix as data, plus the scoring rules — including the one that rejects vibes. <strong>Press Run</strong>, then try the experiments underneath.</p>
 
-      <div class="pyrun" data-title="A capability matrix as forty lines of Python — run me">
+      <div class="pyrun" data-title="A capability matrix as runnable Python — run me">
 <textarea class="py-src" spellcheck="false">
 # Two FICTIONAL harnesses under evaluation:
 #   Aviary  - batteries-included, fast to start, young persistence story
@@ -245,19 +245,20 @@ if rejected:
 
 winner = max(totals, key=totals.get)
 print(f"\nDECISION LOG: adopt {winner} for the regulated workload.")
-print("Justification: wins both triple-weighted areas (State and")
-print("Security). Dissent noted: Aviary's time-to-first-agent is")
-print("superior; revisit when Aviary ships durable checkpoints (#212).")
+print("Justification: wins the triple-weighted State area outright")
+print("and ties on Security. Dissent noted: Aviary's time-to-first-")
+print("agent is superior; revisit when Aviary ships durable")
+print("checkpoints (#212).")
 </textarea>
       </div>
 
       <div class="callout tip"><span class="co-label">Tip</span>
       <p>Now do what the room would do. Change the Serving weight to 5 and watch whether the winner flips — that is a sensitivity check, and a decision that survives reasonable re-weighting is a safe one. Upgrade Aviary's "Resumes after process kill" to <code>(2, "tested")</code> and see how much one spike is worth. Then change that same cell's evidence to <code>"vibes"</code> and watch the scorer void it — the ladder is enforced by code, not by good intentions.</p></div>
 
-      <p>Two things are worth noticing in the output. First, Aviary's "horizontal scale-out" cell scored zero <em>not</em> because Aviary cannot scale, but because the only evidence anyone had was a conference-corridor conversation. The method does not punish the harness; it punishes the unverified claim, and it prints exactly which cells need a spike before the score can be trusted. Second, the totals are close enough in unweighted terms that the weights — which the room agreed on <em>before</em> scoring — are what make the decision. That ordering matters: weights chosen after the scores are visible are just vibes wearing a spreadsheet.</p>
+      <p>Two things are worth noticing in the output. First, Aviary's "horizontal scale-out" cell scored zero <em>not</em> because Aviary cannot scale, but because the only evidence anyone had was a conference-corridor conversation. The method does not punish the harness; it punishes the unverified claim, and it prints exactly which cells need a spike before the score can be trusted. Second, Foundry leads even on the raw unweighted scores, so the weights are not what manufacture the win — what they do is anchor the decision to the areas this team's workload actually lives in, chiefly State, where Foundry's advantage is largest and the agreed weight is heaviest. The ordering still matters: those weights were set <em>before</em> scoring, and weights chosen after the scores are visible are just vibes wearing a spreadsheet.</p>
 
       <div data-bars data-title="Weighted totals, Aviary vs Foundry (illustrative)" data-unit="points (max 48)"
-           data-note="Foundry wins on the triple-weighted areas — State and Security — which is exactly where this team's workload lives.">
+           data-note="Foundry wins the triple-weighted State area outright and ties Security — the two areas where this team's regulated workload lives.">
         <div class="bar" data-label="Aviary" data-value="25"></div>
         <div class="bar" data-label="Foundry" data-value="40"></div>
       </div>

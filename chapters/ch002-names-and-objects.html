@@ -207,7 +207,7 @@ print("x == y?", x == y, "| x is y?", x is y)
         <div class="wl-line"><code>DEFAULT_TOOLS = ["calculator"]</code>
           <div class="wl-note">A module-level list: ONE box, built once when the file loads. Every part of the program that touches this name is touching the same box.</div></div>
         <div class="wl-line"><code>def make_agent(name, tools=None):</code>
-          <div class="wl-note">A factory that builds an agent. Callers may pass their own tool list; if they do not, we fall back to the defaults. So far, reasonable.</div></div>
+          <div class="wl-note">A factory that builds an agent. Callers may pass their own tool list; if they do not, we fall back to the defaults. So far, reasonable. (<code>def</code> — writing your own functions — gets its full chapter in <a href="ch007-functions.html">functions</a>, and the returned <code>{…}</code> is a dict from <a href="ch004-collections.html">collections</a>; today you only need to follow the notes and boxes.)</div></div>
         <div class="wl-line"><code>    if tools is None:</code>
           <div class="wl-note">The one blessed use of <code>is</code> — there is a single None box in the whole program, so identity is the right test for "the caller gave us nothing".</div></div>
         <div class="wl-line"><code>        tools = DEFAULT_TOOLS</code>
@@ -226,6 +226,9 @@ print("x == y?", x == y, "| x is y?", x is y)
 
       <div class="pyrun" data-title="One shared box poisons every agent — run, then fix">
 <textarea class="py-src" spellcheck="false">
+# def builds a reusable function (full chapter: ch07), the {...} is a dict
+# (ch04), and `if ... is None` is a test you will properly meet in control
+# flow (ch06). For now, just follow the sticky notes and the shared box.
 DEFAULT_TOOLS = ["calculator"]
 
 def make_agent(name, tools=None):

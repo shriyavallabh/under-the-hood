@@ -117,7 +117,7 @@
       </div>
 
       <div class="callout note"><span class="co-label">Note</span>
-      <p>Async is <strong>concurrency, not parallelism</strong>. There is still exactly one chef — one thread, doing one thing at any instant. The speed-up comes entirely from overlapping the <em>waiting</em>. That is also why async does nothing for CPU-bound work: if all three dishes were pure chopping, one pair of hands would take just as long in any order. (For genuinely parallel computation Python offers processes and threads — a different tool for a different problem, and rarely needed in agent code.)</p></div>
+      <p>Async is <strong>concurrency, not parallelism</strong>. There is still exactly one chef — one thread, doing one thing at any instant. The speed-up comes entirely from overlapping the <em>waiting</em>. That is also why async does nothing for CPU-bound work: if all three dishes were pure chopping, one pair of hands would take just as long in any order. (For genuinely parallel CPU-bound computation Python offers processes — <code>multiprocessing</code>, which sidesteps the GIL — a different tool for a different problem, and rarely needed in agent code.)</p></div>
 
       <p>Six words carry the rest of this chapter. Flip until they feel obvious:</p>
 

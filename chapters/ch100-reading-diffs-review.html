@@ -82,7 +82,7 @@
       <p>Nobody computes these numbers by hand. But being able to <em>read</em> them means you always know where you are — and any text after the closing <code>@@</code> (often a function name) is git being helpful about which function the hunk lives inside.</p>
 
       <h2>Make a diff with your own hands</h2>
-      <p>The best way to trust a format is to generate it yourself. Python's standard library ships <code>difflib</code>, the same family of algorithms git uses. Below, an old and a new version of a tiny billing function go in, and a unified diff comes out. Press <strong>Run</strong>, then check the hunk header against what you would predict.</p>
+      <p>The best way to trust a format is to generate it yourself. Python's standard library ships <code>difflib</code>, which produces the same unified-diff format git prints. Below, an old and a new version of a tiny billing function go in, and a unified diff comes out. Press <strong>Run</strong>, then check the hunk header against what you would predict.</p>
 
       <div class="pyrun" data-title="Generate a real diff with difflib — run me">
 <textarea class="py-src" spellcheck="false">
@@ -141,15 +141,15 @@ print(f"file badge: +{adds} -{dels}")
             <div class="d-box dim">Overview<small>description, discussion</small></div>
             <div class="d-box dim">Commits<small>4</small></div>
             <div class="d-box dim">Pipelines<small>passed</small></div>
-            <div class="d-box hot">Changes<small>2 files, +17 -14</small></div>
+            <div class="d-box hot">Changes<small>2 files, +16 -11</small></div>
           </div>
-          <p class="step-cap">Overview holds the description and discussion; Changes holds the diff. The badge already tells you the shape of the review: two files, seventeen additions, fourteen removals — small enough to review properly.</p>
+          <p class="step-cap">Overview holds the description and discussion; Changes holds the diff. The badge already tells you the shape of the review: two files, sixteen additions, eleven removals — small enough to review properly.</p>
         </div>
         <div class="step" data-title="File list">
           <h3>2. Scan the file list first</h3>
           <div class="diagram">
             <div class="d-col">
-              <div class="d-box hot">pipeline/client.py<small>+17 -9</small></div>
+              <div class="d-box hot">pipeline/client.py<small>+16 -6</small></div>
               <div class="d-box">tests/test_client.py<small>+0 -5</small></div>
             </div>
             <span class="d-arrow">&#8594;</span>
@@ -161,7 +161,7 @@ print(f"file badge: +{adds} -{dels}")
           <h3>3. Read hunks in unified view</h3>
           <div class="diagram">
             <div class="d-col">
-              <div class="d-box dim">@@ -10,9 +10,17 @@<small>hunk header: your map reference</small></div>
+              <div class="d-box dim">@@ -10,9 +10,19 @@<small>hunk header: your map reference</small></div>
               <div class="d-box hot">- DEFAULT_TIMEOUT = 30<small>red: as it was</small></div>
               <div class="d-box good">+ DEFAULT_TIMEOUT = 3<small>green: as it will be</small></div>
               <div class="d-box dim">URL = "https://..."<small>context line</small></div>
@@ -278,7 +278,7 @@ API_TOKEN = os.environ["SCORES_API_TOKEN"]
       <pre><code class="language-diff">diff --git a/pipeline/client.py b/pipeline/client.py
 --- a/pipeline/client.py
 +++ b/pipeline/client.py
-@@ -10,9 +10,17 @@ import requests
+@@ -10,9 +10,19 @@ import requests
 
  URL = "https://scores.internal.example/api/v2"
 -DEFAULT_TIMEOUT = 30
@@ -322,13 +322,13 @@ diff --git a/tests/test_client.py b/tests/test_client.py
       <section class="quiz">
         <h2>Check yourself</h2>
         <div class="q" data-answer="b">
-          <p class="q-text">1. Warm-up, mechanics: in the header <code>@@ -10,9 +10,17 @@</code>, what does <code>-10,9</code> tell you?</p>
+          <p class="q-text">1. Warm-up, mechanics: in the header <code>@@ -10,9 +10,19 @@</code>, what does <code>-10,9</code> tell you?</p>
           <div class="q-opts">
             <button data-opt="a">10 lines were removed and 9 were added</button>
             <button data-opt="b">In the old file, this hunk starts at line 10 and spans 9 of its lines</button>
             <button data-opt="c">The change was made on the 10th of September</button>
           </div>
-          <p class="q-explain">The minus side describes the old file, the plus side the new: start line, then span. Here nine old lines became seventeen new ones — the hunk header told you the change grew the file before you read any code.</p>
+          <p class="q-explain">The minus side describes the old file, the plus side the new: start line, then span. Here nine old lines became nineteen new ones — the hunk header told you the change grew the file before you read any code.</p>
         </div>
         <div class="q" data-answer="c">
           <p class="q-text">2. "Does it do what it says": the description promises "No behaviour change otherwise." Which red-green pair breaks that promise?</p>

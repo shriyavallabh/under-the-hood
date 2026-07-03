@@ -56,7 +56,7 @@
       <p>Flip these until each package's job feels obvious:</p>
 
       <div class="flipgrid">
-        <button class="flip" type="button"><span class="flip-front">langchain_core</span><span class="flip-back">The shared dictionary. Messages, the tool decorator, Runnable plumbing. Every other package depends on it; it depends on nothing.</span></button>
+        <button class="flip" type="button"><span class="flip-front">langchain_core</span><span class="flip-back">The shared dictionary. Messages, the tool decorator, Runnable plumbing. Every other package depends on it; it sits at the bottom of the stack with only a small, stable dependency footprint.</span></button>
         <button class="flip" type="button"><span class="flip-front">langchain</span><span class="flip-back">The batteries-included top layer: create_agent, init_chat_model, middleware. Where application code usually starts.</span></button>
         <button class="flip" type="button"><span class="flip-front">langchain_anthropic</span><span class="flip-back">A provider package — one per vendor. Nothing in it but the connector to that vendor's models. Swap it to swap providers.</span></button>
         <button class="flip" type="button"><span class="flip-front">langchain_community</span><span class="flip-back">The bazaar: hundreds of third-party integrations of varying polish. Seeing it means the app touches something outside the core stack.</span></button>
@@ -315,7 +315,7 @@ print()
       </div>
 
       <div class="callout note"><span class="co-label">Note</span>
-      <p>Nothing in those seventy lines was new. Tools from <a href="ch053-langchain-tools.html">chapter 53</a>, the constructor from <a href="ch054-create-agent.html">chapter 54</a>, structured output from <a href="ch036-structured-output.html">chapter 36</a>, streaming from <a href="ch040-streaming-responses.html">chapter 40</a>, and underneath it all the loop from <a href="ch045-react-loop-by-hand.html">chapter 45</a>. Fluency is not knowing more things — it is recognising the same few things quickly, everywhere.</p></div>
+      <p>Nothing in those seventy lines was new. Tools from <a href="ch053-langchain-tools.html">chapter 54</a>, the constructor from <a href="ch054-create-agent.html">chapter 55</a>, structured output from <a href="ch036-structured-output.html">chapter 37</a>, streaming from <a href="ch040-streaming-responses.html">chapter 41</a>, and underneath it all the loop from <a href="ch045-react-loop-by-hand.html">chapter 46</a>. Fluency is not knowing more things — it is recognising the same few things quickly, everywhere.</p></div>
 
       <h2>Fluency checkpoint: narrate it back</h2>
       <p>Final exam, and it works only if you play it honestly. Below is a snippet you have not seen — a copy-review bot, written by someone else in a different style. For each line, <strong>say out loud what it does before clicking</strong>, then click and compare. If your version and the note agree in substance, that line is fluent.</p>
@@ -335,11 +335,11 @@ print()
         <div class="wl-line"><code>            HumanMessage(draft_copy)]</code>
           <div class="wl-note">You should have said: the user turn — the draft under review, coming from a variable defined elsewhere.</div></div>
         <div class="wl-line"><code>config = {"tags": ["copy-review"], "configurable": {"thread_id": review_id}}</code>
-          <div class="wl-note">You should have said: idiom three — the sidecar dict. A tag for tracing dashboards, and a thread id so each review is its own remembered conversation.</div></div>
+          <div class="wl-note">You should have said: idiom three — the sidecar dict. A tag for tracing dashboards, and a thread id that groups this review's runs — but note there is no checkpointer here, so it labels the run rather than restoring memory.</div></div>
         <div class="wl-line"><code>for chunk in critic.stream(messages, config):</code>
           <div class="wl-note">You should have said: idiom four, model flavour — a generator of token-sized chunks, so the review appears as it is written.</div></div>
         <div class="wl-line"><code>    print(chunk.content, end="", flush=True)</code>
-          <div class="wl-note">You should have said: print each piece with no newline, flushing so it appears immediately — the classic streaming-display line from chapter 40.</div></div>
+          <div class="wl-note">You should have said: print each piece with no newline, flushing so it appears immediately — the classic streaming-display line from chapter 41.</div></div>
       </div>
 
       <p>Score yourself like a language teacher: nine confident narrations is fluent; six or seven means re-skim the idioms; fewer means re-run the <a href="ch054-create-agent.html">create_agent chapter</a> and come back — the checkpoint will wait. One caution: this certifies fluency in <em>reading</em>. Writing production LangChain from a blank file is a different muscle, and the rest of the course keeps building it.</p>

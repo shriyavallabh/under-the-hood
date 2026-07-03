@@ -36,14 +36,14 @@
       </section>
 
       <h2>The manual tells you the promise; the panel tells you the truth</h2>
-      <p>Quick recap of where you stand. In <a href="ch067-create-deep-agent-anatomy.html">chapter 67</a> you met <code>create_deep_agent</code> and the powers it installs; chapters <a href="ch068-planning-and-todos.html">68</a>–<a href="ch070-subagents.html">70</a> took planning, the virtual filesystem, and subagents one at a time; <a href="ch071-the-token-bill.html">chapter 71</a> priced it all; and <a href="ch072-deep-agents-vs-claude-code.html">last chapter</a> you weighed the open-source blueprint against the commercial harness you use every day. Everything so far came from docs and this course. Today we go to the source itself — and the real prize is not deepagents trivia, it is the <em>skill</em> of reading any framework's insides.</p>
+      <p>Quick recap of where you stand. In <a href="ch067-create-deep-agent-anatomy.html">chapter 68</a> you met <code>create_deep_agent</code> and the powers it installs; chapters <a href="ch068-planning-and-todos.html">68</a>–<a href="ch070-subagents.html">70</a> took planning, the virtual filesystem, and subagents one at a time; <a href="ch071-the-token-bill.html">chapter 72</a> priced it all; and <a href="ch072-deep-agents-vs-claude-code.html">last chapter</a> you weighed the open-source blueprint against the commercial harness you use every day. Everything so far came from docs and this course. Today we go to the source itself — and the real prize is not deepagents trivia, it is the <em>skill</em> of reading any framework's insides.</p>
       <p>Why bother, when the docs exist? Three reasons that matter to an operator:</p>
       <p>First, <strong>docs describe intent; source describes fact</strong> — and only the source keeps up with what actually runs on your machine tonight.</p>
       <p>Second, <strong>names drift</strong>. The docs talk about deepagents' "planning tool". The source has no class called <code>PlanningMiddleware</code> — the part is <code>TodoListMiddleware</code>, and it is not even defined in deepagents; it is imported from LangChain. Know only the marketing name and you cannot grep for the real one.</p>
       <p>Third, <strong>incidents end in source code</strong>. When a run summarises itself at a strange moment, or a tool call gets mysteriously repaired, the answer is in a file, not a FAQ — and the engineers who get there fastest are the ones who can <em>navigate</em>, not the ones who memorised.</p>
 
       <h2>The three-pass method</h2>
-      <p>Here is the tour the chief engineer gave Meera, translated to code. It is the same discipline you used on LangChain back in <a href="ch056-reading-langchain-code.html">chapter 56</a>, now sharpened into a repeatable method with names:</p>
+      <p>Here is the tour the chief engineer gave Meera, translated to code. It is the same discipline you used on LangChain back in <a href="ch056-reading-langchain-code.html">chapter 57</a>, now sharpened into a repeatable method with names:</p>
 
       <div class="stepper">
         <div class="step" data-title="Find the door">
@@ -130,14 +130,14 @@ grep -rn "def create_deep_agent" /your/venv/lib/python3.13/site-packages/deepage
         <div class="wl-line"><code>    model=None, tools=None, *,</code>
           <div class="wl-note">Read a factory's signature like a spec sheet — it is the honest feature list. The bare <code>*</code> forces keyword arguments. Bonus find: omit <code>model</code> and the source builds a Claude Sonnet chat model, while marking that default as deprecated — facts docs rarely headline.</div></div>
         <div class="wl-line"><code>    system_prompt=None, middleware=(), subagents=None,</code>
-          <div class="wl-note">Each keyword maps to a chapter you have already lived: <code>subagents</code> is <a href="ch070-subagents.html">chapter 70</a>, <code>middleware</code> is your own additions in the style of <a href="ch055-middleware.html">chapter 55</a>.</div></div>
+          <div class="wl-note">Each keyword maps to a chapter you have already lived: <code>subagents</code> is <a href="ch070-subagents.html">chapter 71</a>, <code>middleware</code> is your own additions in the style of <a href="ch055-middleware.html">chapter 56</a>.</div></div>
         <div class="wl-line"><code>    backend=None, skills=None, memory=None,</code>
-          <div class="wl-note"><code>backend</code> chooses where virtual files live (<a href="ch069-virtual-filesystem.html">chapter 69</a>); <code>skills</code> and <code>memory</code> point at folders of standing instructions that middleware will load for the model.</div></div>
+          <div class="wl-note"><code>backend</code> chooses where virtual files live (<a href="ch069-virtual-filesystem.html">chapter 70</a>); <code>skills</code> and <code>memory</code> point at folders of standing instructions that middleware will load for the model.</div></div>
         <div class="wl-line"><code>    interrupt_on=None, checkpointer=None,  # ...more knobs trimmed</code>
-          <div class="wl-note"><code>interrupt_on</code> switches on human approval (<a href="ch062-human-in-the-loop.html">chapter 62</a>); <code>checkpointer</code> flows straight through to LangGraph persistence (<a href="ch061-checkpointing.html">chapter 61</a>).</div></div>
+          <div class="wl-note"><code>interrupt_on</code> switches on human approval (<a href="ch062-human-in-the-loop.html">chapter 63</a>); <code>checkpointer</code> flows straight through to LangGraph persistence (<a href="ch061-checkpointing.html">chapter 62</a>).</div></div>
         <div class="wl-line"><code>):</code></div>
         <div class="wl-line"><code>    backend = backend if backend is not None else StateBackend()</code>
-          <div class="wl-note">One line, one FAQ answered: pass no backend and virtual files live in agent state — gone when the run's thread is gone. Persistence is opt-in, exactly as <a href="ch069-virtual-filesystem.html">chapter 69</a> warned.</div></div>
+          <div class="wl-note">One line, one FAQ answered: pass no backend and virtual files live in agent state — gone when the run's thread is gone. Persistence is opt-in, exactly as <a href="ch069-virtual-filesystem.html">chapter 70</a> warned.</div></div>
         <div class="wl-line"><code>    deepagent_middleware = [TodoListMiddleware()]</code>
           <div class="wl-note">Here is the wall map — the entire "deep" in deep agents is this list. Station one: planning. Surprise — this class is imported <em>from LangChain</em> (<code>langchain.agents.middleware</code>), not defined in deepagents. The docs call it "the planning tool"; the source calls it <code>TodoListMiddleware</code>. Docs name the promise, source names the part.</div></div>
         <div class="wl-line"><code>    if skills is not None:</code>
@@ -148,23 +148,24 @@ grep -rn "def create_deep_agent" /your/venv/lib/python3.13/site-packages/deepage
         <div class="wl-line"><code>    if inline_subagents:</code>
           <div class="wl-note">This looks conditional — but scroll up a screen and you catch the factory quietly inserting a built-in <code>GENERAL_PURPOSE_SUBAGENT</code> into that list unless the model's profile disables it. So the <code>task</code> tool is standard equipment even when you pass no subagents of your own — a fact you learn only by reading.</div></div>
         <div class="wl-line"><code>        deepagent_middleware.append(SubAgentMiddleware(backend=backend, subagents=inline_subagents))</code>
-          <div class="wl-note">Station three: the <code>task</code> tool that spawns fresh-context workers — <a href="ch070-subagents.html">chapter 70</a>, now visible as one append.</div></div>
+          <div class="wl-note">Station three: the <code>task</code> tool that spawns fresh-context workers — <a href="ch070-subagents.html">chapter 71</a>, now visible as one append.</div></div>
         <div class="wl-line"><code>    deepagent_middleware.extend([</code></div>
         <div class="wl-line"><code>        create_summarization_middleware(model, backend),</code>
-          <div class="wl-note">Station four: the compactor from <a href="ch071-the-token-bill.html">chapter 71</a>. Note the lowercase name — a factory <em>function</em>, deepagents' own, in <code>middleware/summarization.py</code>. It reads the model's profile and defaults to compacting at 85% of the context window, keeping the newest 10% — falling back to a 170,000-token trigger when the window is unknown.</div></div>
+          <div class="wl-note">Station four: the compactor from <a href="ch071-the-token-bill.html">chapter 72</a>. Note the lowercase name — a factory <em>function</em>, deepagents' own, in <code>middleware/summarization.py</code>. It reads the model's profile and defaults to compacting at 85% of the context window, keeping the newest 10% — falling back to a 170,000-token trigger when the window is unknown.</div></div>
         <div class="wl-line"><code>        PatchToolCallsMiddleware(),</code>
           <div class="wl-note">Station five: a janitor no quickstart mentions. It repairs malformed or dangling tool calls in the transcript so one bad turn does not sink an hours-long run. deepagents' own.</div></div>
         <div class="wl-line"><code>    ])</code></div>
         <div class="wl-line"><code>    _append_prompt_caching_middleware(deepagent_middleware)</code>
-          <div class="wl-note">The tail begins: this helper appends <code>AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore")</code> — from the <code>langchain-anthropic</code> partner package, unconditional, harmlessly inert for other providers — plus a Bedrock twin when installed. The toll discount for the re-reading problem chapter 71 priced out.</div></div>
+          <div class="wl-note">The tail begins: this helper appends <code>AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore")</code> — from the <code>langchain-anthropic</code> partner package, unconditional, harmlessly inert for other providers — plus a Bedrock twin when installed. The toll discount for the re-reading problem chapter 72 priced out.</div></div>
         <div class="wl-line"><code>    if memory is not None:</code></div>
         <div class="wl-line"><code>        deepagent_middleware.append(MemoryMiddleware(backend=backend, sources=memory))</code>
           <div class="wl-note">Conditional station: loads standing instruction files into the prompt. A source comment explains the ordering: memory sits <em>after</em> caching so a memory update cannot invalidate the cached prompt prefix — cache-conscious placement, documented only in a comment.</div></div>
         <div class="wl-line"><code>    if interrupt_on is not None:</code></div>
         <div class="wl-line"><code>        deepagent_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))</code>
           <div class="wl-note">Another conditional station: approval gates, only if you asked for them.</div></div>
-        <div class="wl-line"><code>    deepagent_middleware = _apply_custom_middleware(deepagent_middleware, middleware)</code>
-          <div class="wl-note">Your own <code>middleware=</code> splices in here — after the core stations, ahead of the caching-and-memory tail. The onion ordering rules from <a href="ch055-middleware.html">chapter 55</a> apply unchanged.</div></div>
+        <div class="wl-line"><code>    if middleware:</code></div>
+        <div class="wl-line"><code>        deepagent_middleware.extend(middleware)</code>
+          <div class="wl-note">Your own <code>middleware=</code> splices in here — after the core stations, ahead of the caching-and-memory tail. The onion ordering rules from <a href="ch055-middleware.html">chapter 56</a> apply unchanged.</div></div>
         <div class="wl-line"><code>    return create_agent(</code>
           <div class="wl-note">The punchline of the entire package. After assembling the list, deepagents calls <a href="ch054-create-agent.html">LangChain's <code>create_agent</code></a> — the same function you have been using since Act VI. There is no secret second engine.</div></div>
         <div class="wl-line"><code>        model, system_prompt=final_system_prompt, tools=_tools,</code></div>
@@ -173,7 +174,7 @@ grep -rn "def create_deep_agent" /your/venv/lib/python3.13/site-packages/deepage
           <div class="wl-note">The parting gift: LangGraph stops a graph after 25 steps by default; deepagents raises the limit to 9,999 because deep agents expect to loop for hours. (Python allows underscores inside number literals — <code>9_999</code> is just 9999.) And that is the whole front door: build a list, call <code>create_agent</code>, return it.</div></div>
       </div>
 
-      <p>Let that land, because it is the finding of the chapter: <strong>a deep agent is not a new kind of machine — it is a standard agent with an opinionated middleware list</strong>. Chapter 67 told you this; now you have seen it in the source, which is a different kind of knowing.</p>
+      <p>Let that land, because it is the finding of the chapter: <strong>a deep agent is not a new kind of machine — it is a standard agent with an opinionated middleware list</strong>. Chapter 68 told you this; now you have seen it in the source, which is a different kind of knowing.</p>
       <p>Count what one shallow pass paid you: the default model, the vanish-with-the-run file default, the 85% compaction trigger, a janitor middleware no quickstart mentions, a recursion limit of 9,999. Five operational facts, none on the landing page, all from a single function.</p>
 
       <div class="callout warn"><span class="co-label">Careful</span>
@@ -196,7 +197,7 @@ grep -rn "def create_deep_agent" /your/venv/lib/python3.13/site-packages/deepage
       <p><strong>One: what tools does it register? Two: what state does it add? Three: which hooks does it override?</strong> Those three answers ARE the middleware; everything else is finish work. Here is the shape you will find, condensed from the real file:</p>
 
       <div class="walkthrough">
-        <div class="wl-head">langchain/agents/middleware/todo.py — the shape (~300 lines in full)</div>
+        <div class="wl-head">langchain/agents/middleware/todo.py — the shape (~350 lines in full)</div>
         <div class="wl-line"><code>class PlanningState(AgentState):</code>
           <div class="wl-note">Answer to question two. The middleware extends the standard agent state with one new field — this is how the todo list survives between turns without cluttering the message history.</div></div>
         <div class="wl-line"><code>    todos: NotRequired[list[Todo]]</code>
@@ -204,9 +205,9 @@ grep -rn "def create_deep_agent" /your/venv/lib/python3.13/site-packages/deepage
         <div class="wl-line"><code>@tool(description=WRITE_TODOS_TOOL_DESCRIPTION)</code>
           <div class="wl-note">A <a href="ch017-decorators.html">decorator</a> — the wrap-a-function-in-behaviour trick from chapter 17 — turns the plain function below into a registered tool object. The description constant is a long block of prompt text defined higher in this same file: the model's instruction manual for planning.</div></div>
         <div class="wl-line"><code>def write_todos(todos, tool_call_id):</code>
-          <div class="wl-note">Answer to question one. One tool, whose whole job is to overwrite the todos field in state. That is the entire planning feature you watched in <a href="ch068-planning-and-todos.html">chapter 68</a>.</div></div>
+          <div class="wl-note">Answer to question one. One tool, whose whole job is to overwrite the todos field in state. That is the entire planning feature you watched in <a href="ch068-planning-and-todos.html">chapter 69</a>.</div></div>
         <div class="wl-line"><code>class TodoListMiddleware(AgentMiddleware):</code>
-          <div class="wl-note">The class itself, inheriting the do-nothing defaults from <code>AgentMiddleware</code> exactly as you did when you wrote your own middleware in <a href="ch055-middleware.html">chapter 55</a>.</div></div>
+          <div class="wl-note">The class itself, inheriting the do-nothing defaults from <code>AgentMiddleware</code> exactly as you did when you wrote your own middleware in <a href="ch055-middleware.html">chapter 56</a>.</div></div>
         <div class="wl-line"><code>    state_schema = PlanningState</code>
           <div class="wl-note">The middleware declares its state extension as a class attribute; the agent builder merges it into the final state schema at assembly time.</div></div>
         <div class="wl-line"><code>    def __init__(self, system_prompt=WRITE_TODOS_SYSTEM_PROMPT):</code>
@@ -214,7 +215,7 @@ grep -rn "def create_deep_agent" /your/venv/lib/python3.13/site-packages/deepage
         <div class="wl-line"><code>        self.tools = [write_todos]</code>
           <div class="wl-note">The tool contribution. When create_agent stacks the middleware, these tools join the model's menu automatically.</div></div>
         <div class="wl-line"><code>    def wrap_model_call(self, request, handler):</code>
-          <div class="wl-note">Answer to question three. It overrides the switchboard hook from chapter 55 (plus its async twin, <code>awrap_model_call</code>). The real signature carries type generics; the shape is what matters.</div></div>
+          <div class="wl-note">Answer to question three. It overrides the switchboard hook from chapter 56 (plus its async twin, <code>awrap_model_call</code>). The real signature carries type generics; the shape is what matters.</div></div>
         <div class="wl-line"><code>        # append the planning instructions to the</code></div>
         <div class="wl-line"><code>        # request's system prompt, then proceed</code>
           <div class="wl-note">This is where the "always keep your plan updated" behaviour comes from — not model magic, just prompt text injected on every model call. Seeing this cures a common superstition: planning is a convention the middleware enforces, not an ability the model was born with.</div></div>
@@ -225,7 +226,7 @@ grep -rn "def create_deep_agent" /your/venv/lib/python3.13/site-packages/deepage
       <p>Three answers: one tool, one state field, one hook. A feature that sounded architectural — "deep agents can plan" — turns out to be about thirty lines of live logic wrapped in prompt text. That is the recurring experience of reading source: features shrink to their true size.</p>
 
       <h2>Prove it: rebuild the pattern in sixty lines</h2>
-      <p>Time for the reconstruction pass. Below is a miniature deepagents: a base middleware class, two stations, a <code>create_agent</code> that composes them, and a <code>create_deep_agent</code> that is — like the real one — nothing but a curated list. The loop is the ReAct loop from <a href="ch045-react-loop-by-hand.html">chapter 45</a>; the model is a scripted stand-in. Press Run, then read the assembled system prompt in the output — composition, happening.</p>
+      <p>Time for the reconstruction pass. Below is a miniature deepagents: a base middleware class, two stations, a <code>create_agent</code> that composes them, and a <code>create_deep_agent</code> that is — like the real one — nothing but a curated list. The loop is the ReAct loop from <a href="ch045-react-loop-by-hand.html">chapter 46</a>; the model is a scripted stand-in. Press Run, then read the assembled system prompt in the output — composition, happening.</p>
 
       <div class="pyrun" data-title="tiny_deepagents.py — the whole pattern, miniaturised">
 <textarea class="py-src" spellcheck="false">
@@ -323,7 +324,7 @@ print("RESULT:", agent("Draft a GST note for the client"))
       </table></div>
 
       <p>Two habits complete the method. First, <strong>read signatures like spec sheets</strong> — a factory's parameters are the most honest feature list a framework has. Second, <strong>treat the tests as a second manual</strong>: they show exactly how the authors expect each part to be called, and unlike a README they cannot go stale without failing.</p>
-      <p>You will get a full-dress rehearsal on an entirely unfamiliar codebase in <a href="ch105-reading-a-new-codebase.html">chapter 105</a>. Until then, every framework chapter is an invitation to practise: whenever a claim sounds surprising, go find the line.</p>
+      <p>You will get a full-dress rehearsal on an entirely unfamiliar codebase in <a href="ch105-reading-a-new-codebase.html">chapter 106</a>. Until then, every framework chapter is an invitation to practise: whenever a claim sounds surprising, go find the line.</p>
 
       <div class="callout wild"><span class="co-label">In the wild</span>
       <p>This skill fires constantly around production agents. A merge request says "deepagents minor upgrade" — the diff of <code>graph.py</code> tells you in one screen whether a station was added, removed, or reordered: the blast radius of the upgrade. An agent summarises mid-run at odd moments — the trigger lives a few lines inside the summarization middleware, not in any doc. A vendor claims "planning built in" — you now ask what tool, what state, which hook. And the engineer in the incident channel who posts "found it — a conditional append in the factory; we never pass <code>interrupt_on</code> in prod, so no approval gate was ever built" is doing nothing you cannot do after today.</p></div>

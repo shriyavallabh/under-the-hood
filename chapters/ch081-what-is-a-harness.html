@@ -101,7 +101,7 @@
       <p>Everything you learned in Acts III and IV applies here and only here. A model is stateless text-in, text-out — you met the raw API in <a href="ch033-first-api-call.html">your first API call</a>. It cannot execute a tool, remember yesterday, or refuse to be swapped out. GPT-5, Claude Opus, Gemini, Llama: these names belong to this ring and no other. When someone asks "which model should we use?", they are asking about capability, cost per token, latency, and context window. Nothing else.</p>
 
       <h2>Layer 2 — the framework: the loop you import</h2>
-      <p>A <dfn>framework</dfn> (or library — the words blur) is pre-written loop and graph code that you import into your own program: the agent loop with native <a href="ch035-tool-calling.html">tool calling</a>, retries, streaming, state graphs, checkpointing. You have already used three: LangChain's <code>create_agent</code>, LangGraph's <code>StateGraph</code> with its nodes and edges, and deepagents' <code>create_deep_agent</code> from <a href="ch067-create-deep-agent-anatomy.html">chapter 67</a>. A framework ships no user interface, holds no API keys, runs on no schedule. It is scaffolding for <em>your</em> code.</p>
+      <p>A <dfn>framework</dfn> (or library — the words blur) is pre-written loop and graph code that you import into your own program: the agent loop with native <a href="ch035-tool-calling.html">tool calling</a>, retries, streaming, state graphs, checkpointing. You have already used three: LangChain's <code>create_agent</code>, LangGraph's <code>StateGraph</code> with its nodes and edges, and deepagents' <code>create_deep_agent</code> from <a href="ch067-create-deep-agent-anatomy.html">chapter 68</a>. A framework ships no user interface, holds no API keys, runs on no schedule. It is scaffolding for <em>your</em> code.</p>
 
       <h2>Layer 3 — the harness: the body around the loop</h2>
       <p>Here is the word this Act is named for. A <dfn>harness</dfn> is the complete running system wrapped around the agent loop — the software that turns "a loop I could run" into "a system I do run, all day, safely". Concretely, a harness owns five jobs:</p>
@@ -142,7 +142,7 @@
       <p>Marketing loves the word "platform" — every vendor with a landing page claims to be one. Ignore the label and run the test: does it <em>complete text</em> (model), do you <em>import it</em> (framework), do you <em>work inside it</em> (harness), or does it <em>run fleets of agents for many users</em> (platform)? What a thing does places it on the diagram; what its pricing page says does not.</p></div>
 
       <h2>Run all four layers in sixty lines</h2>
-      <p>Concepts stick when you can poke them. Below, each layer is a few lines of Python: a scripted stand-in model, a bare framework loop (a compressed version of your <a href="ch045-react-loop-by-hand.html">chapter 45 loop</a>), and a tiny harness that wraps the loop with a permission gate, a context budget, and memory. Run it, then read the three outputs against the onion diagram.</p>
+      <p>Concepts stick when you can poke them. Below, each layer is a few lines of Python: a scripted stand-in model, a bare framework loop (a compressed version of your <a href="ch045-react-loop-by-hand.html">chapter 46 loop</a>), and a tiny harness that wraps the loop with a permission gate, a context budget, and memory. Run it, then read the three outputs against the onion diagram.</p>
 
       <div class="pyrun" data-title="model, framework, harness — in one file">
 <textarea class="py-src" spellcheck="false">

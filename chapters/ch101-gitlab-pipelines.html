@@ -58,8 +58,8 @@ say-hello:
         <li>Jobs in the <em>same</em> stage run <strong>in parallel</strong>, if enough workers are free. Unit tests and type checks do not queue behind each other; they are both TEST-station tasks.</li>
         <li>The next stage starts only when <em>every</em> job in the current stage has passed. One red job in TEST and the BUILD station never opens.</li>
       </ul>
-      <p>The <dfn>script</dfn> is simply a list of shell commands, run top to bottom in a fresh environment — the same commands you could type in a terminal. If the last command exits with status 0, the job passes; any non-zero exit turns it red. There is no deeper magic: CI is a robot typing shell commands and reading the exit code, the same exit-code contract you met when running <a href="ch103-pytest.html">pytest</a> locally.</p>
-      <p>And <code>image:</code>? Each job runs inside a container started from that image — <code>python:3.12-slim</code> hands every job an identical, clean machine with Python pre-installed. You saw what images are made of in <a href="ch110-containers-and-images.html">the containers chapter</a>; here is where they quietly earn their keep. A fresh container per job is why "works on my machine" arguments end at the pipeline: there is no <em>my machine</em> any more.</p>
+      <p>The <dfn>script</dfn> is simply a list of shell commands, run top to bottom in a fresh environment — the same commands you could type in a terminal. If the last command exits with status 0, the job passes; any non-zero exit turns it red. There is no deeper magic: CI is a robot typing shell commands and reading the exit code, the same exit-code contract you'll formalise when you meet <a href="ch103-pytest.html">pytest</a> a couple of chapters from now.</p>
+      <p>And <code>image:</code>? Each job runs inside a container started from that image — <code>python:3.12-slim</code> hands every job an identical, clean machine with Python pre-installed. You'll see what images are made of in <a href="ch110-containers-and-images.html">the containers chapter</a>; for now, picture an image as a frozen, ready-made machine — and here is where they quietly earn their keep. A fresh container per job is why "works on my machine" arguments end at the pipeline: there is no <em>my machine</em> any more.</p>
 
       <p>Eight words carry the rest of this chapter. Flip until each back feels obvious:</p>
 
@@ -171,7 +171,7 @@ say-hello:
               <div class="d-box hot">deploy-uat<small>manual — press play</small></div>
             </div>
           </div>
-          <p class="step-cap">deploy-uat has when: manual in its rules, so it renders with a play button and the pipeline reports "passed" without it. Deployment happens when a human decides — a brake pedal, wired in YAML.</p>
+          <p class="step-cap">deploy-uat has when: manual in its rules, so it renders with a play button — and because when: manual inside rules defaults allow_failure to false, the pipeline sits at "blocked" until a human presses play. Deployment happens when a human decides — a brake pedal, wired in YAML.</p>
         </div>
         <div class="step" data-title="All green">
           <h3>6. Green tick, everywhere</h3>

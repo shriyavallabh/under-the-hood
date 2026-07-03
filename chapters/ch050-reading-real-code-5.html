@@ -37,11 +37,11 @@
 
       <h2>Your victory lap, and why it is earned</h2>
       <p>Quick recap of how you got here, because this chapter is the payoff for the whole act. In <a href="ch045-react-loop-by-hand.html">the ReAct loop chapter</a> you built the heartbeat: a for-loop that sends the transcript to a model, runs whatever action the model requests, and feeds the result back in. In <a href="ch046-tools.html">the tools chapter</a> you learned that a tool is just a plain function in a registry, advertised to the model by name and description. In <a href="ch047-memory-and-context.html">memory and context</a> you saw that an agent's "memory" is a list of messages somebody must prune, and in <a href="ch048-failure-modes.html">failure modes</a> you collected the war stories of what happens when nobody does. Then <a href="ch049-building-effective-agents.html">last chapter</a> added the builder's judgement: keep it simple, and reach for an agent only when the task genuinely needs one.</p>
-      <p>This is also the fifth chapter in the reading-real-code series — the same ritual you performed in <a href="ch010-reading-real-code-1.html">chapter 10</a> with a plain script and in <a href="ch022-reading-real-code-2.html">chapter 22</a> with a small module. The rules have not changed: read the whole file before touching anything, name each block's job in one sentence, and treat every line you cannot explain as a question, not a threat. What has changed is the file. This one is an <dfn>agent</dfn> — an LLM given tools and run in a loop until the task is done — and unlike the fifty-line teaching skeleton from chapter 45, it carries the survival gear real deployments carry: two tools instead of one, a history-trimming budget, a hard turn cap, and error handling wrapped around every tool call.</p>
+      <p>This is also the fourth chapter in the reading-real-code series — the same ritual you performed in <a href="ch010-reading-real-code-1.html">chapter 10</a> with a plain script and in <a href="ch022-reading-real-code-2.html">chapter 22</a> with a small module. The rules have not changed: read the whole file before touching anything, name each block's job in one sentence, and treat every line you cannot explain as a question, not a threat. What has changed is the file. This one is an <dfn>agent</dfn> — an LLM given tools and run in a loop until the task is done — and unlike the fifty-line teaching skeleton from chapter 46, it carries the survival gear real deployments carry: two tools instead of one, a history-trimming budget, a hard turn cap, and error handling wrapped around every tool call.</p>
       <p>One promise before we start: there is no line in this file you have not met in some earlier chapter. The only new skill is <em>reading at altitude</em> — holding the whole machine in your head at once.</p>
 
       <h2>The map before the territory</h2>
-      <p>Good readers never start at line 1. They skim for the shape first: what are the blocks, and what does each one owe the others? This file has four blocks plus a two-line entry point. Step through the map:</p>
+      <p>Good readers never start at line 1. They skim for the shape first: what are the blocks, and what does each one owe the others? This file has four numbered blocks (plus the config constants at the top) and a three-line entry point. Step through the map:</p>
 
       <div class="stepper">
         <div class="step" data-title="The shape">
@@ -103,7 +103,7 @@
             <span class="d-arrow">&#8594;</span>
             <div class="d-box good">answer<small>or an honest "gave up"</small></div>
           </div>
-          <p class="step-cap">The same heartbeat you built by hand in chapter 45, now calling the helpers: trim before every model call, execute actions through the crash-proof wrapper, stop on FINAL ANSWER or when the turn budget runs out. Sixteen lines conduct the whole orchestra.</p>
+          <p class="step-cap">The same heartbeat you built by hand in chapter 46, now calling the helpers: trim before every model call, execute actions through the crash-proof wrapper, stop on FINAL ANSWER or when the turn budget runs out. Sixteen lines conduct the whole orchestra.</p>
         </div>
       </div>
 
@@ -272,7 +272,7 @@ print("AGENT RETURNED:", answer)</code></pre>
       </div>
 
       <h3>Block 4 — the loop</h3>
-      <p>You built this in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, so the walkthrough only stops at what is new: where the helpers plug in.</p>
+      <p>You built this in <a href="ch045-react-loop-by-hand.html">chapter 46</a>, so the walkthrough only stops at what is new: where the helpers plug in.</p>
       <div class="walkthrough">
         <div class="wl-head">annotated_agent.py — lines 72 to 88</div>
         <div class="wl-line"><code>def run_agent(task, max_turns=MAX_TURNS):</code>
@@ -282,9 +282,9 @@ print("AGENT RETURNED:", answer)</code></pre>
         <div class="wl-line"><code>        reply = fake_llm(history)</code>
           <div class="wl-note">Still the only line in the whole file that talks to a model. When someone says "the agent made 6 LLM calls", they mean this line ran 6 times.</div></div>
         <div class="wl-line"><code>        if "FINAL ANSWER:" in reply:</code>
-          <div class="wl-note">The stop condition, unchanged from chapter 45: the model decides when it is done, the loop enforces it. With native tool calling, "done" is a reply with no tool calls — different marker, same idea.</div></div>
+          <div class="wl-note">The stop condition, unchanged from chapter 46: the model decides when it is done, the loop enforces it. With native tool calling, "done" is a reply with no tool calls — different marker, same idea.</div></div>
         <div class="wl-line"><code>            observation = f"OBSERVATION: {run_tool(call)}"</code>
-          <div class="wl-note">Compare chapter 45, where the loop called <code>TOOLS[name](arg)</code> naked. Now every execution goes through the guard rail, which <em>guarantees</em> a string comes back — success or ERROR — so the loop itself needs no try/except at all. Pushing danger into one well-tested helper is how real codebases stay readable.</div></div>
+          <div class="wl-note">Compare chapter 46, where the loop called <code>TOOLS[name](arg)</code> naked. Now every execution goes through the guard rail, which <em>guarantees</em> a string comes back — success or ERROR — so the loop itself needs no try/except at all. Pushing danger into one well-tested helper is how real codebases stay readable.</div></div>
         <div class="wl-line"><code>    return "Stopped: hit max turns without a final answer."</code>
           <div class="wl-note">The honest exhaustion path. If the model never finishes, the agent says so instead of hanging or pretending. In production this line usually comes with a metric increment and an alert — the "agent gave up" dashboard exists in every serious shop.</div></div>
       </div>

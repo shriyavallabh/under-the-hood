@@ -25,14 +25,14 @@
       <header class="ch-hero">
         <div class="ch-kicker">Act VI · LangChain</div>
         <h1>create_agent: the packaged loop</h1>
-        <p class="ch-tagline">Three arguments in, one working agent out. This chapter opens the back panel of LangChain's ReAct-in-a-box and shows you that every part inside is a part you already built with your own hands in chapter 45.</p>
+        <p class="ch-tagline">Three arguments in, one working agent out. This chapter opens the back panel of LangChain's ReAct-in-a-box and shows you that every part inside is a part you already built with your own hands in chapter 46.</p>
         <div class="ch-meta"><span>~30 min</span><span>Chapter 55 of 117</span></div>
       </header>
 
       <section class="panel story">
         <div class="story-label">The story</div>
         <p>For three weekends you built a washing machine in your garage. A plastic drum, a scavenged motor, a kitchen timer, and a tangle of wiring you soldered yourself. It worked — and you understood every wire, because you had bent every wire. Then last Sunday you walked into an appliance showroom. On the floor sat a gleaming machine: sealed white body, one dial, three buttons. The salesman listed features — auto-restart after a power cut, a child lock, a drum that adjusts its spin to the load. You asked him to open the back panel. And there it was: a drum, a motor, a timer. Bigger, better mounted, properly earthed — but the very same three parts you bolted together in your garage. You did not feel cheated. You felt fluent. You could read that machine, because you had built its ancestor.</p>
-        <p>In <a href="ch045-react-loop-by-hand.html">chapter 45</a> you built the drum, the motor, and the timer of an agent: a history list, a model call, a turn cap. LangChain's <code>create_agent</code> is the showroom machine. Today we open the back panel together.</p>
+        <p>In <a href="ch045-react-loop-by-hand.html">chapter 46</a> you built the drum, the motor, and the timer of an agent: a history list, a model call, a turn cap. LangChain's <code>create_agent</code> is the showroom machine. Today we open the back panel together.</p>
       </section>
 
       <h2>Three arguments, one agent</h2>
@@ -55,7 +55,7 @@ result = agent.invoke(
 
 print(result["messages"][-1].content)</code></pre>
 
-      <p>Read the three arguments and notice you already know all of them. The <code>model</code> is the brain — here named by a provider string, though you can also pass a model object built with <code>init_chat_model</code> from <a href="ch052-messages-and-models.html">chapter 52</a>. The <code>tools</code> are the <code>@tool</code>-decorated functions from <a href="ch053-langchain-tools.html">chapter 53</a> — your <code>TOOLS</code> dict, reborn as a list. The <code>system_prompt</code> is the standing instruction sheet you used to teach the protocol by hand. Loop, parser, registry, stop condition, turn cap: all of it now lives inside <code>create_agent</code>.</p>
+      <p>Read the three arguments and notice you already know all of them. The <code>model</code> is the brain — here named by a provider string, though you can also pass a model object built with <code>init_chat_model</code> from <a href="ch052-messages-and-models.html">chapter 53</a>. The <code>tools</code> are the <code>@tool</code>-decorated functions from <a href="ch053-langchain-tools.html">chapter 54</a> — your <code>TOOLS</code> dict, reborn as a list. The <code>system_prompt</code> is the standing instruction sheet you used to teach the protocol by hand. Loop, parser, registry, stop condition, turn cap: all of it now lives inside <code>create_agent</code>.</p>
 
       <div class="callout warn"><span class="co-label">Careful</span>
       <p>Older tutorials — and there are thousands of them — teach <code>initialize_agent</code> or <code>AgentExecutor</code>. Those are the legacy pre-1.0 APIs and are not how agents are built any more. If a blog post imports either of those names, it is describing a previous era; close the tab and check the current docs. The modern entry point is <code>create_agent</code>, full stop.</p></div>
@@ -122,7 +122,7 @@ print(result["messages"][-1].content)</code></pre>
       </div>
 
       <div class="callout note"><span class="co-label">Note</span>
-      <p>The word "compiled" here does not mean compiled like C code. It means the graph's nodes and edges have been checked and locked into a runnable object. You will build and compile graphs yourself in <a href="ch058-stategraph-anatomy.html">chapter 58</a> — at which point <code>create_agent</code> will feel like a factory that runs those chapters for you.</p></div>
+      <p>The word "compiled" here does not mean compiled like C code. It means the graph's nodes and edges have been checked and locked into a runnable object. You will build and compile graphs yourself in <a href="ch058-stategraph-anatomy.html">chapter 59</a> — at which point <code>create_agent</code> will feel like a factory that runs those chapters for you.</p></div>
 
       <h2>Line for line: your fifty lines against the packaged loop</h2>
       <p>Here is the promised mapping — the exact table to hold in your head whenever framework code feels opaque. Every row is one part of your garage machine and where it now lives inside the showroom one.</p>
@@ -138,10 +138,10 @@ print(result["messages"][-1].content)</code></pre>
         <tr><td><code>return reply.split(...)</code></td><td><code>result["messages"][-1].content</code> — the last message of the returned state</td></tr>
       </table></div>
 
-      <p>One honest footnote on the recursion-limit row: the limit counts graph steps, and each visit to the model node or the tools node is one step. So the default of 25 buys you roughly a dozen think-act rounds, not twenty-five. When an agent exhausts it, the run raises a <code>GraphRecursionError</code> — the framework's politer version of your <code>"Gave up: hit the max-turns limit"</code> string, and the same guard against the runaway-cost incidents you met in <a href="ch048-failure-modes.html">chapter 48</a>.</p>
+      <p>One honest footnote on the recursion-limit row: the limit counts graph steps, and each visit to the model node or the tools node is one step. So the default of 25 buys you roughly a dozen think-act rounds, not twenty-five. When an agent exhausts it, the run raises a <code>GraphRecursionError</code> — the framework's politer version of your <code>"Gave up: hit the max-turns limit"</code> string, and the same guard against the runaway-cost incidents you met in <a href="ch048-failure-modes.html">chapter 49</a>.</p>
 
       <h2>Open the back panel: build create_agent yourself</h2>
-      <p>The fastest way to make the packaged loop unmysterious is to build a miniature of it. Below is a browser-safe replica: a <code>create_agent</code> that takes the same three arguments, returns an object you <code>invoke</code> with messages, and runs the same model-node, tools-node, conditional-edge dance inside. As in chapter 45, the "model" is a scripted stand-in — but notice what changed since then: it now returns <em>structured</em> tool calls (a list of dicts), the way a real chat model does, so there is no string parsing anywhere. Press <strong>Run</strong>.</p>
+      <p>The fastest way to make the packaged loop unmysterious is to build a miniature of it. Below is a browser-safe replica: a <code>create_agent</code> that takes the same three arguments, returns an object you <code>invoke</code> with messages, and runs the same model-node, tools-node, conditional-edge dance inside. As in chapter 46, the "model" is a scripted stand-in — but notice what changed since then: it now returns <em>structured</em> tool calls (a list of dicts), the way a real chat model does, so there is no string parsing anywhere. Press <strong>Run</strong>.</p>
 
       <div class="pyrun" data-title="A miniature create_agent — run me">
 <textarea class="py-src" spellcheck="false">
@@ -203,7 +203,7 @@ for m in result["messages"]:
       </div>
 
       <div class="callout tip"><span class="co-label">Tip</span>
-      <p>Break it the way you broke chapter 45's loop. Add a second tool and make <code>fake_llm</code> ask for both. Misspell the tool name inside a <code>tool_calls</code> entry and read the <code>KeyError</code> — that is precisely the "model requested an unknown tool" failure you will one day meet in production logs. Set <code>recursion_limit=1</code> and watch the polite crash.</p></div>
+      <p>Break it the way you broke chapter 46's loop. Add a second tool and make <code>fake_llm</code> ask for both. Misspell the tool name inside a <code>tool_calls</code> entry and read the <code>KeyError</code> — that is precisely the "model requested an unknown tool" failure you will one day meet in production logs. Set <code>recursion_limit=1</code> and watch the polite crash.</p></div>
 
       <p>Now walk the real usage code the way a reviewer would, line by line. Click each annotated line; the goal, as always, is for every line to become boring to you.</p>
 
@@ -231,10 +231,10 @@ for m in result["messages"]:
 
       <h2>What you get free</h2>
       <p>If the packaged loop were only your fifty lines with nicer names, it would not be worth a chapter. The value is in the parts the showroom fits as standard — the child lock and the auto-restart.</p>
-      <p><strong>Structured tool calls.</strong> No string surgery, ever. The model requests tools through the provider's native tool-calling channel (<a href="ch035-tool-calling.html">chapter 35</a>), arguments arrive parsed against the schema your <code>@tool</code> decorator generated, and results travel back as typed <code>ToolMessage</code> objects. A whole class of "the parser missed the bracket" bugs simply does not exist here.</p>
+      <p><strong>Structured tool calls.</strong> No string surgery, ever. The model requests tools through the provider's native tool-calling channel (<a href="ch035-tool-calling.html">chapter 36</a>), arguments arrive parsed against the schema your <code>@tool</code> decorator generated, and results travel back as typed <code>ToolMessage</code> objects. A whole class of "the parser missed the bracket" bugs simply does not exist here.</p>
       <p><strong>Retries and self-correction.</strong> Two layers. At the transport layer, the underlying model clients retry transient network and rate-limit failures, so a flaky connection does not kill a run. At the loop layer, when the model requests a tool with arguments that fail schema validation, the loop hands the error text back to the model as a tool message — so the model can read the failure, fix its arguments, and try again. Your hand-rolled loop would have crashed with a traceback; this one lets the conversation route around the pothole. (An exception raised inside the tool's own body still propagates by default — feeding those back to the model too is a small middleware, next chapter.)</p>
-      <p><strong>Streaming.</strong> Because the agent is a graph, you can swap <code>invoke</code> for <code>stream</code> and watch the run unfold live — the state after each node, or token-by-token output for a typing-indicator UI, the craft you learned in <a href="ch040-streaming-responses.html">chapter 40</a>. You wrote none of the plumbing.</p>
-      <p><strong>Bookkeeping and growth slots.</strong> Message history is managed as proper typed objects, appended correctly on every turn. And the factory has sockets waiting for parts you have not needed yet: a <code>checkpointer</code> argument that persists state so conversations survive restarts (<a href="ch061-checkpointing.html">chapter 61</a>), structured final answers in the spirit of <a href="ch036-structured-output.html">chapter 36</a>, and a middleware list for intercepting the loop — which is the entire subject of <a href="ch055-middleware.html">the next chapter</a>.</p>
+      <p><strong>Streaming.</strong> Because the agent is a graph, you can swap <code>invoke</code> for <code>stream</code> and watch the run unfold live — the state after each node, or token-by-token output for a typing-indicator UI, the craft you learned in <a href="ch040-streaming-responses.html">chapter 41</a>. You wrote none of the plumbing.</p>
+      <p><strong>Bookkeeping and growth slots.</strong> Message history is managed as proper typed objects, appended correctly on every turn. And the factory has sockets waiting for parts you have not needed yet: a <code>checkpointer</code> argument that persists state so conversations survive restarts (<a href="ch061-checkpointing.html">chapter 62</a>), structured final answers in the spirit of <a href="ch036-structured-output.html">chapter 37</a>, and a middleware list for intercepting the loop — which is the entire subject of <a href="ch055-middleware.html">the next chapter</a>.</p>
 
       <p>Six terms carry the new vocabulary. Flip each card until the definitions feel obvious:</p>
 

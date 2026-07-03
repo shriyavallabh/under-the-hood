@@ -124,7 +124,7 @@
 
       <h2>Safe execution: the librarian's rules</h2>
       <p>The model has now chosen a tool and produced arguments. Everything the model sends you is best treated the way a web developer treats a form submitted from the internet: probably fine, occasionally malformed, and never, ever trusted blindly. Four rules, in the order they fire:</p>
-      <p><strong>Rule 1 — the allow-list.</strong> The <code>TOOLS</code> dict from chapter 45 is not a convenience; it is the security boundary of the entire agent. The loop runs a function only if the requested name is a key in that dict (an <dfn>allow-list</dfn> — a closed list of what is permitted, everything else refused). Never resolve tool names dynamically with <code>getattr</code> or — please — <code>eval</code>: that would let the model reach any function in your process. Our chapter 45 loop actually had a bug here: an unknown name crashed the loop with a <code>KeyError</code>. The hardened version replies with an error observation instead, and the model recovers.</p>
+      <p><strong>Rule 1 — the allow-list.</strong> The <code>TOOLS</code> dict from chapter 46 is not a convenience; it is the security boundary of the entire agent. The loop runs a function only if the requested name is a key in that dict (an <dfn>allow-list</dfn> — a closed list of what is permitted, everything else refused). Never resolve tool names dynamically with <code>getattr</code> or — please — <code>eval</code>: that would let the model reach any function in your process. Our chapter 46 loop actually had a bug here: an unknown name crashed the loop with a <code>KeyError</code>. The hardened version replies with an error observation instead, and the model recovers.</p>
       <p><strong>Rule 2 — validate the inputs.</strong> Check shape and range before anything runs: the regex for <code>ORD-123456</code>, the 1-to-5,000 cap on the amount, the character whitelist in our calculator. Reject bad input with a message that says what valid input looks like.</p>
       <p><strong>Rule 3 — bound the run with a timeout.</strong> A tool that calls a slow database or a dead network endpoint can hang forever, and with it the whole agent. Give every tool a time budget; when it blows, return "timed out after 10s" as the observation and let the model decide what to do next.</p>
       <p><strong>Rule 4 — default to harmless.</strong> Separate read tools from write tools, and make anything with a <dfn>side effect</dfn> — a change to the real world — default to <dfn>dry run</dfn>: report what would happen, do nothing. The real action requires an explicit, deliberate elevation, often by a human. This is precisely why your coding agent pauses to ask before running a shell command: that permission prompt is Rule 4, rendered as a dialog box, at exactly the boundary this chapter drew.</p>
@@ -218,7 +218,7 @@
       </div>
 
       <h2>Run it: the two-tool agent</h2>
-      <p>Time to extend chapter 45's agent for real. Below is the same loop with three upgrades: a second tool (<code>gst_rate</code>), a menu built automatically from the tools' names and docstrings — so you can see exactly what the model would read — and the hardened allow-list branch that turns an unknown tool name into an error observation instead of a crash. The "model" is again a scripted <code>fake_llm</code>, but watch what it does: it must now <em>choose between tools</em>, and it chooses the way a real model does — off the menu. Press <strong>Run</strong>.</p>
+      <p>Time to extend chapter 46's agent for real. Below is the same loop with three upgrades: a second tool (<code>gst_rate</code>), a menu built automatically from the tools' names and docstrings — so you can see exactly what the model would read — and the hardened allow-list branch that turns an unknown tool name into an error observation instead of a crash. The "model" is again a scripted <code>fake_llm</code>, but watch what it does: it must now <em>choose between tools</em>, and it chooses the way a real model does — off the menu. Press <strong>Run</strong>.</p>
 
       <div class="pyrun" data-title="Two tools, one menu — the agent must choose">
 <textarea class="py-src" spellcheck="false">
@@ -330,7 +330,7 @@ print("AGENT RETURNED:", answer)
             <button data-opt="b">The loop searches your codebase for a function with that name and runs it</button>
             <button data-opt="c">The API provider blocks the request on their servers</button>
           </div>
-          <p class="q-explain">The registry is the security boundary: nothing outside it can execute, however confidently the model asks. (The naive chapter 45 loop would have crashed with a KeyError here — returning a readable error instead lets the model recover.)</p>
+          <p class="q-explain">The registry is the security boundary: nothing outside it can execute, however confidently the model asks. (The naive chapter 46 loop would have crashed with a KeyError here — returning a readable error instead lets the model recover.)</p>
         </div>
         <div class="q" data-answer="b">
           <p class="q-text">4. Why should a destructive tool like <code>issue_refund</code> default to <code>dry_run=True</code>?</p>

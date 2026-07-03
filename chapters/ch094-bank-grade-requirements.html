@@ -74,18 +74,18 @@
         <div class="step" data-title="Request arrives">
           <h3>1. A request arrives wearing a badge</h3>
           <div class="diagram">
-            <div class="d-box hot">Asha<small>"pay the vendor invoice" + identity token</small></div>
+            <div class="d-box hot">Vikram<small>"pay the vendor invoice" + identity token</small></div>
             <span class="d-arrow">&#8594;</span>
             <div class="d-box">Harness</div>
             <div class="d-box dim">Model</div>
           </div>
-          <p class="step-cap">The user's signed identity travels with the request. From this moment the run is "Asha, via agent" — never just "the agent".</p>
+          <p class="step-cap">The user's signed identity travels with the request. From this moment the run is "Vikram, via agent" — never just "the agent".</p>
         </div>
         <div class="step" data-title="Entitlements resolved">
           <h3>2. The harness looks up the badge</h3>
           <div class="diagram">
-            <div class="d-box dim">Asha</div>
-            <div class="d-box hot">Harness<small>directory: Asha may read accounts, may request payments</small></div>
+            <div class="d-box dim">Vikram</div>
+            <div class="d-box hot">Harness<small>directory: Vikram may read accounts, may request payments</small></div>
             <div class="d-box dim">Model</div>
           </div>
           <p class="step-cap">Entitlements come from the company directory, a system of record — never from the prompt.</p>
@@ -106,10 +106,10 @@
           <div class="diagram">
             <div class="d-box dim">Model</div>
             <span class="d-arrow">&#8594;</span>
-            <div class="d-box hot">Tool boundary<small>is initiate_payment in Asha's entitlements? yes</small></div>
+            <div class="d-box hot">Tool boundary<small>is initiate_payment in Vikram's entitlements? yes</small></div>
             <div class="d-box dim">Payment system</div>
           </div>
-          <p class="step-cap">Code, not prompt. If Asha lacked the entitlement, the call would die right here and the denial would be audited.</p>
+          <p class="step-cap">Code, not prompt. If Vikram lacked the entitlement, the call would die right here and the denial would be audited.</p>
         </div>
         <div class="step" data-title="Approval gate">
           <h3>5. Consequential — the run freezes for a checker</h3>
@@ -129,9 +129,9 @@
             <span class="d-arrow">&#8594;</span>
             <div class="d-box good">Audit log<small>who, what, approved by whom, hash-chained</small></div>
             <span class="d-arrow">&#8594;</span>
-            <div class="d-box good">Asha<small>gets her answer</small></div>
+            <div class="d-box good">Vikram<small>gets his answer</small></div>
           </div>
-          <p class="step-cap">The action executes as Asha, the immutable record closes the loop, and all three auditor questions now have answers — permanently.</p>
+          <p class="step-cap">The action executes as Vikram, the immutable record closes the loop, and all three auditor questions now have answers — permanently.</p>
         </div>
       </div>
 
@@ -153,7 +153,7 @@
       <p>The branch does not close when a teller resigns. A bank-grade platform must survive its model vendor raising prices, changing terms, or disappearing — some regulators explicitly examine <dfn>exit plans</dfn> for critical third-party dependencies (<em>concentration risk</em> is the formal name). Lock-in creeps in through prompts hand-tuned to one model's quirks, proprietary vendor features, fine-tuned models locked to one cloud, and tool-calling formats that differ across providers.</p>
       <p>The defences are all things you have met. An abstraction layer at the model call — <a href="ch052-messages-and-models.html">LangChain's <code>init_chat_model</code></a> exists precisely so the model is a config string, not an architecture. Open protocols at the tool layer — <a href="ch074-why-mcp-exists.html">MCP</a> means your tools survive a model swap untouched. And the quiet hero: <strong>your evaluation suite is your portability insurance.</strong> Swapping vendors is terrifying when "does it still work?" is opinion, and routine when it is a test run. The eval suite from model risk management is the same artifact that makes the exit plan real — one investment, two regulatory boxes.</p>
 
-      <h2>Build the badge, the logbook, and the gate — in forty lines</h2>
+      <h2>Build the badge, the logbook, and the gate — in about fifty lines</h2>
       <p>Enough architecture — time to make it concrete. Below is a toy bank-grade wrapper: entitlements at the tool boundary, an approval gate on consequential actions, and a hash-chained audit trail you can tamper with and get caught. The model is a scripted stand-in, as always. Press <strong>Run</strong>.</p>
 
       <div class="pyrun" data-title="A bank-grade tool boundary — run me">

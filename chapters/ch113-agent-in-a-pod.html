@@ -31,13 +31,13 @@
 
       <section class="panel story">
         <div class="story-label">The story</div>
-        <p>The consultant from the hotel room — the one you built a walkie-talkie loop with in <a href="ch045-react-loop-by-hand.html">chapter 45</a> — finally got hired. On her first morning, facilities walks her to a cabin that is astonishingly complete. On the desk, a laminated card from the front office: working hours, daily budget, useful extensions. In the wall, a safe she cannot open herself — she taps her badge and the building's vault, three floors down, releases exactly the credential she needs, for exactly as long as she needs it. A trolley of procedure manuals was wheeled in overnight. In the corner sits a junior assistant who handles one specific chore; she just turns and speaks to him. For everything else, a phone with two buttons: one rings the shared research desk every team uses, the other reaches any colleague by name. And on her door: a nameplate and extension, listed in the company directory, so colleagues can call <em>her</em>.</p>
+        <p>The consultant from the hotel room — the one you built a walkie-talkie loop with in <a href="ch045-react-loop-by-hand.html">chapter 46</a> — finally got hired. On her first morning, facilities walks her to a cabin that is astonishingly complete. On the desk, a laminated card from the front office: working hours, daily budget, useful extensions. In the wall, a safe she cannot open herself — she taps her badge and the building's vault, three floors down, releases exactly the credential she needs, for exactly as long as she needs it. A trolley of procedure manuals was wheeled in overnight. In the corner sits a junior assistant who handles one specific chore; she just turns and speaks to him. For everything else, a phone with two buttons: one rings the shared research desk every team uses, the other reaches any colleague by name. And on her door: a nameplate and extension, listed in the company directory, so colleagues can call <em>her</em>.</p>
         <p>Here is the trick: facilities can demolish this cabin tonight and rebuild an identical one on another floor by 9 a.m. Nothing inside is irreplaceable, because everything was <em>delivered by the building</em>. That cabin is a pod. This chapter furnishes it, item by item.</p>
       </section>
 
       <h2>The body plan</h2>
       <p>Earlier in this act you built the shell: an image in a registry, a cluster, the Deployment (the blueprint that keeps N copies of a pod alive), the Service (the stable name in front of them), the ConfigMap and the Secret. What you have not yet done is put a <em>real agent</em> inside — skills, MCP connections, A2A doorplate and all. That is this chapter's whole job.</p>
-      <p>Recall the shape of a pod: the smallest thing Kubernetes schedules — one or more containers that live and die together, sharing one network identity. If a container is a process in a box, the pod is a <em>body</em>, and the harness container is its heart: the very loop you hand-built in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, unchanged. What changes is everything <em>around</em> it — how settings, credentials, skills, and connections reach it. Here is the full anatomy; the rest of the chapter walks through it organ by organ:</p>
+      <p>Recall the shape of a pod: the smallest thing Kubernetes schedules — one or more containers that live and die together, sharing one network identity. If a container is a process in a box, the pod is a <em>body</em>, and the harness container is its heart: the very loop you hand-built in <a href="ch045-react-loop-by-hand.html">chapter 46</a>, unchanged. What changes is everything <em>around</em> it — how settings, credentials, skills, and connections reach it. Here is the full anatomy; the rest of the chapter walks through it organ by organ:</p>
 
       <div class="diagram">
         <div class="d-col">
@@ -98,7 +98,7 @@ data:
       <p>The hierarchy: image &lt; plain Kubernetes Secret &lt; Key Vault via CSI &lt; workload identity. Each step right removes a place a credential can leak from. An <code>ENV OPENAI_API_KEY=sk-...</code> line in a Dockerfile is not a style nit — that key is in every copy of the image, forever. Flag it.</p></div>
 
       <h2>Skills: the bookshelf wheeled in overnight</h2>
-      <p>In <a href="ch084-agent-skills.html">chapter 84</a> you met Agent Skills: folders of <code>SKILL.md</code> files the harness discovers by name and description, loading the full procedure only when a task matches — progressive disclosure. On your laptop those folders sit next to the code. In a pod, they arrive by one of two roads:</p>
+      <p>In <a href="ch084-agent-skills.html">chapter 85</a> you met Agent Skills: folders of <code>SKILL.md</code> files the harness discovers by name and description, loading the full procedure only when a task matches — progressive disclosure. On your laptop those folders sit next to the code. In a pod, they arrive by one of two roads:</p>
 
       <div class="tbl"><table>
         <tr><th>Road</th><th>How</th><th>Behaviour</th></tr>
@@ -109,8 +109,8 @@ data:
       <p>Both are legitimate. Teams that treat skills as code — reviewed, versioned — bake them in, so image tag <code>1.4.2</code> means <em>exactly</em> one behaviour. Teams iterating on prompts daily mount them, trading drift risk for speed. One quirk on the mounted road: a ConfigMap's keys become flat files, so a skill folder maps naturally to <em>one ConfigMap per skill</em>, each mounted at its own subfolder. A library of fifty skills outgrows that — use a file share or bake them in.</p>
 
       <h2>MCP, wired both ways</h2>
-      <p>From <a href="ch075-mcp-architecture.html">chapter 75</a>, recall the two MCP transports: <strong>stdio</strong> for a server running locally as a child of the harness, <strong>streamable HTTP</strong> for a server across the network. Both survive the move into the cluster — they just take different seats.</p>
-      <p><strong>The local server becomes a sidecar.</strong> On your laptop, the harness spawned your little docs server from <a href="ch077-build-an-mcp-server.html">chapter 77</a> as a subprocess and spoke stdio to it. In the cluster, that same private server ships as a <dfn>sidecar</dfn> — a second container declared in the same pod. Containers in a pod share one network namespace — the technical way of saying <em>they are the same "localhost"</em> — so the harness reaches it at <code>127.0.0.1</code>: the assistant in the corner of the cabin, private to this agent, started and stopped as one body. (Some harnesses keep the stdio server as a true subprocess inside the harness container instead — also fine; the point is it stays <em>inside the body</em>.)</p>
+      <p>From <a href="ch075-mcp-architecture.html">chapter 76</a>, recall the two MCP transports: <strong>stdio</strong> for a server running locally as a child of the harness, <strong>streamable HTTP</strong> for a server across the network. Both survive the move into the cluster — they just take different seats.</p>
+      <p><strong>The local server becomes a sidecar.</strong> On your laptop, the harness spawned a private MCP server of your own — like the finance desk you built in <a href="ch077-build-an-mcp-server.html">chapter 78</a> — as a subprocess and spoke stdio to it. In the cluster, that same private server ships as a <dfn>sidecar</dfn> — a second container declared in the same pod. Containers in a pod share one network namespace — the technical way of saying <em>they are the same "localhost"</em> — so the harness reaches it at <code>127.0.0.1</code>: the assistant in the corner of the cabin, private to this agent, started and stopped as one body. (Some harnesses keep the stdio server as a true subprocess inside the harness container instead — also fine; the point is it stays <em>inside the body</em>.)</p>
       <p><strong>The shared server becomes a Service.</strong> The team knowledge-base MCP server that ten agents query is the opposite case: a private copy in every pod would mean ten copies to patch. Instead it gets its own Deployment and Service, speaks streamable HTTP, and every agent reaches it at one stable URL — the <code>KB_MCP_URL</code> from the ConfigMap. If the knowledge base becomes the bottleneck, you scale <em>it</em>, not every agent.</p>
 
       <div class="tbl"><table>
@@ -120,7 +120,7 @@ data:
       </table></div>
 
       <h2>The A2A doorplate</h2>
-      <p>So far, everything has flowed <em>into</em> the agent. The last organ faces outward. From <a href="ch080-a2a-protocol.html">chapter 80</a>: an agent publishes an <dfn>agent card</dfn> — a JSON self-description at <code>/.well-known/agent-card.json</code> listing its name, abilities, and how to send it tasks — and other agents call it over HTTP. Inside the harness container that endpoint is just a web server on port 8000. But a pod's IP is disposable — pods die and return with new addresses. Nobody may ever hold a pod's number.</p>
+      <p>So far, everything has flowed <em>into</em> the agent. The last organ faces outward. From <a href="ch080-a2a-protocol.html">chapter 81</a>: an agent publishes an <dfn>agent card</dfn> — a JSON self-description at <code>/.well-known/agent-card.json</code> listing its name, abilities, and how to send it tasks — and other agents call it over HTTP. Inside the harness container that endpoint is just a web server on port 8000. But a pod's IP is disposable — pods die and return with new addresses. Nobody may ever hold a pod's number.</p>
       <p>The fix is the one Kubernetes always offers: a <strong>Service</strong> in front, giving the agent a stable DNS name — <code>research-agent.agents.svc.cluster.local</code> — and forwarding traffic to whichever healthy pod currently carries the label. The nameplate on the door, outliving every individual cabin.</p>
       <p>Now zoom out, because the multi-agent picture snaps into focus here. <strong>Each agent in the fleet is its own Deployment plus its own Service.</strong> Planner, research, summariser — three Deployments, three Services, three agent cards. When the planner wants research done, it resolves the research agent's Service name over cluster DNS, fetches the agent card, and posts the task — A2A over the flat cluster network:</p>
 
@@ -279,7 +279,7 @@ curl http://localhost:8080/.well-known/agent-card.json</code></pre>
             <span class="d-arrow">&#8594;</span>
             <div class="d-box">harness<small>loads full procedure</small></div>
           </div>
-          <p class="step-cap">Progressive disclosure, exactly as in chapter 84: names and descriptions were scanned at startup; only now, with a matching task, does the full market-brief procedure enter context. The shelf was mounted; the choosing is the agent's.</p>
+          <p class="step-cap">Progressive disclosure, exactly as in chapter 85: names and descriptions were scanned at startup; only now, with a matching task, does the full market-brief procedure enter context. The shelf was mounted; the choosing is the agent's.</p>
         </div>
         <div class="step" data-title="Sidecar call">
           <h3>5. A word to the assistant in the corner</h3>
@@ -361,8 +361,8 @@ def handle_a2a_task(task):
     print(f"3 skill     : matched market-brief ({skill.split('|')[0].strip()})")
     print(f"4 sidecar   : {sidecar_docs_mcp('search_docs', 'pricing')}")
     print(f"5 shared    : {shared_kb_mcp(ENV['KB_MCP_URL'], 'query', 'Q3')}")
-    print(f"6 delegate  : {a2a('summariser.agents.svc.cluster.local',"
-          f" 'condense findings')}")
+    print(f"6 delegate  : "
+          f"{a2a('summariser.agents.svc.cluster.local', 'condense findings')}")
     return "market brief: 2 pages, 5 cited sources"
 
 print("ANSWER      :", handle_a2a_task("research the Q3 market"))

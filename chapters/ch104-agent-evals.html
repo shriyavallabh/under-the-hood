@@ -125,7 +125,7 @@
       <p>Where do trajectories come from in production? From your tracing setup — the spans and tool-call logs from <a href="ch088-observability.html">the observability chapter</a>. Teams harvest production traces, scrub them, and promote them into the golden dataset. Observability feeds evals; evals justify observability.</p></div>
 
       <h2>Run a real eval, right now</h2>
-      <p>Below is a complete miniature eval suite. As in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, the "model" is a scripted stand-in — a <code>fake_llm()</code> playing four personalities, one per task: a careful worker, a lucky guesser, an agent that repeats itself and then blunders, and a careful worker again. Everything else — dataset, runner, graders, aggregation, gate — is the real shape production eval code takes. Press <strong>Run</strong> and read the scoreboard.</p>
+      <p>Below is a complete miniature eval suite. As in <a href="ch045-react-loop-by-hand.html">chapter 46</a>, the "model" is a scripted stand-in — a <code>fake_llm()</code> playing four personalities, one per task: a careful worker, a lucky guesser, an agent that repeats itself and then blunders, and a careful worker again. Everything else — dataset, runner, graders, aggregation, gate — is the real shape production eval code takes. Press <strong>Run</strong> and read the scoreboard.</p>
 
       <div class="pyrun" data-title="A miniature agent eval suite — run me">
 <textarea class="py-src" spellcheck="false">
@@ -326,7 +326,7 @@ nightly-evals:
         <tr><td>Langfuse</td><td>Open-source tracing plus evals; self-hostable, popular where data cannot leave the building.</td></tr>
         <tr><td>Braintrust</td><td>Hosted eval platform with strong CI integration — scores posted straight onto pull/merge requests.</td></tr>
         <tr><td>Arize Phoenix</td><td>Open-source observability with built-in LLM evals.</td></tr>
-        <tr><td>DeepEval</td><td>Open-source Python library; writes evals in a pytest-like style, which makes the CI wiring feel like chapter 103.</td></tr>
+        <tr><td>DeepEval</td><td>Open-source Python library; writes evals in a pytest-like style, which makes the CI wiring feel like chapter 104.</td></tr>
         <tr><td>promptfoo</td><td>Config-driven eval runner (YAML in, scores out); a favourite for quick CI gates.</td></tr>
         <tr><td>Ragas</td><td>Metrics built for <a href="ch042-rag.html">RAG</a> pipelines: faithfulness, answer relevance, context precision.</td></tr>
         <tr><td>Inspect</td><td>Open-source eval framework from the UK's AI Security Institute; strong on agentic, multi-step tasks.</td></tr>

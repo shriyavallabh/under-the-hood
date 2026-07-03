@@ -111,7 +111,7 @@
       <p><strong>The cause.</strong> Arguments are generated text, exactly like everything else the model produces. If the tool's schema is loose and its description ambiguous, the model guesses formats, units, and defaults — and a guess renders just as confidently as knowledge.</p>
       <p><strong>The defense.</strong> Validate at the boundary, every time. This is precisely what <a href="ch016-type-hints-and-pydantic.html">type hints and pydantic</a> are for: declare what a valid call looks like, reject everything else, and — the crucial half — return an error message specific enough for the model to act on. "Invalid input" teaches the model nothing; "expected ISO date YYYY-MM-DD, got '3rd of June'" gets a corrected call on the next turn. And design away the dangerous ambiguity entirely where you can: an integer field named <code>amount_paise</code> cannot be misread the way a float named <code>amount</code> can.</p>
 
-      <p>Enough theory — watch all three of those villains get caught in a working loop. The "models" below are scripted stand-ins (the same <code>fake_llm</code> trick as <a href="ch045-react-loop-by-hand.html">chapter 45</a>), each engineered to misbehave in one specific way. The loop is the defended version. Press <strong>Run</strong>.</p>
+      <p>Enough theory — watch all three of those villains get caught in a working loop. The "models" below are scripted stand-ins (the same <code>fake_llm</code> trick as <a href="ch045-react-loop-by-hand.html">chapter 46</a>), each engineered to misbehave in one specific way. The loop is the defended version. Press <strong>Run</strong>.</p>
 
       <div class="pyrun" data-title="Three misbehaving models vs one defended loop — run me">
 <textarea class="py-src" spellcheck="false">
@@ -295,7 +295,7 @@ for label, llm in [("the infinite loop",   looping_llm),
         <h2>Key takeaways</h2>
         <ul>
           <li>Agent failures are not infinite in variety: six recurring modes — infinite loops, hallucinated tools, malformed arguments, runaway cost, context poisoning, and prompt injection — cover nearly every incident you will meet.</li>
-          <li>Each villain lives at a specific station of the loop you built in chapter 45; naming the station is half the diagnosis.</li>
+          <li>Each villain lives at a specific station of the loop you built in chapter 46; naming the station is half the diagnosis.</li>
           <li>The tool boundary is your strongest defensive ground: look names up instead of crashing, validate arguments, and return errors specific enough for the model to self-correct.</li>
           <li>Cost compounds because the whole history is re-sent every turn — so budget in layers: turn caps, token budgets, and spend limits together.</li>
           <li>The transcript is the model's whole world: bad content in it steers everything after, which is why "start a fresh session" genuinely works — and why the append deserves a guard.</li>

@@ -195,7 +195,7 @@ def watchdog(timeline, max_strikes=3):
         print(f"      waiting {backoff}s (simulated), then restarting the agent")
         backoff = min(backoff * 2, 60)   # exponential backoff, capped
 
-    return "survived the night unattended"
+    return "survived the night unattended" if strikes == 0 else "night ended mid-incident -- agent still unhealthy"
 
 print("VERDICT:", watchdog(TIMELINE))
 </textarea>

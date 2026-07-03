@@ -118,7 +118,7 @@
       <div class="walkthrough">
         <div class="wl-head">API call 1 — the request you send</div>
         <div class="wl-line"><code>{</code></div>
-        <div class="wl-line"><code>  "model": "claude-sonnet-latest",</code>
+        <div class="wl-line"><code>  "model": "claude-sonnet-4-6",</code>
           <div class="wl-note">Any current chat model. The handshake works the same across providers and model tiers — tool calling is a convention of the API, not a feature of one model.</div></div>
         <div class="wl-line"><code>  "max_tokens": 1024,</code>
           <div class="wl-note">The usual response budget, exactly as in a plain chat call. Nothing about tool calling changes the basic request shape you already know from earlier in this act.</div></div>
@@ -137,7 +137,7 @@
           <div class="wl-note">One parameter: a string called city, with its own mini description. The model uses these to fill the form correctly — "Pune" goes here, not "tomorrow at 6".</div></div>
         <div class="wl-line"><code>        },</code></div>
         <div class="wl-line"><code>        "required": ["city"]</code>
-          <div class="wl-note">Which fields must be filled. The provider enforces this on the model's output, which is a big part of why modern tool calls arrive well-formed instead of as hopeful prose.</div></div>
+          <div class="wl-note">Which fields must be filled. The model is trained to honour this, and providers can hard-enforce it if you mark the tool strict — but by default it is a strong hint, not a guarantee, which is why dispatchers still validate.</div></div>
         <div class="wl-line"><code>      }</code></div>
         <div class="wl-line"><code>    }</code></div>
         <div class="wl-line"><code>  ],</code></div>
@@ -335,7 +335,7 @@ print("final answer:", final["content"][0]["text"])
           <li>Only schemas travel to the API — name, description, JSON Schema of parameters. The description is prompt engineering in disguise: it is how the model decides when to reach for the tool.</li>
           <li><code>stop_reason: "tool_use"</code> (or OpenAI's <code>finish_reason: "tool_calls"</code>) means the model is paused, waiting for your side of the handshake.</li>
           <li>Failures — bad arguments, unknown tools, broken functions — all recover the same way: send the error text back as the tool result and let the model self-correct.</li>
-          <li>The tool registry is the security boundary of every agent, and the whole agent pattern is just this handshake wrapped in a loop — which you will build by hand in <a href="ch045-react-loop-by-hand.html">chapter 45</a>.</li>
+          <li>The tool registry is the security boundary of every agent, and the whole agent pattern is just this handshake wrapped in a loop — which you will build by hand in <a href="ch045-react-loop-by-hand.html">chapter 46</a>.</li>
         </ul>
       </section>
 

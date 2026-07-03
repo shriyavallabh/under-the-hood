@@ -98,7 +98,7 @@
             <span class="d-arrow">&#8594;</span>
             <div class="d-box hot">GitLab<small>merge request: feature &#8594; main</small></div>
           </div>
-          <p class="step-cap">Pushing publishes your branch to the server; the merge request says "I would like this folded into main, please look". Review and the CI pipeline both happen here — chapters 99 and 101.</p>
+          <p class="step-cap">Pushing publishes your branch to the server; the merge request says "I would like this folded into main, please look". Review and the CI pipeline both happen here — chapters 101 and 102.</p>
         </div>
         <div class="step" data-title="Sync with main">
           <h3>5. Stay in sync while you wait</h3>
@@ -145,7 +145,7 @@
         <div class="wl-line"><code>git switch -c feature/invoice-rounding</code>
           <div class="wl-note">The <code>-c</code> means <em>create</em>: make a new branch at the commit you are standing on and switch to it, one move. This is the moment the photocopy is made. (Older form: <code>git checkout -b feature/invoice-rounding</code>.)</div></div>
         <div class="wl-line"><code>git add billing/rounding.py tests/test_rounding.py</code>
-          <div class="wl-note">After editing, stage exactly the files that belong to this change — remember staging from <a href="ch096-git-fundamentals.html">chapter 96</a>. Naming files beats <code>git add .</code>, which happily scoops up stray debug scripts.</div></div>
+          <div class="wl-note">After editing, stage exactly the files that belong to this change — remember staging from <a href="ch096-git-fundamentals.html">chapter 97</a>. Naming files beats <code>git add .</code>, which happily scoops up stray debug scripts.</div></div>
         <div class="wl-line"><code>git commit -m "Round invoice totals to two decimals"</code>
           <div class="wl-note">Snapshot the staged change with a message that says what it does. Several small commits are fine — they will be reviewed together in the MR anyway.</div></div>
         <div class="wl-line"><code>git push -u origin feature/invoice-rounding</code>
@@ -208,7 +208,7 @@
             <div class="d-box dim">main</div>
             <div class="d-box good">release/2.4<small>tag v2.4.0 &#8594; deployed</small></div>
           </div>
-          <p class="step-cap">When the release branch is stable, its tip is tagged v2.4.0 — a permanent, immovable label from chapter 96 — and that exact commit is what goes to production. Everyone can point at precisely what shipped.</p>
+          <p class="step-cap">When the release branch is stable, its tip is tagged v2.4.0 — a tag being a permanent, immovable label on one commit, unlike the sliding branch notes of chapter 97 — and that exact commit is what goes to production. Everyone can point at precisely what shipped.</p>
         </div>
         <div class="step" data-title="Fixes flow back">
           <h3>4. Merge the fixes back to main</h3>

@@ -82,7 +82,7 @@
             <span class="d-arrow">&#8594;</span>
             <div class="d-box dim">Fine-tune</div>
           </div>
-          <p class="step-cap">Style is solved, but the assistant misquotes the refund policy — forty pages, revised quarterly. Retrieval-augmented generation (<a href="ch042-rag.html">chapter 42</a>) fetches the relevant clause at question time, quote-able and citable. Update the documents, and the assistant is current the same minute.</p>
+          <p class="step-cap">Style is solved, but the assistant misquotes the refund policy — forty pages, revised quarterly. Retrieval-augmented generation (<a href="ch042-rag.html">chapter 43</a>) fetches the relevant clause at question time, quote-able and citable. Update the documents, and the assistant is current the same minute.</p>
         </div>
         <div class="step" data-title="Rung 4: fine-tune">
           <h3>Rung 4 — Change the model (fine-tune)</h3>
@@ -228,13 +228,13 @@ else:
       <p>Concretely, for a ~7-8B open model whose weights alone are roughly 14-16 GB at standard precision — and these are honest rules of thumb, not gospel:</p>
 
       <div data-bars data-title="Rule-of-thumb VRAM to fine-tune a ~7-8B open model" data-unit="GB"
-           data-note="Illustrative midpoints of honest ranges: full fine-tune ~60-80 GB, LoRA ~16-24 GB, QLoRA ~8-12 GB. Your mileage will vary with sequence length, batch size and optimiser.">
-        <div class="bar" data-label="Full fine-tune (weights + gradients + optimiser)" data-value="70"></div>
+           data-note="Illustrative midpoints of honest ranges: full fine-tune ~110-160 GB, LoRA ~16-24 GB, QLoRA ~8-12 GB. Your mileage will vary with sequence length, batch size and optimiser.">
+        <div class="bar" data-label="Full fine-tune (weights + gradients + optimiser)" data-value="135"></div>
         <div class="bar" data-label="LoRA (frozen base + small adapters)" data-value="20"></div>
         <div class="bar" data-label="QLoRA (quantised base + adapters)" data-value="10"></div>
       </div>
 
-      <p>Read the bars as hardware classes. Full fine-tuning at ~60-80 GB is multi-GPU territory — a rented cluster and a budget conversation. LoRA at ~16-24 GB fits one serious workstation card. QLoRA at ~8-12 GB fits a high-end gaming GPU. That single chart is why parameter-efficient methods took over the world.</p>
+      <p>Read the bars as hardware classes. Full fine-tuning at ~110-160 GB is multi-GPU territory — a rented cluster and a budget conversation. LoRA at ~16-24 GB fits one serious workstation card. QLoRA at ~8-12 GB fits a high-end gaming GPU. That single chart is why parameter-efficient methods took over the world.</p>
 
       <div class="callout note"><span class="co-label">Note</span>
       <p>There is a fourth bar with no hardware at all: <em>hosted fine-tuning</em>. The big API providers let you upload a dataset file, pick epochs and a learning-rate multiplier, and train on their GPUs; you get back a new model name to call. The hardware problem vanishes. The price is lock-in: the tuned weights live inside the provider — you cannot download them, self-host them, or take them to a competitor. Recall the open-versus-closed split from <a href="ch032-model-landscape.html">the model landscape</a>.</p></div>
@@ -313,7 +313,7 @@ else:
           <li>Climb the ladder in order — prompt, few-shot, RAG, fine-tune — only with evidence the rung below failed. Most enterprise problems end before rung 4.</li>
           <li>Fine-tuning wins at behaviour (voice, format, vocabulary, small-model specialisation for cost and latency) and loses at knowledge (fresh facts, citations, fast-changing data — retrieval wins those).</li>
           <li>More epochs is not more learning: training loss falls forever, but the held-out validation curve turns upward when memorisation starts — hold out a validation set and stop at its minimum.</li>
-          <li>LoRA trains tiny clip-on adapters against a frozen base; QLoRA does the same on a quantised base — turning a ~60-80 GB multi-GPU job into a ~10-20 GB one. Hosted fine-tuning removes hardware entirely, at the price of lock-in.</li>
+          <li>LoRA trains tiny clip-on adapters against a frozen base; QLoRA does the same on a quantised base — turning a ~110-160 GB multi-GPU job into a ~10-20 GB one. Hosted fine-tuning removes hardware entirely, at the price of lock-in.</li>
           <li>The dataset is the product: hundreds to thousands of curated instruction/response pairs, quality over quantity — the model becomes whatever you feed it.</li>
           <li>A fine-tuned model is a new model: provenance, evals before rollout, a version number, a rollback path — and watch for catastrophic forgetting beyond the skill you trained.</li>
         </ul>

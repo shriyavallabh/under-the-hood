@@ -42,7 +42,7 @@
       <p>The script you are about to read is not a teaching toy. It is the standard shape of "call an LLM from Python over raw HTTP" — the shape you will find in provider quick-start guides, in gists, and in a thousand utility scripts sitting in real repositories. If you can read this, you can read the first AI script anyone at work will ever show you.</p>
 
       <h2>Meet the script</h2>
-      <p>Here it is: about twenty lines that send one question to a hosted language model and print the answer. Do not study it yet. Just <em>look</em> at it the way chapter 1 taught you — let your eyes find the shapes. Try to spot: exactly one function definition, two dicts, one list, one f-string, and the single line where anything actually leaves your computer.</p>
+      <p>Here it is: about twenty lines that send one question to a hosted language model and print the answer. Do not study it yet. Just <em>look</em> at it the way chapter 1 taught you — let your eyes find the shapes. Try to spot: exactly one function definition, two named dicts — plus two more little dicts hiding inside a list — one f-string, and the single line where anything actually leaves your computer.</p>
 
       <div class="code-title">ask.py — a real script that asks an LLM one question</div>
       <pre><code class="language-python">import os
@@ -104,7 +104,7 @@ print(answer)</code></pre>
             <div class="d-box dim">Internet</div>
             <div class="d-box dim">Provider</div>
           </div>
-          <p class="step-cap">Inside the function, two dicts are assembled — plain <a href="ch004-collections.html">chapter 4 containers</a>. One is the envelope (who is asking), one is the contents (which model, what conversation). Still no internet.</p>
+          <p class="step-cap">Inside the function, the two named dicts are assembled — plain <a href="ch004-collections.html">chapter 4 containers</a>. One is the envelope (who is asking), one is the contents (which model, what conversation). Still no internet.</p>
         </div>
         <div class="step" data-title="The flight">
           <h3>4. One line makes the trip</h3>

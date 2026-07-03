@@ -114,12 +114,12 @@ agent = create_deep_agent(
           <h3>3. FilesystemMiddleware: the filing cabinet</h3>
           <div class="diagram">
             <div class="d-col">
-              <div class="d-box hot">FilesystemMiddleware<small>ls, read_file, write_file, edit_file</small></div>
+              <div class="d-box hot">FilesystemMiddleware<small>ls, read_file, write_file, edit_file, glob, grep</small></div>
               <div class="d-box">TodoListMiddleware</div>
               <div class="d-box dim">ReAct core</div>
             </div>
           </div>
-          <p class="step-cap">Four file tools arrive: <code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code> (recent versions add <code>glob</code> and <code>grep</code> for finding things). By default they operate on a <em>virtual</em> filesystem living in graph state — paths like <code>/notes/march.txt</code> that never touch your disk. Swap the <code>backend</code> to reach a real disk or a store. Chapter 69 dissects this layer.</p>
+          <p class="step-cap">Six file tools arrive: <code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code>, plus <code>glob</code> and <code>grep</code> for finding things. (A seventh, <code>execute</code>, runs shell commands — but it appears only when you swap in a sandbox <code>backend</code> that supports it; on the default virtual filesystem the library hides it.) By default they operate on a <em>virtual</em> filesystem living in graph state — paths like <code>/notes/march.txt</code> that never touch your disk. Swap the <code>backend</code> to reach a real disk or a store. Chapter 70 dissects this layer.</p>
         </div>
         <div class="step" data-title="Subagent layer">
           <h3>4. SubAgentMiddleware: the speed dial</h3>
@@ -131,7 +131,7 @@ agent = create_deep_agent(
               <div class="d-box dim">ReAct core</div>
             </div>
           </div>
-          <p class="step-cap">One tool called <code>task</code> lets the main agent hand a subtask to a fresh-context worker and receive only the final report back — a hundred noisy searches happen in the worker's context, one clean paragraph returns. Specialists you declare via <code>subagents=</code> get their own name, description, and system prompt. Chapter 70 goes deep here.</p>
+          <p class="step-cap">One tool called <code>task</code> lets the main agent hand a subtask to a fresh-context worker and receive only the final report back — a hundred noisy searches happen in the worker's context, one clean paragraph returns. Specialists you declare via <code>subagents=</code> get their own name, description, and system prompt. Chapter 71 goes deep here.</p>
         </div>
         <div class="step" data-title="Summarization layer">
           <h3>5. SummarizationMiddleware: the note-condenser</h3>
@@ -150,12 +150,12 @@ agent = create_deep_agent(
           <h3>6. The quiet layers, then compile</h3>
           <div class="diagram">
             <div class="d-col">
-              <div class="d-box">the whole stack<small>plus SkillsMiddleware + PatchToolCallsMiddleware</small></div>
+              <div class="d-box">the whole stack<small>plus PatchToolCallsMiddleware (+ SkillsMiddleware if you pass skills=)</small></div>
             </div>
             <span class="d-arrow">&#8594;</span>
             <div class="d-box good">compiled graph<small>agent.invoke(...) just works</small></div>
           </div>
-          <p class="step-cap">Two quieter layers ride along: <code>SkillsMiddleware</code> exposes reusable skill instructions to the agent, and <code>PatchToolCallsMiddleware</code> repairs tool calls left dangling by an interrupted run. Any <code>middleware=[...]</code> you pass is slotted in near the tail. Then the whole assembly is compiled into a single LangGraph graph — the return value. One call in, one serviced office out.</p>
+          <p class="step-cap">One quiet layer always rides along: <code>PatchToolCallsMiddleware</code> repairs tool calls left dangling by an interrupted run. A second, <code>SkillsMiddleware</code> — which exposes reusable skill instructions to the agent — is a <em>conditional</em> append: it slots in just after planning only when you pass <code>skills=...</code>, and is absent otherwise. Any <code>middleware=[...]</code> you pass is slotted in near the tail. Then the whole assembly is compiled into a single LangGraph graph — the return value. One call in, one serviced office out.</p>
         </div>
       </div>
 
@@ -169,7 +169,7 @@ agent = create_deep_agent(
         <div class="tile"><div class="tile-label">Tools you wrote</div>
           <div class="tile-value">1</div><div class="tile-delta">search_invoices</div></div>
         <div class="tile"><div class="tile-label">Tools the agent carries</div>
-          <div class="tile-value">7</div><div class="tile-delta">yours + six built-ins</div></div>
+          <div class="tile-value">9</div><div class="tile-delta">yours + eight built-ins</div></div>
         <div class="tile"><div class="tile-label">Wiring code you typed</div>
           <div class="tile-value">0 lines</div><div class="tile-delta">the factory did it</div></div>
       </div>
@@ -178,7 +178,7 @@ agent = create_deep_agent(
         <tr><th>Tool</th><th>Installed by</th><th>What it is for</th></tr>
         <tr><td><code>search_invoices</code></td><td>You</td><td>Your domain work — the only part the library cannot guess</td></tr>
         <tr><td><code>write_todos</code></td><td>TodoListMiddleware</td><td>Write and revise the plan for multi-step work</td></tr>
-        <tr><td><code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code></td><td>FilesystemMiddleware</td><td>Park bulky material in files instead of the transcript</td></tr>
+        <tr><td><code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code>, <code>glob</code>, <code>grep</code></td><td>FilesystemMiddleware</td><td>Park bulky material in files instead of the transcript, and search across them</td></tr>
         <tr><td><code>task</code></td><td>SubAgentMiddleware</td><td>Delegate a subtask to a fresh-context worker, get one report back</td></tr>
       </table></div>
 
@@ -302,7 +302,7 @@ print("state 'files':", agent["files"])
         <div class="wl-line"><code>agent = create_deep_agent(</code>
           <div class="wl-note">The one call this chapter is about. Everything the stepper showed — planning, files, subagents, summarization, the quiet layers — is assembled between this bracket and the closing one.</div></div>
         <div class="wl-line"><code>    tools=[search_invoices],</code>
-          <div class="wl-note">Your tools ride alongside the built-ins; the model sees one flat menu of seven. You add domain skills, the library adds office equipment.</div></div>
+          <div class="wl-note">Your tools ride alongside the built-ins; the model sees one flat menu of nine. You add domain skills, the library adds office equipment.</div></div>
         <div class="wl-line"><code>    system_prompt="Plan first, file notes, answer last.",</code>
           <div class="wl-note">Your instructions come first, and each middleware layer appends its own tool manual after them. What the model receives is your prompt plus the office manual.</div></div>
         <div class="wl-line"><code>)</code></div>
@@ -317,7 +317,7 @@ print("state 'files':", agent["files"])
         <div class="wl-line"><code>print(result["todos"])</code>
           <div class="wl-note">The plan the agent wrote with <code>write_todos</code>, straight out of graph state — each item with its status. Dashboards that show an agent's live checklist read this key.</div></div>
         <div class="wl-line"><code>print(result["files"])</code>
-          <div class="wl-note">Everything the agent filed during the run. With the default state backend these are virtual and vanish with the run unless you checkpoint; other backends persist them. Chapter 69 covers the choices.</div></div>
+          <div class="wl-note">Everything the agent filed during the run. With the default state backend these are virtual and vanish with the run unless you checkpoint; other backends persist them. Chapter 70 covers the choices.</div></div>
       </div>
 
       <h2>The words that will come up</h2>
@@ -327,7 +327,7 @@ print("state 'files':", agent["files"])
         <button class="flip" type="button"><span class="flip-front">deep agent</span><span class="flip-back">A tool-calling agent fitted with planning, a filesystem, subagents, and context management — equipment for tasks that take hours, not seconds.</span></button>
         <button class="flip" type="button"><span class="flip-front">middleware stack</span><span class="flip-back">The ordered layers wrapped around the agent loop. Each layer can add tools, extend the prompt, and intercept messages. create_deep_agent installs the standard set.</span></button>
         <button class="flip" type="button"><span class="flip-front">write_todos</span><span class="flip-back">The built-in planning tool. The agent calls it to write and revise its own checklist, which lives in graph state under "todos".</span></button>
-        <button class="flip" type="button"><span class="flip-front">virtual filesystem</span><span class="flip-back">The default home of ls / read_file / write_file / edit_file — files stored in graph state, not on disk. Swap the backend to change where they really live.</span></button>
+        <button class="flip" type="button"><span class="flip-front">virtual filesystem</span><span class="flip-back">The default home of ls / read_file / write_file / edit_file / glob / grep — files stored in graph state, not on disk. Swap the backend to change where they really live.</span></button>
         <button class="flip" type="button"><span class="flip-front">task tool</span><span class="flip-back">The delegation tool. The main agent describes a subtask; a fresh-context worker does the messy part and returns one clean report.</span></button>
         <button class="flip" type="button"><span class="flip-front">compiled graph</span><span class="flip-back">What create_deep_agent returns — a compiled LangGraph graph, identical in kind to any you built by hand. Invoke, stream, checkpoint as usual.</span></button>
       </div>
@@ -351,9 +351,9 @@ print("state 'files':", agent["files"])
           <div class="q-opts">
             <button data-opt="a">Exactly one tool — what you pass is what it gets</button>
             <button data-opt="b">Two — yours plus a stop tool</button>
-            <button data-opt="c">Around seven — yours plus write_todos, the file tools, and task</button>
+            <button data-opt="c">Around nine — yours plus write_todos, the file tools, and task</button>
           </div>
-          <p class="q-explain">The middleware layers each bolt their tools onto the belt: planning adds write_todos, the filesystem layer adds ls / read_file / write_file / edit_file, and the subagent layer adds task. Your tool rides alongside the built-ins on one flat menu.</p>
+          <p class="q-explain">The middleware layers each bolt their tools onto the belt: planning adds write_todos, the filesystem layer adds ls / read_file / write_file / edit_file / glob / grep, and the subagent layer adds task. Your tool rides alongside the built-ins on one flat menu.</p>
         </div>
         <div class="q" data-answer="a">
           <p class="q-text">3. With the default backend, where does <code>write_file("/notes/plan.txt", ...)</code> actually put the file?</p>
@@ -362,7 +362,7 @@ print("state 'files':", agent["files"])
             <button data-opt="b">Into the current working directory of your machine</button>
             <button data-opt="c">Into a cloud bucket the library manages for you</button>
           </div>
-          <p class="q-explain">The default is the state backend: files are entries in graph state, gone when the run ends unless checkpointed. Swap in a filesystem or store backend when you want real persistence — that trade-off is the whole of chapter 69.</p>
+          <p class="q-explain">The default is the state backend: files are entries in graph state, gone when the run ends unless checkpointed. Swap in a filesystem or store backend when you want real persistence — that trade-off is the whole of chapter 70.</p>
         </div>
         <div class="q" data-answer="b">
           <p class="q-text">4. An agent has been running for an hour and its transcript is enormous. Which layer stops it drowning?</p>
@@ -389,8 +389,8 @@ print("state 'files':", agent["files"])
         <ul>
           <li><code>create_deep_agent(tools=..., system_prompt=...)</code> is a factory: one call assembles the four pillars of deepness around a standard tool-calling loop and returns the result.</li>
           <li>What it returns is a compiled LangGraph graph — invoke it, stream it, checkpoint it, interrupt it exactly like any graph you built by hand in Act VII.</li>
-          <li>The assembly is a middleware stack, in order: planning (<code>write_todos</code>), skills, filesystem (<code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code>), subagents (<code>task</code>), summarization, and tool-call repair.</li>
-          <li>You supplied one tool; the model sees about seven — and your system prompt gains each layer's usage manual automatically.</li>
+          <li>The assembly is a middleware stack, in order: planning (<code>write_todos</code>), then — only when you pass <code>skills=...</code> — skills, then filesystem (<code>ls</code>, <code>read_file</code>, <code>write_file</code>, <code>edit_file</code>, <code>glob</code>, <code>grep</code>), subagents (<code>task</code>), summarization, and tool-call repair (the last always on).</li>
+          <li>You supplied one tool; the model sees about nine — and your system prompt gains each layer's usage manual automatically.</li>
           <li>By default files and todos live in graph state: virtual, inspectable in the result, gone unless checkpointed or given a persistent backend.</li>
           <li>Subagents get the same equipment minus the <code>task</code> tool — delegation goes one level down, never infinitely.</li>
         </ul>

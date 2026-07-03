@@ -61,7 +61,7 @@
       </div>
 
       <h2>Run a traced, metered, audited agent right now</h2>
-      <p>Below is the fifty-line agent from <a href="ch045-react-loop-by-hand.html">chapter 45</a> wearing a flight recorder. A <code>Recorder</code> class captures a span for every model and tool call, converts tokens into money, and writes a hash-chained audit trail — each audit record's fingerprint is computed from the record <em>plus the previous fingerprint</em>, so editing any old record breaks every fingerprint after it. As before, the "model" is a scripted stand-in; the recording machinery is exactly what production does. Press <strong>Run</strong>, then try the tamper experiment at the bottom.</p>
+      <p>Below is the fifty-line agent from <a href="ch045-react-loop-by-hand.html">chapter 46</a> wearing a flight recorder. A <code>Recorder</code> class captures a span for every model and tool call, converts tokens into money, and writes a hash-chained audit trail — each audit record's fingerprint is computed from the record <em>plus the previous fingerprint</em>, so editing any old record breaks every fingerprint after it. As before, the "model" is a scripted stand-in; the recording machinery is exactly what production does. Press <strong>Run</strong>, then try the tamper experiment at the bottom.</p>
 
       <div class="pyrun" data-title="A flight recorder for the ReAct loop — run me">
 <textarea class="py-src" spellcheck="false">
@@ -92,7 +92,7 @@ class Recorder:
             prev = h
         return "chain intact"
 
-# ---- tools + scripted model, exactly as in chapter 45 ------
+# ---- tools + scripted model, exactly as in chapter 46 ------
 def calculate(expr):
     ok = set(expr) &lt;= set("0123456789.+-*/() ")
     return str(eval(expr)) if ok else "ERROR"
@@ -165,7 +165,7 @@ print("  verify after edit:", rec.verify())
         <div class="bar" data-label="Tenant D" data-value="22"></div>
       </div>
 
-      <p>On top of attribution sit <dfn>budgets</dfn> — pre-agreed spending limits that the harness enforces rather than merely reports. A sane setup has three rungs. A <strong>soft alert</strong> fires at, say, 80 percent of budget: a message to the operators, nothing stops. A <strong>hard cap</strong> stops new runs when the budget is spent — the agent politely refuses rather than silently overdrafting. And a <strong>per-run circuit breaker</strong> kills any single run that exceeds its own allowance, because the most common cost incident is not a thousand users — it is one confused agent looping, exactly the failure the <code>max_turns</code> guard in chapter 45 protected against, now measured in currency instead of iterations. Budgets are guardrails' financial cousins: the guardrail says "you may not call that tool"; the budget says "you may not spend a rupee more".</p>
+      <p>On top of attribution sit <dfn>budgets</dfn> — pre-agreed spending limits that the harness enforces rather than merely reports. A sane setup has three rungs. A <strong>soft alert</strong> fires at, say, 80 percent of budget: a message to the operators, nothing stops. A <strong>hard cap</strong> stops new runs when the budget is spent — the agent politely refuses rather than silently overdrafting. And a <strong>per-run circuit breaker</strong> kills any single run that exceeds its own allowance, because the most common cost incident is not a thousand users — it is one confused agent looping, exactly the failure the <code>max_turns</code> guard in chapter 46 protected against, now measured in currency instead of iterations. Budgets are guardrails' financial cousins: the guardrail says "you may not call that tool"; the budget says "you may not spend a rupee more".</p>
 
       <div class="callout note"><span class="co-label">Note</span>
       <p>Meter <em>tokens</em>, not just money. Prices change, cached input tokens are billed at a discount, and different models cost wildly different amounts per token — so the durable record is tokens per call per model, with price applied at read time. Store the raw measurement; derive the invoice.</p></div>

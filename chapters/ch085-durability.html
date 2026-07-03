@@ -165,6 +165,9 @@ graph.invoke(None, config)</code></pre>
 # It lives OUTSIDE any one process, so it survives every crash.
 DISK = {"checkpoint": None, "effect_ledger": {}}
 
+# demo-only tally: how many times the effect TRULY fired
+EXECUTIONS = 0
+
 class Crash(Exception):
     """Stands in for an OOM-kill, pod eviction, deploy, power cut."""
 
@@ -174,10 +177,12 @@ def check_balance(arg):
 
 def transfer(arg):
     # arg looks like "acct-42/acct-77/1500/key-8801"
+    global EXECUTIONS
     key = arg.split("/")[-1]
     ledger = DISK["effect_ledger"]        # the payment system's
     if key in ledger:                     # idempotency ledger
         return ledger[key] + "  [key seen before: NOT re-executed]"
+    EXECUTIONS += 1                        # the money actually moves HERE
     result = "MONEY MOVED: " + arg
     ledger[key] = result                  # recorded with the effect
     return result
@@ -214,12 +219,12 @@ except Crash as boom:
 
 run_process("process B")   # a fresh process, resuming cold
 
-print("payments actually executed:", len(DISK["effect_ledger"]))
+print("payments actually executed:", EXECUTIONS)
 </textarea>
       </div>
 
       <div class="callout tip"><span class="co-label">Tip</span>
-      <p>Now cause the disaster this chapter exists to prevent. Delete the two idempotency lines (<code>if key in ledger:</code> and the early return) and run again — process B moves the money twice. Then restore them and instead move the checkpoint write <em>above</em> the tool call: now the resumed process <em>skips</em> the transfer and the vendor is never paid. Every ordering fails somewhere; only the idempotency key makes the retry safe.</p></div>
+      <p>Now cause the disaster this chapter exists to prevent. Delete the two idempotency lines (<code>if key in ledger:</code> and the early return) and run again — process B moves the money twice. Then restore them and instead move the checkpoint write <em>above</em> the tool call <em>and</em> move the <code>raise Crash</code> line up between them: now the register claims step 1 is done before the transfer ever fires, so the resumed process <em>skips</em> the transfer and the vendor is never paid. Every ordering fails somewhere; only the idempotency key makes the retry safe.</p></div>
 
       <h2>The same loop, read like a reviewer</h2>
       <p>Click through the lines that carry the design. Everything else is plumbing.</p>

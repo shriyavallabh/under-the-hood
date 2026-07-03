@@ -217,7 +217,13 @@ class ToolMessage:
 
 # ---- What .invoke() does before the HTTP call -------------
 def to_wire_format(messages):
-    return [{"role": m.role, "content": m.content} for m in messages]
+    out = []
+    for m in messages:
+        d = {"role": m.role, "content": m.content}
+        if getattr(m, "tool_calls", None):        # assistant carries its request
+            d["tool_calls"] = m.tool_calls
+        out.append(d)
+    return out
 
 # ---- A scripted stand-in for a real provider API ----------
 def fake_provider_api(raw):
@@ -256,6 +262,7 @@ print("  reply.tool_calls :", reply.tool_calls)
 # our code runs the tool, then reports back with a ToolMessage
 call = reply.tool_calls[0]
 result = eval(call["args"]["expression"])         # 1500 * 0.20
+history.append(reply)                             # the AIMessage + its tool request
 history.append(ToolMessage(str(result), tool_call_id=call["id"]))
 
 print("\nTURN 2 -- model.invoke(history)")

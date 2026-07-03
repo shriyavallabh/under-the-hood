@@ -44,7 +44,7 @@
         <li>A <dfn>workflow</dfn> is a system where LLM calls and tools are orchestrated through <em>predefined code paths</em> — your code decides the route, in advance, like the laminated card.</li>
         <li>An <dfn>agent</dfn> is a system where the <em>model directs its own process</em> — it decides, at run time, which tool to use next based on what the last one returned, like the craftsman under the lining.</li>
       </ul>
-      <p>Notice what the split is really about: <strong>who owns the control flow</strong>. Not intelligence, not tool count, not model size. If a human wrote the route in code, it is a workflow — no matter how many LLM calls sit inside it. If the model picks the route as it goes, it is an agent — even if it is fifty lines of Python, which, as you proved in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, is all it takes.</p>
+      <p>Notice what the split is really about: <strong>who owns the control flow</strong>. Not intelligence, not tool count, not model size. If a human wrote the route in code, it is a workflow — no matter how many LLM calls sit inside it. If the model picks the route as it goes, it is an agent — even if it is fifty lines of Python, which, as you proved in <a href="ch045-react-loop-by-hand.html">chapter 46</a>, is all it takes.</p>
 
       <div class="flipgrid">
         <button class="flip" type="button"><span class="flip-front">workflow</span><span class="flip-back">LLM calls arranged along a route your code fixed in advance. Predictable, auditable, costable — and inflexible.</span></button>
@@ -157,7 +157,7 @@
       <p>The evaluator-optimizer surprise generalises: what makes something a workflow is not the absence of loops or of multiple models. It is that a human decided the structure in advance. The moment the <em>model</em> starts choosing which step comes next, you have crossed into agent territory.</p></div>
 
       <h2>Run two of the patterns right now</h2>
-      <p>Here is one job — turning a raw bank statement into a client-friendly note — passed through a prompt chain with a gate, and then polished by an evaluator-optimizer loop. As in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, the "model" is a scripted stand-in so it runs offline, but every shape is exactly what production code does. Press <strong>Run</strong> and read the trace.</p>
+      <p>Here is one job — turning a raw bank statement into a client-friendly note — passed through a prompt chain with a gate, and then polished by an evaluator-optimizer loop. As in <a href="ch045-react-loop-by-hand.html">chapter 46</a>, the "model" is a scripted stand-in so it runs offline, but every shape is exactly what production code does. Press <strong>Run</strong> and read the trace.</p>
 
       <div class="pyrun" data-title="Prompt chain + evaluator-optimizer — run me">
 <textarea class="py-src" spellcheck="false">
@@ -220,7 +220,7 @@ print("model calls used:", CALLS, "- same number every run")
       <p>Notice the last line of output: the call count is the same on every run. That single boring fact — <em>fixed cost, fixed path</em> — is the entire business case for workflows, and it is what agents give up.</p>
 
       <h2>Agents: the model takes the wheel</h2>
-      <p>So what does the essay say an agent is? Almost word for word what you built in <a href="ch045-react-loop-by-hand.html">chapter 45</a>: typically <em>just an LLM using tools in a loop, guided by feedback from its environment</em>. The model plans, acts, reads what actually happened — the tool result, the test output, the error message — and decides its next move from that <strong>ground truth</strong> rather than from a script. It pauses at checkpoints for human sign-off when the stakes demand it, and it stops when the task is done or a <code>max_turns</code>-style budget runs out.</p>
+      <p>So what does the essay say an agent is? Almost word for word what you built in <a href="ch045-react-loop-by-hand.html">chapter 46</a>: typically <em>just an LLM using tools in a loop, guided by feedback from its environment</em>. The model plans, acts, reads what actually happened — the tool result, the test output, the error message — and decides its next move from that <strong>ground truth</strong> rather than from a script. It pauses at checkpoints for human sign-off when the stakes demand it, and it stops when the task is done or a <code>max_turns</code>-style budget runs out.</p>
 
       <div class="diagram">
         <div class="d-box">Human<small>gives the goal, then steps back</small></div>
@@ -247,12 +247,12 @@ print("model calls used:", CALLS, "- same number every run")
       <h2>The golden rule: the simplest thing that works</h2>
       <p>Here is the sentence the whole essay exists to deliver: <strong>find the simplest solution possible, and only add complexity when it demonstrably improves results.</strong> In practice that is a ladder, and you climb it one rung at a time, measuring at each rung:</p>
       <ol>
-        <li><strong>One good call.</strong> A single well-crafted prompt (<a href="ch037-prompting-that-matters.html">chapter 37</a>) with retrieval and worked examples solves more problems than anyone likes to admit.</li>
+        <li><strong>One good call.</strong> A single well-crafted prompt (<a href="ch037-prompting-that-matters.html">chapter 38</a>) with retrieval and worked examples solves more problems than anyone likes to admit.</li>
         <li><strong>One augmented call.</strong> Add tools or memory to that call before adding more calls.</li>
         <li><strong>A workflow.</strong> If the task has knowable steps, wire them with one of the five patterns. Your code keeps the wheel.</li>
         <li><strong>An agent.</strong> Only when the path genuinely cannot be scripted — and success can be verified — hand the model the wheel.</li>
       </ol>
-      <p>Most teams, the essay observes, never need rung four. And the ladder explains a pattern you may have seen in real engineering organisations: mature teams often move <em>down</em> it. The prototype was an agent because nobody yet knew the steps; six months of logs revealed that ninety per cent of runs took the same path; someone froze that path into a workflow and the system got faster, cheaper, and dull. Dull is the goal. This is the same instinct as <a href="ch044-what-is-an-agent.html">chapter 44</a>'s warning about the word "agent" being fashionable: the label is not the value. Boring reliability is the value.</p>
+      <p>Most teams, the essay observes, never need rung four. And the ladder explains a pattern you may have seen in real engineering organisations: mature teams often move <em>down</em> it. The prototype was an agent because nobody yet knew the steps; six months of logs revealed that ninety per cent of runs took the same path; someone froze that path into a workflow and the system got faster, cheaper, and dull. Dull is the goal. This is the same instinct as <a href="ch044-what-is-an-agent.html">chapter 45</a>'s warning about the word "agent" being fashionable: the label is not the value. Boring reliability is the value.</p>
 
       <h2>When a workflow beats an agent in a bank</h2>
       <p>Make it concrete. A large bank needs a system that drafts the monthly suspicious-activity summary for each flagged account: pull the transactions, extract the flagged items, classify each against typology rules, draft the memo, run a compliance-language check, and file it. Six steps, known in advance, identical for every account. Should this be an agent?</p>

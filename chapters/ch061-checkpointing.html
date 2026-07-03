@@ -121,7 +121,7 @@ graph.invoke({"messages": [("user", "Where is my order?")]}, config)</code></pre
             <span class="d-arrow">&#8594;</span>
             <div class="d-box">graph<small>next node: send</small></div>
           </div>
-          <p class="step-cap">A fresh process — the sister opening the shop — compiles the same graph, connects the same checkpointer, and invokes with thread "invoice-42". The checkpointer restores the state, and execution continues from where it stopped.</p>
+          <p class="step-cap">A fresh process — the sister opening the shop — compiles the same graph, connects the same checkpointer, and resumes ticket "invoice-42" with <code>graph.invoke(None, config)</code> — <code>None</code> meaning "no new input, just continue". The checkpointer restores the state, and execution picks up from where it stopped. (Hand it a fresh input dict instead and you start a <em>new</em> run from the top on top of the saved state, repeating the finished work.)</p>
         </div>
         <div class="step" data-title="Done">
           <h3>6. Only the unfinished work runs</h3>
@@ -336,7 +336,7 @@ with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
             <button data-opt="b">Nothing — a crashed thread is marked corrupt and must be deleted</button>
             <button data-opt="c">The checkpointer loads the snapshot taken after node 2, and execution continues with node 3</button>
           </div>
-          <p class="q-explain">This is durable execution: the last checkpoint survives the crash on disk, so the new process resumes exactly there — no lost work, no repeated work, no re-asking the user.</p>
+          <p class="q-explain">This is durable execution: the last checkpoint survives the crash on disk, so the new process resumes exactly there — no lost work, no repeated work, no re-asking the user. One catch: to <em>continue</em> rather than restart, invoke with <code>None</code> (<code>graph.invoke(None, config)</code>); passing a fresh input dict instead starts a new run from the top on top of the saved state.</p>
         </div>
       </section>
 

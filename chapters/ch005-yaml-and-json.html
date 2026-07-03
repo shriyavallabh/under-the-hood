@@ -153,7 +153,7 @@ back = json.dumps(order, indent=2)
 print(back)                     # containers in, text out
 
 # JSON is strict. Watch it reject one trailing comma:
-try:
+try:                              # try/except catches an error instead of crashing — chapter 9 explains it; for now, just read the output
     json.loads('{"table": 12,}')
 except json.JSONDecodeError as err:
     print("REJECTED:", err)
@@ -230,7 +230,7 @@ production:
 
       <div class="pyrun" data-title="The Norway problem, live — a YAML 1.1 type-guesser">
 <textarea class="py-src" spellcheck="false">
-import re
+import re    # re is Python's pattern-matching toolbox — not part of this course's ramp; read each re.fullmatch below as "does the text look like X?"
 
 def yaml11_scalar(token):
     """How a YAML 1.1 parser guesses what a bare value IS.

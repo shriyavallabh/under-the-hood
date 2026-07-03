@@ -32,7 +32,7 @@
       <section class="panel story">
         <div class="story-label">The story</div>
         <p>A new managing director takes over a fast-growing firm. She is superb at decisions — but as the company scales, the board never rewires <em>her</em>. Instead, they build a front office around her door. Inbound, a clerk condenses the towering morning file into a two-page brief before it reaches her desk. Her phone line gets a switchboard that silently redials whenever a call drops mid-sentence. Outbound, a proofreader scans every letter leaving the office and blacks out account numbers before they hit the post. And when she orders something irreversible — <em>"wire the deposit today"</em> — the instruction pauses at a sign-off desk until a human partner initials it.</p>
-        <p>Notice what never changed: the MD, the door, the rhythm of her day. Every new safeguard was a <em>layer wrapped around the same office</em>, added or removed without touching the person inside. That front office is <strong>middleware</strong>. The MD is the model, her daily rhythm is the agent loop you built in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, and each desk — the clerk, the switchboard, the proofreader, the sign-off ledger — is a hook you are about to learn by name.</p>
+        <p>Notice what never changed: the MD, the door, the rhythm of her day. Every new safeguard was a <em>layer wrapped around the same office</em>, added or removed without touching the person inside. That front office is <strong>middleware</strong>. The MD is the model, her daily rhythm is the agent loop you built in <a href="ch045-react-loop-by-hand.html">chapter 46</a>, and each desk — the clerk, the switchboard, the proofreader, the sign-off ledger — is a hook you are about to learn by name.</p>
       </section>
 
       <h2>One loop, and the problem with perfect packaging</h2>
@@ -100,7 +100,7 @@
             <span class="d-arrow">&#8594;</span>
             <div class="d-box hot">wrap_tool_call<small>sees the result</small></div>
           </div>
-          <p class="step-cap">The model asked for a tool; before your code executes it, this hook holds the request. Call the handler and the tool runs. Refuse to, and it never does — whatever you return becomes the observation instead. Every approval gate lives here.</p>
+          <p class="step-cap">The model asked for a tool; before your code executes it, this hook holds the request. Call the handler and the tool runs. Refuse to, and it never does — whatever you return becomes the observation instead. This is a natural home for a hand-rolled approval gate — though LangChain's own <code>HumanInTheLoopMiddleware</code> rides <code>after_model</code> instead, so it can pause every pending tool call at once.</p>
         </div>
         <div class="step" data-title="Run ends">
           <h3>6. The run ends — <code>after_agent</code></h3>
@@ -111,7 +111,7 @@
             <span class="d-arrow">&#8594;</span>
             <div class="d-box good">User<small>gets the answer</small></div>
           </div>
-          <p class="step-cap">Stations 2 to 5 repeat every turn — think, act, observe, exactly as in chapter 45. When the model finally answers, each middleware gets one closing moment: flush the logs, stamp the end time, tally the cost.</p>
+          <p class="step-cap">Stations 2 to 5 repeat every turn — think, act, observe, exactly as in chapter 46. When the model finally answers, each middleware gets one closing moment: flush the logs, stamp the end time, tally the cost.</p>
         </div>
       </div>
 
@@ -161,7 +161,7 @@ class LoggingMiddleware(AgentMiddleware):
         return None
 
 agent = create_agent(
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-4-5",
     tools=[lookup_invoice, send_reminder],
     middleware=[LoggingMiddleware()],
 )</code></pre>
@@ -173,7 +173,7 @@ agent = create_agent(
         <div class="wl-line"><code>class LoggingMiddleware(AgentMiddleware):</code>
           <div class="wl-note">A middleware is a class inheriting from <code>AgentMiddleware</code>. The base class defines all six hooks as do-nothing defaults, so you override only the stations you want to staff — everything else passes straight through.</div></div>
         <div class="wl-line"><code>    def before_model(self, state: AgentState, runtime: Runtime) -&gt; dict[str, Any] | None:</code>
-          <div class="wl-note">The hook is just a method with an agreed name and shape. <code>state</code> is the agent's working memory — the same idea as the <code>history</code> list you built in <a href="ch045-react-loop-by-hand.html">chapter 45</a>, grown up into a dict. <code>runtime</code> carries run-level context. The return type says it all: a dict of state changes, or <code>None</code>.</div></div>
+          <div class="wl-note">The hook is just a method with an agreed name and shape. <code>state</code> is the agent's working memory — the same idea as the <code>history</code> list you built in <a href="ch045-react-loop-by-hand.html">chapter 46</a>, grown up into a dict. <code>runtime</code> carries run-level context. The return type says it all: a dict of state changes, or <code>None</code>.</div></div>
         <div class="wl-line"><code>        print(f"model call coming: {len(state['messages'])} messages so far")</code>
           <div class="wl-note">In production this would go to a real logger or a tracing system, but the access pattern is the honest part: <code>state['messages']</code> is the transcript, and its length tells you how big the next model call will be — the early-warning gauge for cost.</div></div>
         <div class="wl-line"><code>        return None  # observe only, change nothing</code>
@@ -181,7 +181,7 @@ agent = create_agent(
         <div class="wl-line"><code>        last = state["messages"][-1]</code>
           <div class="wl-note">By the time <code>after_model</code> fires, the model's fresh reply is already the last message in state. Index <code>-1</code> — Python's "last item" trick — fetches it.</div></div>
         <div class="wl-line"><code>    middleware=[LoggingMiddleware()],</code>
-          <div class="wl-note">Installation is one keyword argument on the <code>create_agent</code> call you met in <a href="ch054-create-agent.html">chapter 54</a>. A list, because middleware stack — and the order of this list is the onion order.</div></div>
+          <div class="wl-note">Installation is one keyword argument on the <code>create_agent</code> call you met in <a href="ch054-create-agent.html">chapter 55</a>. A list, because middleware stack — and the order of this list is the onion order.</div></div>
       </div>
 
       <p>For a single hook there is an even lighter form: a <dfn>decorator</dfn> — remember from <a href="ch017-decorators.html">chapter 17</a>, a function that wraps another function to extend it. LangChain ships one per hook, and the decorated function goes straight into the middleware list. Here is the switchboard — a retry, built on <code>wrap_model_call</code> and its handler:</p>
@@ -208,7 +208,7 @@ agent = create_agent(model="gpt-5.5", tools=[...], middleware=[retry_model])</co
       <p>Look at how much power that little <code>handler</code> carries. Call it once: normal operation. Call it in a loop: retries. Catch its exception and call it with a <em>different</em> request: model fallback. Never call it at all: the model call is vetoed. Every built-in you are about to meet is one of these moves, packaged.</p>
 
       <h2>Run the machinery</h2>
-      <p>Frameworks hide the dispatch — the bit of loop code that actually fires your hooks at the right stations. So let us build that bit ourselves, in pure Python, around the same fake-model agent from chapter 45. Three middleware are installed: a logger, a redactor, and an approval gate on the tool. Press <strong>Run</strong> and watch the onion breathe — before-hooks top-to-bottom, after-hooks bottom-to-top, and the gate holding the tool call in its hands.</p>
+      <p>Frameworks hide the dispatch — the bit of loop code that actually fires your hooks at the right stations. So let us build that bit ourselves, in pure Python, around the same fake-model agent from chapter 46. Three middleware are installed: a logger, a redactor, and an approval gate on the tool. Press <strong>Run</strong> and watch the onion breathe — before-hooks top-to-bottom, after-hooks bottom-to-top, and the gate holding the tool call in its hands.</p>
 
       <div class="pyrun" data-title="A middleware engine around the ch045 loop — run me">
 <textarea class="py-src" spellcheck="false">
@@ -311,7 +311,7 @@ from langchain.agents.middleware import (
 from langgraph.checkpoint.memory import InMemorySaver
 
 agent = create_agent(
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-4-5",
     tools=[lookup_invoice, send_reminder],
     checkpointer=InMemorySaver(),        # human-in-the-loop needs pause/resume
     middleware=[
@@ -337,7 +337,7 @@ agent = create_agent(
       <div class="tbl"><table>
         <tr><th>The incident</th><th>The middleware</th><th>The hook it rides</th></tr>
         <tr><td>"The context got huge; the agent got slow, expensive, and vague"</td><td><code>SummarizationMiddleware</code> — compresses old history, keeps recent messages intact</td><td><code>before_model</code></td></tr>
-        <tr><td>"It emailed a client without asking anyone"</td><td><code>HumanInTheLoopMiddleware</code> — pauses the run until a person approves, edits, or rejects the tool call</td><td>around tool execution</td></tr>
+        <tr><td>"It emailed a client without asking anyone"</td><td><code>HumanInTheLoopMiddleware</code> — pauses the run until a person approves, edits, or rejects the tool call</td><td><code>after_model</code> (interrupts after the reply, before any tool runs)</td></tr>
         <tr><td>"The provider had a blip at 2 a.m. and the whole run died"</td><td><code>ModelRetryMiddleware</code> + <code>ModelFallbackMiddleware</code> — redial, then switch lines</td><td><code>wrap_model_call</code></td></tr>
         <tr><td>"The search API fails one call in fifty"</td><td><code>ToolRetryMiddleware</code> — scoped retries for named tools</td><td><code>wrap_tool_call</code></td></tr>
         <tr><td>"A customer's email address showed up in a trace"</td><td><code>PIIMiddleware</code> — detects and redacts on the way in and out</td><td>before/after model</td></tr>
@@ -347,7 +347,7 @@ agent = create_agent(
       <div class="callout note"><span class="co-label">Note</span>
       <p>The roster keeps growing — content-moderation and guardrail layers, context editing, tool selection, planning to-do lists and more ship alongside the ones above. Before you write a middleware, skim the built-in middleware page of the current docs: the layer you need may already exist, tested and maintained by someone else.</p></div>
 
-      <p>One subtlety worth a sentence: <code>HumanInTheLoopMiddleware</code> requires a <dfn>checkpointer</dfn> — a save-file mechanism for the run's state, which you will meet properly in the LangGraph act. The reason is physical: an approval might take a human four hours, and the process cannot just hold its breath. The middleware pauses the run, the checkpointer preserves it, and the run resumes at the exact same station when the decision arrives. Our old friend <code>max_turns</code> from <a href="ch045-react-loop-by-hand.html">chapter 45</a> has grown up into the call-limit middleware in that table, too — same guard, now composable. And when things still go wrong, the failure signatures you learned in <a href="ch048-failure-modes.html">chapter 48</a> are exactly what these layers exist to catch.</p>
+      <p>One subtlety worth a sentence: <code>HumanInTheLoopMiddleware</code> requires a <dfn>checkpointer</dfn> — a save-file mechanism for the run's state, which you will meet properly in the LangGraph act. The reason is physical: an approval might take a human four hours, and the process cannot just hold its breath. The middleware pauses the run, the checkpointer preserves it, and the run resumes at the exact same station when the decision arrives. Our old friend <code>max_turns</code> from <a href="ch045-react-loop-by-hand.html">chapter 46</a> has grown up into the call-limit middleware in that table, too — same guard, now composable. And when things still go wrong, the failure signatures you learned in <a href="ch048-failure-modes.html">chapter 49</a> are exactly what these layers exist to catch.</p>
 
       <h2>Why this turned a loop into a platform</h2>
       <p>Step back and ask what actually changed between the fifty-line loop and this chapter. Not the loop — it still thinks, acts, observes. What changed is <em>who can extend it without breaking it</em>.</p>
