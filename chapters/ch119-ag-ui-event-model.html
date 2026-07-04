@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The AG-UI event model — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch119">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XIV · The Agent-User Layer: AG-UI</div>
+        <h1>The AG-UI event model</h1>
+        <p class="ch-tagline">The sixteen event types, the SSE stream, the RunAgentInput lifecycle, and a real event trace read line by line.</p>
+        <div class="ch-meta"><span>~28 min</span><span>Chapter 119 of 123</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Two people are following the same cricket match. One waits for the newspaper the next morning and reads a single line: <em>India won by six wickets.</em> True, complete, and utterly dead. The other has the radio on, and hears the whole living thing arrive as it happens — <em>"he's coming in to bowl… full toss… flicked away… they're running… that's four!"</em> — a stream of tiny, ordered events that, stacked up, become the match. Same final score. Wildly different experience.</p>
+        <p>Every agent you operate can talk to its user in either voice. It can go quiet for thirty seconds and then dump one finished answer — the newspaper. Or it can narrate its work as it unfolds: <em>starting… writing… calling a tool… got the result… updating what I know… done.</em> That live play-by-play is what a user-facing agent needs, and it turns out you cannot improvise it per app — the commentary needs a shared vocabulary of moves. <strong>AG-UI is that vocabulary.</strong> Roughly sixteen named event types, streamed in order, that let any agent backend narrate its work to any frontend. This chapter reads the commentary line by line.</p>
+      </section>
+
+      <h2>Streaming, but with a grammar</h2>
+      <p>Recall two ideas you already own. In <a href="ch040-streaming-responses.html">the streaming chapter</a> you saw that an LLM does not hand back a finished paragraph — it emits <dfn>tokens</dfn> (word-fragments) one at a time, and a stream lets the UI show them as they land instead of spinning for ten seconds. And in <a href="ch035-tool-calling.html">tool calling</a> you saw the model does not run anything itself; it emits a structured request — a tool name and JSON arguments — and <em>your</em> code executes it. AG-UI takes both of those raw dribbles and gives them a grammar: it says <em>which</em> token belongs to <em>which</em> message, when a tool call has started and finished, and how the shared state changed — all as discrete, typed, ordered events on one stream.</p>
+      <p><dfn>AG-UI</dfn> — the Agent-User Interaction Protocol — is an open, event-based protocol for exactly this: how an agent <em>backend</em> streams its running activity to a user-facing <em>frontend</em>, and how the frontend feeds state and actions back. It completes the trio you met earlier in the book: <a href="ch074-why-mcp-exists.html">MCP</a> connects an agent to its tools, <a href="ch080-a2a-protocol.html">A2A</a> connects an agent to other agents, and AG-UI connects an agent to the human at the screen. Tools below, colleagues across, the user in front.</p>
+      <p>One honesty note up front, because this act refuses to sell you anything. AG-UI is a <em>protocol</em>, not an engine. It standardises the stream of events between agent and UI — nothing more. It does not give you orchestration, a control loop, branching, <a href="ch061-checkpointing.html">checkpointing</a>, or durable state; you still build or bring those yourself. What it buys a team is real but narrow: instead of inventing a bespoke message format for every product and rewriting the frontend each time the agent changes, you emit standard events and any AG-UI-aware UI just renders them — which is why a team reaches for it rather than dragging in a heavy graph framework just to get a chat box on the screen.</p>
+
+      <h2>Sixteen events, five families</h2>
+      <p>The full protocol is about sixteen standard event types, and nobody memorises them as a flat list. They fall into five families, and once you see the families the individual names are obvious. Every event, whatever its family, shares the same base shape: a <dfn>type</dfn> (which event this is), an optional <code>timestamp</code>, and an optional <code>rawEvent</code> (the original provider event it was translated from, kept for debugging). Everything else is family-specific.</p>
+      <p>A naming rule you will lean on constantly: the wire <code>type</code> value is always <dfn>SCREAMING_SNAKE_CASE</dfn> — all capitals with underscores, like <code>TEXT_MESSAGE_CONTENT</code> — while every other JSON field name is <dfn>camelCase</dfn> — first word lowercase, later words capitalised, like <code>messageId</code>. So a text chunk is <code>{"type": "TEXT_MESSAGE_CONTENT", "messageId": "…", "delta": "…"}</code>. Types shout; fields whisper. Get that habit and half the protocol reads itself.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Family</th><th>Events</th><th>What it narrates</th></tr>
+        <tr><td>Lifecycle</td><td><code>RUN_STARTED</code>, <code>RUN_FINISHED</code>, <code>RUN_ERROR</code>, <code>STEP_STARTED</code>, <code>STEP_FINISHED</code></td><td>The run began, ended cleanly, blew up, or crossed an internal step boundary. The match starting and ending.</td></tr>
+        <tr><td>Text</td><td><code>TEXT_MESSAGE_START</code>, <code>TEXT_MESSAGE_CONTENT</code>, <code>TEXT_MESSAGE_END</code>, <code>TEXT_MESSAGE_CHUNK</code></td><td>An assistant message opening, streaming token deltas, and closing. The commentator speaking.</td></tr>
+        <tr><td>Tools</td><td><code>TOOL_CALL_START</code>, <code>TOOL_CALL_ARGS</code>, <code>TOOL_CALL_END</code>, <code>TOOL_CALL_CHUNK</code>, <code>TOOL_CALL_RESULT</code></td><td>The agent requesting a tool, streaming its JSON arguments, finishing the request, and later the result coming back.</td></tr>
+        <tr><td>State</td><td><code>STATE_SNAPSHOT</code>, <code>STATE_DELTA</code>, <code>MESSAGES_SNAPSHOT</code></td><td>The shared state the UI mirrors: a full picture, an incremental patch, or the whole message list refreshed.</td></tr>
+        <tr><td>Special</td><td><code>RAW</code>, <code>CUSTOM</code></td><td>An untranslated provider event passed through, or your own app-specific event outside the standard set.</td></tr>
+      </table></div>
+
+      <p>Three details worth pinning down before we watch them in motion:</p>
+      <p>First, the <code>*_CHUNK</code> variants (<code>TEXT_MESSAGE_CHUNK</code>, <code>TOOL_CALL_CHUNK</code>) are a compact convenience: one event that folds start, content and end together for backends that prefer a single combined frame over the three-part sequence.</p>
+      <p>Second, <code>STATE_DELTA</code> does not carry the new state — it carries a <dfn>JSON Patch</dfn> (the RFC 6902 standard): a tiny array of operations describing how to <em>change</em> the state you already hold. Each operation is an object like <code>{"op": "replace", "path": "/cart/total", "value": 4200}</code> — an <code>op</code> (add, replace, remove…), a <code>path</code> (which field, as a slash-separated pointer), and a <code>value</code>. Sending the patch instead of the whole object is what makes live state cheap: you ship the diff, not the document. A periodic <code>STATE_SNAPSHOT</code> ships the whole object to resynchronise.</p>
+      <p>Third, a <dfn>REASONING_*</dfn> family (events that expose a model's internal thinking) <em>replaced</em> an older, deprecated <code>THINKING_*</code> set removed at version 1.0. If you meet <code>THINKING_*</code> in an old tutorial, it is stale. Flip the five families until they feel like second nature:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">Lifecycle events</span><span class="flip-back">RUN_STARTED / RUN_FINISHED / RUN_ERROR bracket the whole run; STEP_STARTED / STEP_FINISHED mark internal boundaries. Every run opens with one and closes with one.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Text events</span><span class="flip-back">TEXT_MESSAGE_START opens a message with a messageId, TEXT_MESSAGE_CONTENT streams token deltas, TEXT_MESSAGE_END closes it. The assistant talking, one fragment at a time.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Tool events</span><span class="flip-back">TOOL_CALL_START names the tool and its toolCallId, TOOL_CALL_ARGS streams the JSON arguments as deltas, TOOL_CALL_END closes the request, TOOL_CALL_RESULT carries what the tool returned.</span></button>
+        <button class="flip" type="button"><span class="flip-front">State events</span><span class="flip-back">STATE_SNAPSHOT is the whole shared object; STATE_DELTA is a JSON Patch (RFC 6902) of just the changes; MESSAGES_SNAPSHOT refreshes the entire message list at once.</span></button>
+        <button class="flip" type="button"><span class="flip-front">JSON Patch</span><span class="flip-back">The RFC 6902 format inside STATE_DELTA: a list of {op, path, value} operations. op = add/replace/remove, path = a /slash/pointer to a field. Ship the diff, not the document.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Special events</span><span class="flip-back">RAW passes through an untranslated provider event; CUSTOM carries your own app-specific event outside the standard sixteen. Escape hatches, used sparingly.</span></button>
+      </div>
+
+      <h2>The lifecycle: one POST, one stream back</h2>
+      <p>Now the shape of a whole exchange. A run in AG-UI is not a chat socket that stays open forever — it is one request and one streamed response, like ordering the commentary for a single innings. The frontend gathers everything the agent needs into a single input object, POSTs it, and the backend answers with a stream of events that ends when the run does.</p>
+      <p>That input object is the <dfn>RunAgentInput</dfn> — the payload the frontend sends to start a run. It carries six fields: <code>threadId</code> (which conversation this belongs to, so turns link up), <code>runId</code> (this specific run's id), <code>messages</code> (the conversation so far), <code>state</code> (the current shared state the UI holds), <code>tools</code> (the tools the frontend is willing to let the agent use), and <code>context</code> (extra situational data). The backend reads it, does its work, and streams <dfn>BaseEvent</dfn>s — the umbrella type every event inherits from — back until it emits <code>RUN_FINISHED</code>, or <code>RUN_ERROR</code> if something broke.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Assemble input">
+          <h3>1. The frontend assembles a RunAgentInput</h3>
+          <div class="diagram">
+            <div class="d-box hot">Frontend<small>threadId, runId, messages, state, tools, context</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">Agent endpoint</div>
+          </div>
+          <p class="step-cap">The UI packs the conversation, the state it currently mirrors, and the tools it will permit into one object. This is the entire "here is everything you need to run" handoff.</p>
+        </div>
+        <div class="step" data-title="POST">
+          <h3>2. It POSTs to the agent endpoint</h3>
+          <div class="diagram">
+            <div class="d-box">Frontend</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Agent endpoint<small>HTTP POST, asks for text/event-stream</small></div>
+          </div>
+          <p class="step-cap">An ordinary HTTP POST. The request's Accept header asks for a stream, so the server knows to answer event-by-event rather than with one JSON blob.</p>
+        </div>
+        <div class="step" data-title="RUN_STARTED">
+          <h3>3. The backend opens the stream with RUN_STARTED</h3>
+          <div class="diagram">
+            <div class="d-box dim">Frontend</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Backend<small>RUN_STARTED · threadId, runId</small></div>
+          </div>
+          <p class="step-cap">The response is an open SSE stream. Its very first event is always RUN_STARTED, echoing the thread and run ids — the umpire calling play.</p>
+        </div>
+        <div class="step" data-title="Stream events">
+          <h3>4. It streams text, tool and state events</h3>
+          <div class="diagram">
+            <div class="d-box dim">Frontend<small>renders each event as it lands</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Backend<small>TEXT_… · TOOL_CALL_… · STATE_DELTA</small></div>
+          </div>
+          <p class="step-cap">The play-by-play: messages open and stream, tool calls fire and return, state deltas patch the UI's mirror. The frontend applies each one the instant it arrives.</p>
+        </div>
+        <div class="step" data-title="RUN_FINISHED">
+          <h3>5. RUN_FINISHED (or RUN_ERROR) closes it</h3>
+          <div class="diagram">
+            <div class="d-box good">Backend<small>RUN_FINISHED</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Frontend<small>run complete</small></div>
+          </div>
+          <p class="step-cap">A terminal lifecycle event ends the run and the stream closes. If something failed mid-way, RUN_ERROR ends it instead — the innings declared, or abandoned.</p>
+        </div>
+      </div>
+
+      <h2>The transport: SSE by default</h2>
+      <p>How do those events physically travel? By default, over <dfn>SSE</dfn> — Server-Sent Events, a plain HTTP mechanism where the server holds one response open and pushes text frames down it as they happen. The response's <code>Content-Type</code> is <code>text/event-stream</code>, and each event is serialised as one line of the form <code>data: {json}</code> followed by a blank line. That is the whole format: <code>data:</code>, the event as JSON, then <code>\n\n</code> to mark the boundary. Your browser's <code>EventSource</code> already speaks it; no special client library is strictly required, though the reference one is called <code>HttpAgent</code>.</p>
+      <p>AG-UI is deliberately <em>transport-agnostic</em>: SSE is the friendly default, but the same events can ride a high-performance <em>binary</em> HTTP encoding for production throughput, or WebSockets, or webhooks for long jobs. The events are the contract; the pipe is a choice. Now let us read an actual stream. Click the lines that carry meaning — this is one complete run for a support agent asked "where is my order A-204?", exactly as the bytes arrive:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">the SSE stream — one run, top to bottom (blank line after each event omitted)</div>
+        <div class="wl-line"><code>data: {"type":"RUN_STARTED","threadId":"t_42","runId":"r_a2f9"}</code>
+          <div class="wl-note">The stream's first event, always a lifecycle open. It echoes the <code>threadId</code> and <code>runId</code> from the RunAgentInput, tying this stream to the right conversation.</div></div>
+        <div class="wl-line"><code>data: {"type":"TEXT_MESSAGE_START","messageId":"m_1","role":"assistant"}</code>
+          <div class="wl-note">A new assistant message opens and gets an id, <code>m_1</code>. Every following text delta will carry this same <code>messageId</code> — that is how the UI knows which bubble to append to when several things stream at once.</div></div>
+        <div class="wl-line"><code>data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"m_1","delta":"Let me "}</code>
+          <div class="wl-note">The first token fragment. <code>delta</code> is the new slice of text, not the whole message — the UI concatenates deltas onto message <code>m_1</code>. This is the streaming you met in chapter 41, now with an id attached.</div></div>
+        <div class="wl-line"><code>data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"m_1","delta":"check that order."}</code>
+          <div class="wl-note">Another delta on the same message. On screen the bubble now reads "Let me check that order." — still open, no END yet.</div></div>
+        <div class="wl-line"><code>data: {"type":"TOOL_CALL_START","toolCallId":"tc_7","toolCallName":"lookup_order"}</code>
+          <div class="wl-note">The agent wants a tool. A tool call opens with its own id, <code>tc_7</code>, and the tool's name — a <em>separate</em> lifecycle from the text message, keyed by <code>toolCallId</code>, which is why the two can interleave on one stream without confusion.</div></div>
+        <div class="wl-line"><code>data: {"type":"TOOL_CALL_ARGS","toolCallId":"tc_7","delta":"{\"order_id\":"}</code>
+          <div class="wl-note">The tool's JSON arguments stream in as deltas too, just like text — here the first fragment. A UI can show "looking up order…" the moment it sees the name, before the arguments finish.</div></div>
+        <div class="wl-line"><code>data: {"type":"TOOL_CALL_ARGS","toolCallId":"tc_7","delta":"\"A-204\"}"}</code>
+          <div class="wl-note">The rest of the arguments. Concatenated, the deltas spell <code>{"order_id":"A-204"}</code> — the full request the agent is making.</div></div>
+        <div class="wl-line"><code>data: {"type":"TOOL_CALL_END","toolCallId":"tc_7"}</code>
+          <div class="wl-note">The request is complete. In AG-UI the tool itself is usually run by the backend (or handed to the frontend for a client-side tool); either way, END means "arguments finished, go execute."</div></div>
+        <div class="wl-line"><code>data: {"type":"TOOL_CALL_RESULT","toolCallId":"tc_7","messageId":"m_2","content":"status=shipped; eta=Fri"}</code>
+          <div class="wl-note">The result comes back tied to the same <code>toolCallId</code>, so the UI can pair it with the request it saw earlier. It also gets its own <code>messageId</code> because a tool result is itself a message in the transcript.</div></div>
+        <div class="wl-line"><code>data: {"type":"STATE_DELTA","delta":[{"op":"replace","path":"/lastOrderStatus","value":"shipped"}]}</code>
+          <div class="wl-note">A JSON Patch, not a new state object. This one operation replaces the <code>lastOrderStatus</code> field. The UI applies the patch to the state it already holds — a side panel showing order status updates instantly, without the agent resending the whole object.</div></div>
+        <div class="wl-line"><code>data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"m_1","delta":" It shipped and arrives Friday."}</code>
+          <div class="wl-note">Back to message <code>m_1</code> — still open from before the tool call. The agent resumes the same bubble now that it knows the answer. This is the payoff of id-keyed streams: the assistant's sentence wraps around the tool call cleanly.</div></div>
+        <div class="wl-line"><code>data: {"type":"TEXT_MESSAGE_END","messageId":"m_1"}</code>
+          <div class="wl-note">Message <code>m_1</code> is closed. Its final assembled text is "Let me check that order. It shipped and arrives Friday." The UI can now mark the bubble complete.</div></div>
+        <div class="wl-line"><code>data: {"type":"RUN_FINISHED","threadId":"t_42","runId":"r_a2f9"}</code>
+          <div class="wl-note">The terminal lifecycle event. The run is over, the SSE stream closes, and the frontend knows no more events are coming. Had the tool thrown, you would see <code>RUN_ERROR</code> here instead.</div></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>See how the text message and the tool call overlapped? Message <code>m_1</code> opened, streamed, paused while tool call <code>tc_7</code> ran, then resumed — all on one stream. That only works because each lifecycle is framed by its own id (<code>messageId</code> vs <code>toolCallId</code>). The events are not a single sequential story; they are several interleaved threads that a reducer sorts out by id. Which is exactly what you will build next.</p></div>
+
+      <h2>The frontend is a reducer</h2>
+      <p>Here is the mental model that makes AG-UI click. The stream is a flat list of small events; the UI you see is the <em>accumulation</em> of them. A <dfn>reducer</dfn> — a function that folds a sequence of events into a running state, one event at a time — is what does the accumulating. Feed it <code>TEXT_MESSAGE_CONTENT</code>, it appends a delta to the right message. Feed it <code>STATE_DELTA</code>, it applies the patch. This is the same shape as the <a href="ch045-react-loop-by-hand.html">ReAct loop's</a> history-building, just driven by typed events instead of parsed strings.</p>
+      <p>The real reducer lives in React (via CopilotKit — that is the next two chapters) and React cannot run here, so we will do the honest thing: simulate the reducer in pure Python. It consumes the exact event list from the trace above and reconstructs the assembled message and the final state — proving that the stream really does fold down to a coherent result. Press <strong>Run</strong>, then change a <code>delta</code> and watch the assembled message change.</p>
+
+      <div class="pyrun" data-title="A client reducer that folds AG-UI events into a message + state">
+<textarea class="py-src" spellcheck="false">
+# The event stream, exactly as it arrived over SSE, as dicts.
+events = [
+    {"type": "RUN_STARTED", "threadId": "t_42", "runId": "r_a2f9"},
+    {"type": "TEXT_MESSAGE_START", "messageId": "m_1", "role": "assistant"},
+    {"type": "TEXT_MESSAGE_CONTENT", "messageId": "m_1", "delta": "Let me "},
+    {"type": "TEXT_MESSAGE_CONTENT", "messageId": "m_1", "delta": "check that order."},
+    {"type": "TOOL_CALL_START", "toolCallId": "tc_7", "toolCallName": "lookup_order"},
+    {"type": "TOOL_CALL_ARGS", "toolCallId": "tc_7", "delta": '{"order_id":'},
+    {"type": "TOOL_CALL_ARGS", "toolCallId": "tc_7", "delta": '"A-204"}'},
+    {"type": "TOOL_CALL_END", "toolCallId": "tc_7"},
+    {"type": "TOOL_CALL_RESULT", "toolCallId": "tc_7",
+     "messageId": "m_2", "content": "status=shipped; eta=Fri"},
+    {"type": "STATE_DELTA",
+     "delta": [{"op": "replace", "path": "/lastOrderStatus", "value": "shipped"}]},
+    {"type": "TEXT_MESSAGE_CONTENT", "messageId": "m_1",
+     "delta": " It shipped and arrives Friday."},
+    {"type": "TEXT_MESSAGE_END", "messageId": "m_1"},
+    {"type": "RUN_FINISHED", "threadId": "t_42", "runId": "r_a2f9"},
+]
+
+def apply_patch(state, ops):
+    """A tiny slice of JSON Patch (RFC 6902): add/replace/remove."""
+    for op in ops:
+        key = op["path"].lstrip("/")        # shallow paths only, e.g. /foo
+        if op["op"] in ("add", "replace"):
+            state[key] = op["value"]
+        elif op["op"] == "remove":
+            state.pop(key, None)
+    return state
+
+def reduce(events):
+    messages = {}     # messageId -> assembled text
+    tool_args = {}    # toolCallId -> assembled JSON-string
+    state = {}        # the shared state the UI mirrors
+    status = "idle"
+
+    for ev in events:
+        t = ev["type"]
+        if t == "RUN_STARTED":
+            status = "running"
+        elif t == "TEXT_MESSAGE_START":
+            messages[ev["messageId"]] = ""
+        elif t == "TEXT_MESSAGE_CONTENT":
+            messages[ev["messageId"]] += ev["delta"]      # fold the delta in
+        elif t == "TOOL_CALL_START":
+            tool_args[ev["toolCallId"]] = ""
+        elif t == "TOOL_CALL_ARGS":
+            tool_args[ev["toolCallId"]] += ev["delta"]     # args stream too
+        elif t == "TOOL_CALL_RESULT":
+            print("  tool", ev["toolCallId"], "returned:", ev["content"])
+        elif t == "STATE_DELTA":
+            apply_patch(state, ev["delta"])                # patch, don't replace
+        elif t == "RUN_FINISHED":
+            status = "done"
+
+    return messages, tool_args, state, status
+
+messages, tool_args, state, status = reduce(events)
+
+print("RUN STATUS   :", status)
+print("ASSEMBLED MSG:", messages["m_1"])
+print("TOOL ARGS    :", tool_args["tc_7"])
+print("FINAL STATE  :", state)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it to learn it. Delete the <code>TEXT_MESSAGE_END</code> line — notice the message still assembles fine, because the reducer keys on <code>messageId</code>, not on order. Add a second <code>STATE_DELTA</code> with <code>{"op":"add","path":"/eta","value":"Fri"}</code> and watch the state grow one field. Change a <code>RUN_FINISHED</code> to <code>RUN_ERROR</code> and add a branch that sets <code>status="error"</code> — you have just handled the failure path every real UI must handle.</p></div>
+
+      <h2>Who made it, and how mature is it</h2>
+      <p>Provenance matters for a protocol, so be clear-eyed. AG-UI comes from <dfn>CopilotKit</dfn> — the company behind a widely used open-source React library for building in-app AI copilots. They extracted the agent-to-frontend streaming contract they had built for their own product and published it as an open, framework-neutral protocol, with a specification, a Python SDK (<code>ag_ui.core</code> and an <code>EventEncoder</code>), and TypeScript packages. The pitch mirrors the rest of the trio: a small, open event vocabulary anyone can implement on either side, so backends and frontends stop being welded together.</p>
+      <p>And the honest maturity check this act promised you. AG-UI is the <em>youngest</em> of the three protocols in this book. MCP and A2A each have neutral-foundation backing and dozens of independent implementations; AG-UI is newer, more tightly tied to a single company's ecosystem, and its event set is still settling — remember the <code>THINKING_*</code> events removed and replaced by <code>REASONING_*</code> at 1.0. It has genuine traction: official integrations with LangGraph, CrewAI, Mastra, Agno, Pydantic AI, LlamaIndex and more, and it can equally front a raw LLM loop with no framework at all. But "standard" here means "a good, open, adopted spec," not yet "an industry-wide inevitability" the way HTTP is. The concepts — event families, the SSE stream, RunAgentInput, state deltas — are durable even if a field name shifts. Learn the shape; check the current docs for the exact spelling.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet AG-UI first in a browser's network tab: open the dev tools on an agent app and watch a single request to the agent endpoint stay pending while <code>data: {"type":"TEXT_MESSAGE_CONTENT"…}</code> lines tick down it — that is the play-by-play, live. In code, the tells are <code>from ag_ui.core import …</code> and an <code>EventEncoder</code> on the backend, a <code>runtimeUrl</code> on the frontend, and functions named <code>reduce</code> or <code>applyEvents</code> that switch on <code>event.type</code>. In a merge request, "emit a STATE_DELTA when the cart changes" means: send a JSON Patch of just the changed field so the side panel updates without a full refresh. And when someone says "the run never sent RUN_FINISHED and the spinner hangs forever," you now know exactly which terminal event went missing.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. On the wire, a text delta looks like <code>{"type": "TEXT_MESSAGE_CONTENT", "messageId": "m_1", "delta": "hi"}</code>. Why is <code>TEXT_MESSAGE_CONTENT</code> in capitals but <code>messageId</code> in camelCase?</p>
+          <div class="q-opts">
+            <button data-opt="a">It is a typo in the spec; both should match</button>
+            <button data-opt="b">By convention: the event <code>type</code> value is SCREAMING_SNAKE_CASE, while all other JSON field names are camelCase</button>
+            <button data-opt="c">Capitals mean the field is required and camelCase means optional</button>
+          </div>
+          <p class="q-explain">AG-UI's rule is consistent: the <code>type</code> value shouts in SCREAMING_SNAKE_CASE, and every field name (messageId, threadId, toolCallId, delta) is camelCase. It is a spelling convention, not a meaning.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. A <code>STATE_DELTA</code> arrives carrying <code>[{"op":"replace","path":"/cart/total","value":4200}]</code>. What should the frontend do with it?</p>
+          <div class="q-opts">
+            <button data-opt="a">Replace its entire state object with this array</button>
+            <button data-opt="b">Ignore it and wait for the next STATE_SNAPSHOT</button>
+            <button data-opt="c">Apply it as a JSON Patch — change just the <code>/cart/total</code> field of the state it already holds</button>
+          </div>
+          <p class="q-explain">STATE_DELTA carries a JSON Patch (RFC 6902): a list of {op, path, value} operations describing how to <em>change</em> existing state. Shipping the diff instead of the whole object is what makes live state cheap. A STATE_SNAPSHOT is the full object.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. In the trace, a text message and a tool call overlapped on the same stream — <code>m_1</code> paused, <code>tc_7</code> ran, then <code>m_1</code> resumed. Why does that not confuse the UI?</p>
+          <div class="q-opts">
+            <button data-opt="a">Each lifecycle is framed by its own id (messageId vs toolCallId), so the reducer sorts interleaved events by id rather than by order</button>
+            <button data-opt="b">AG-UI forbids overlapping, so this never really happens</button>
+            <button data-opt="c">The UI buffers everything and only renders after RUN_FINISHED</button>
+          </div>
+          <p class="q-explain">The stream is several interleaved threads, not one linear story. Because every text event carries a messageId and every tool event a toolCallId, a reducer can append each delta to the right place regardless of interleaving.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. What does the frontend send to <em>start</em> a run, and what are its core fields?</p>
+          <div class="q-opts">
+            <button data-opt="a">A STATE_SNAPSHOT event containing the whole UI state</button>
+            <button data-opt="b">A RunAgentInput — threadId, runId, messages, state, tools, context — POSTed to the agent endpoint</button>
+            <button data-opt="c">Nothing; the backend pushes events whenever it likes</button>
+          </div>
+          <p class="q-explain">A run begins with the frontend POSTing a RunAgentInput carrying the thread and run ids, the conversation, the current shared state, the permitted tools, and extra context. The backend answers with a stream of events until RUN_FINISHED or RUN_ERROR.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A teammate says "AG-UI will replace our LangGraph orchestration." What is the accurate correction?</p>
+          <div class="q-opts">
+            <button data-opt="a">Correct — AG-UI is a full orchestration engine with checkpointing</button>
+            <button data-opt="b">Correct — AG-UI includes a control loop and durable state</button>
+            <button data-opt="c">AG-UI is a streaming protocol between agent and UI; it gives no orchestration, control loop, or durable state — you still build or bring those</button>
+          </div>
+          <p class="q-explain">AG-UI standardises the event stream between an agent backend and a frontend — nothing more. It deliberately does not provide orchestration, branching, checkpointing or a loop. It sits <em>alongside</em> a framework (or a raw loop), it does not replace one.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>AG-UI is the agent-to-user protocol — the third of the trio (MCP for tools, A2A for agents, AG-UI for the human at the screen) — and it standardises how a backend streams its live work to a frontend as typed, ordered events.</li>
+          <li>Roughly sixteen events fall into five families: lifecycle (RUN_/STEP_), text (TEXT_MESSAGE_), tools (TOOL_CALL_), state (STATE_SNAPSHOT/STATE_DELTA/MESSAGES_SNAPSHOT), and special (RAW/CUSTOM). Every event shares a base of type + optional timestamp + optional rawEvent.</li>
+          <li>Spelling rule: the <code>type</code> value is SCREAMING_SNAKE_CASE; all other JSON fields are camelCase (messageId, threadId, runId, toolCallId, delta). STATE_DELTA carries a JSON Patch (RFC 6902) of {op, path, value} operations, not a whole new state.</li>
+          <li>A run is one POST and one stream: the frontend sends a RunAgentInput (threadId, runId, messages, state, tools, context); the backend streams BaseEvents over HTTP+SSE (<code>text/event-stream</code>, each event a <code>data: {json}</code> line) until RUN_FINISHED or RUN_ERROR. A binary transport exists for production, and the protocol is transport-agnostic.</li>
+          <li>The frontend is a reducer: it folds the flat event stream into assembled messages and mirrored state, keying on messageId and toolCallId, which is why interleaved text and tool events sort themselves out cleanly.</li>
+          <li>Honest status: AG-UI comes from CopilotKit and is the youngest, most single-vendor-associated of the three protocols, with an event set still settling (REASONING_* replaced the removed THINKING_*). It is a streaming protocol, not an engine — learn the durable shape, and verify exact field names against the current docs.</li>
+        </ul>
+      </section>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>You have read the commentary; next you learn to broadcast it. <a href="ch120-building-an-ag-ui-backend.html">Building an AG-UI backend</a> takes these events and emits them for real from Python — a FastAPI endpoint, the <code>ag_ui.core</code> event classes, and the <code>EventEncoder</code> that turns each one into a <code>data: {json}</code> line. If you want the story of <em>why</em> this gap needed closing at all, step back to <a href="ch118-ag-ui-the-agent-user-gap.html">closing the agent-to-user gap</a>.</p></div>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

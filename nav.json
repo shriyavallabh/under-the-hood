@@ -225,6 +225,20 @@
         { "id": "ch115", "slug": "ch115-k8s-yaml-decoded.html", "title": "Kubernetes YAML, decoded", "tagline": "Deployment, Service, ConfigMap, Secret — the manifests behind every agent deployment, read line by line with your ch005 YAML fluency", "minutes": 30 },
         { "id": "ch116", "slug": "ch116-day2-on-aks.html", "title": "Day-2 on AKS: scale, heal, secure", "tagline": "Autoscaling, rolling updates, health probes, workload identity, and the GitLab pipeline that ships your agent — production for real", "minutes": 35 }
       ]
+    },
+    {
+      "id": "act14",
+      "num": "XIV",
+      "title": "The Agent-User Layer: AG-UI",
+      "theme": "The third protocol — how an agent streams its work to a UI, and why a team standardises on it instead of a heavy graph framework",
+      "chapters": [
+        { "id": "ch118", "slug": "ch118-ag-ui-the-agent-user-gap.html", "title": "AG-UI: closing the agent-to-user gap", "tagline": "MCP connects agents to tools, A2A to each other — AG-UI connects them to the human. The event-stream protocol that makes an agent's work visible, live, in a real UI", "minutes": 30 },
+        { "id": "ch119", "slug": "ch119-ag-ui-event-model.html", "title": "The AG-UI event model", "tagline": "The sixteen event types, the SSE stream, the RunAgentInput lifecycle, and a real event trace read line by line", "minutes": 30 },
+        { "id": "ch120", "slug": "ch120-building-an-ag-ui-backend.html", "title": "Building an AG-UI backend", "tagline": "Emit RUN_STARTED, stream text deltas, report tool calls, sync state — a minimal runnable agent backend that any AG-UI frontend can render", "minutes": 35 },
+        { "id": "ch121", "slug": "ch121-ag-ui-frontend-copilotkit.html", "title": "The frontend: CopilotKit, generative UI, shared state", "tagline": "Rendering the stream with React, useCoAgent for bidirectional state, useCopilotAction for generative UI, and renderAndWaitForResponse for human-in-the-loop", "minutes": 35 },
+        { "id": "ch122", "slug": "ch122-ag-ui-vs-langgraph-deep-agents.html", "title": "Why AG-UI over LangGraph and Deep Agents", "tagline": "An honest trade-off: what a graph framework gave you, what drove the move, and — critically — what you now own yourself once orchestration is no longer in the box", "minutes": 30 },
+        { "id": "ch123", "slug": "ch123-migrating-to-ag-ui.html", "title": "Migrating to AG-UI: before, after, and the pitfalls", "tagline": "Re-fronting a LangGraph or Deep-Agent agent behind AG-UI — a before/after rebuild, the best practices, the common traps, and a glossary", "minutes": 30 }
+      ]
     }
   ]
 }

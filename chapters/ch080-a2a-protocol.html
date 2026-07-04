@@ -26,7 +26,7 @@
         <div class="ch-kicker">Act IX · MCP and Agent Protocols</div>
         <h1>A2A: when agents talk to agents</h1>
         <p class="ch-tagline">MCP gave your agent hands; A2A gives it colleagues. Agent cards, tasks, messages and artifacts — the standard for one agent hiring another it will never see the inside of.</p>
-        <div class="ch-meta"><span>~25 min</span><span>Chapter 81 of 117</span></div>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 81 of 123</span></div>
       </header>
 
       <section class="panel story">
@@ -252,6 +252,9 @@ print("ARTIFACT   ", task["artifacts"][0]["parts"][0]["text"])
       <p>Now the part vendor decks skip. As of mid-2026, the <em>wire protocol</em> is in decent shape — v1.0, neutral governance, official SDKs — but it got there through churn: method names were renamed between 0.x releases, transports were added, and even the brochure's filename changed (early drafts used <code>agent.json</code> before settling on <code>agent-card.json</code>). Code written against early versions needed rework. That churn has calmed, which is genuinely good news.</p>
       <p>The <em>ecosystem</em>, though, is younger than the spec. The grand vision — your procurement agent discovering a supplier's sales agent and negotiating a purchase, cross-company — mostly does not happen yet. Public directories of agent cards are embryonic. And the hard questions are not technical: should your agent believe a stranger's brochure? Who is liable when a delegated task fails? Who pays, and how? Those are contract-and-trust problems, and they move slower than specs. Meanwhile, most "multi-agent systems" in production today remain what they were in Act VII: one team's subgraphs in one process.</p>
       <p>So hold both truths. The concepts — cards, tasks, paused states, artifacts — are durable and worth learning now: every serious platform has adopted the vocabulary, and inside large enterprises (where departments genuinely are separate trust domains) A2A is already useful glue. But if someone proposes wrapping your team's five internal agents in A2A servers "to be standards-compliant", ask the only question that matters: which boundary here could we not refactor away?</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Two protocols down, one to go. MCP connects your agent to tools; A2A connects it to other agents. Both point the agent <em>outward</em> — but nothing yet connects it back to the human at a screen, waiting to watch it think. That third protocol — <a href="ch118-ag-ui-the-agent-user-gap.html">AG-UI</a>, the agent-to-user layer — gets its own act at the end of this handbook, and it completes the trio: tools below, colleagues across, the user in front.</p></div>
 
       <div class="callout wild"><span class="co-label">In the wild</span>
       <p>You will meet A2A first in platform settings screens ("Connect an external agent — paste its agent card URL") and in architecture decks as an arrow labelled "A2A" between company boxes. In code, the tells are a <code>/.well-known/agent-card.json</code> file in a repo, an A2A SDK in the dependency list, and task ids like <code>task-7f3a…</code> threading through logs. In a merge request, "expose the research agent over A2A" means: add an HTTP endpoint, publish a card, map the agent's states onto the task lifecycle. And when an operator says a delegated job is "stuck in input-required", you now know exactly which phone call nobody has answered.</p></div>

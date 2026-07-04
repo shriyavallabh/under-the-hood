@@ -292,6 +292,53 @@ Wrap in `<div class="tbl">…</div>`.
   reached over streamable HTTP, A2A endpoint exposed via a Service (+ ingress
   for cross-cluster). Teach commands exactly as they are — verify anything
   uncertain against current docs.
+- AG-UI (Act XIV) — VERIFIED cheat sheet (mid-2026), teach exactly this:
+  - AG-UI = "Agent-User Interaction Protocol", an OPEN, EVENT-BASED protocol made
+    by **CopilotKit**. It standardises how an agent BACKEND streams its activity to
+    a user-facing FRONTEND, and how the UI sends state/actions back. The trio:
+    MCP = agent↔tools, A2A = agent↔agent, **AG-UI = agent↔user/frontend**.
+  - It is a PROTOCOL, not an orchestration/runtime engine like LangGraph. It gives
+    you the streaming contract between agent and UI; it does NOT give you
+    orchestration, checkpointing, durable state, branching, or a control loop —
+    you build/own those yourself (or bring a lighter loop). Say this honestly.
+  - Wire event `type` values are SCREAMING_SNAKE_CASE. The ~16 standard events:
+    Lifecycle: `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, `STEP_STARTED`, `STEP_FINISHED`.
+    Text: `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`, `TEXT_MESSAGE_END`, `TEXT_MESSAGE_CHUNK`.
+    Tools: `TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_END`, `TOOL_CALL_CHUNK`, `TOOL_CALL_RESULT`.
+    State: `STATE_SNAPSHOT`, `STATE_DELTA` (a JSON Patch array, RFC 6902), `MESSAGES_SNAPSHOT`.
+    Special: `RAW`, `CUSTOM`. Newer `REASONING_*` events replaced the deprecated
+    `THINKING_*` set (removed in 1.0). Base fields on every event: `type`, optional
+    `timestamp`, optional `rawEvent`. JSON field names are camelCase on the wire
+    (`messageId`, `threadId`, `runId`, `toolCallId`, `toolCallName`, `delta`).
+  - Transport: default is **HTTP + SSE** (`Content-Type: text/event-stream`, each
+    event serialised as `data: {json}\n\n`); a high-performance HTTP **binary**
+    option exists for production; the protocol is transport-agnostic (WebSocket/
+    webhooks also possible). The frontend POSTs a `RunAgentInput` (fields: threadId,
+    runId, messages, state, tools, context) to the agent endpoint; the backend
+    streams back `BaseEvent`s. Reference client is `HttpAgent`.
+  - Python SDK: `from ag_ui.core import RunAgentInput, EventType, RunStartedEvent,
+    TextMessageStartEvent, TextMessageContentEvent, ...`; `from ag_ui.encoder import
+    EventEncoder`; `encoder = EventEncoder(accept=<accept-header>)`;
+    `encoder.encode(event)` → the `data: {...}\n\n` SSE string. Typically a FastAPI
+    `@app.post("/")` returning `StreamingResponse(gen(), media_type="text/event-stream")`.
+    Python event classes take snake_case kwargs (`message_id=`, `thread_id=`) that
+    serialise to camelCase JSON.
+  - Frontend = **CopilotKit** (React). Provider: `<CopilotKit runtimeUrl={...}
+    agent="myAgent">`; prebuilt chat `<CopilotChat />`. Shared/bidirectional state:
+    `const { state, setState, running } = useCoAgent({ name: "myAgent",
+    initialState: {...} })` — the agent's `STATE_SNAPSHOT`/`STATE_DELTA` updates
+    `state`; the UI's `setState()` pushes back into the agent's next turn.
+    Generative UI + human-in-the-loop: `useCopilotAction({ name, description,
+    parameters, render })` renders a custom React component from an agent tool call;
+    use `renderAndWaitForResponse` instead of `render` for HITL — it gives a
+    `respond` function in the render props, the component stays mounted until you
+    call `respond(value)`, and that value is returned to the agent as the tool result.
+  - Framework-agnostic: it can front a raw LLM loop, CrewAI, Mastra, Agno, LangGraph,
+    Microsoft Agent Framework, Pydantic AI, LlamaIndex, etc. React code CANNOT run in
+    a pyrun (Python only) — show React as static `language-javascript`/`language-jsx`
+    code blocks + walkthroughs; use a pyrun to SIMULATE the backend emitting the event
+    stream (a generator yielding AG-UI event dicts) or the UI reducer applying events.
+  - Verify anything beyond this sheet against docs.ag-ui.com / docs.copilotkit.ai.
 - If you are not CERTAIN of an API detail, verify against current docs (context7
   or web search) before writing it, or teach the stable shape and explicitly say
   "check the current docs for the exact name". Never invent method names.

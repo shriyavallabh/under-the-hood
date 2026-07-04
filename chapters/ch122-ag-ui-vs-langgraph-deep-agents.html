@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why AG-UI over LangGraph and Deep Agents — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch122">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XIV · The Agent-User Layer: AG-UI</div>
+        <h1>Why AG-UI over LangGraph and Deep Agents</h1>
+        <p class="ch-tagline">An honest trade-off: what a graph framework gave you, what drove the move, and — critically — what you now own yourself once orchestration is no longer in the box.</p>
+        <div class="ch-meta"><span>~28 min</span><span>Chapter 122 of 123</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Two restaurants, same street. The first leased a full commercial kitchen: a walk-in fridge that keeps every half-finished dish cold and safe overnight, a ticket rail that routes each order to the right station, an expediter at the pass who holds a plate until the customer confirms "yes, medium-rare", and prep cooks who hand work down the line to each other. A complete operation — but behind a solid wall. Diners never see in. And the whole rig is the landlord's fixed layout on a heavy lease; the year he remodels, every workflow in the place has to be relearned.</p>
+        <p>The second restaurant knocked down that wall and put in a glass pass. Now every diner watches the chef fire, plate, and call each step out loud, live. That glass counter is wildly popular — but be clear about what it <em>is</em>: a <strong>contract about how the kitchen shows its work to the room</strong>. Not a fridge, not a ticket rail, not an expediter. Take your food behind that glass into a bare unit, and the fridge, the routing, the overnight safety log are all yours to build. That glass pass is AG-UI. This chapter is what you gain by installing it — and exactly what you now carry yourself.</p>
+      </section>
+
+      <h2>Where this Act has taken you</h2>
+      <p>A quick recap. This Act opened with <a href="ch118-ag-ui-the-agent-user-gap.html">the agent-to-user gap</a> — the missing third protocol next to MCP and A2A — then taught <a href="ch119-ag-ui-event-model.html">the event model</a> (the sixteen-odd <code>SCREAMING_SNAKE_CASE</code> events an agent streams out), <a href="ch120-building-an-ag-ui-backend.html">built a backend</a> that emits them over server-sent events, and wired <a href="ch121-ag-ui-frontend-copilotkit.html">the CopilotKit frontend</a> that consumes them. So you know <em>how</em> AG-UI works. This chapter answers the harder question a team argues about in a design review: <strong>why adopt this thin streaming contract instead of the heavy graph framework we already know?</strong> The honest answer has three parts — what the framework gave us, what pushed us to move, and what the move costs. Getting it wrong is expensive either way, so this is the most even-handed chapter in the Act.</p>
+
+      <h2>What LangGraph and Deep Agents gave you: a whole runtime</h2>
+      <p>Start by being generous to what you might leave behind, because it is a lot. When you built with <a href="ch057-why-graphs.html">LangGraph</a> (chapters 58 onward) and <a href="ch066-what-makes-an-agent-deep.html">Deep Agents</a> (chapters 67 onward), you were not just getting a loop — you were getting a <dfn>runtime</dfn>: a full engine that runs your agent, remembers where it was, and enforces the flow. That runtime handed you real machinery, for free:</p>
+      <ul>
+        <li><strong>Durable orchestration.</strong> The <a href="ch058-stategraph-anatomy.html"><code>StateGraph</code></a> compiles into a real execution engine with nodes and edges — a graph you can draw, replay and reason about.</li>
+        <li><strong>Checkpointing and persistence.</strong> <a href="ch061-checkpointing.html">Checkpointing</a> (chapter 62) saves the agent's whole state after every step to a checkpointer, keyed by a <code>thread_id</code>. Crash mid-run, come back tomorrow, resume from the exact step. That is <a href="ch085-durability.html">durability</a> (chapter 86) you did not have to design.</li>
+        <li><strong>Branching and routing.</strong> <dfn>Conditional edges</dfn> — <code>add_conditional_edges</code> — let the graph fork: send this state to the refund node, that one to the escalation node, based on a function you write once.</li>
+        <li><strong>Built-in state reducers.</strong> A <dfn>state reducer</dfn> is a rule for merging each step's output into the running state (append to this list, overwrite that field) so concurrent updates combine sanely instead of clobbering.</li>
+        <li><strong>Interrupts.</strong> <a href="ch062-human-in-the-loop.html">Human-in-the-loop</a> (chapter 63) via <code>interrupt()</code> + <code>Command(resume=…)</code> pauses a run in place, durably, until a person answers — then continues.</li>
+        <li><strong>Subgraphs and subagents.</strong> <a href="ch063-subgraphs-multi-agent.html">Multi-agent orchestration</a> (chapter 64): a supervisor graph invoking specialist graphs, or a <a href="ch067-create-deep-agent-anatomy.html">deep agent</a> spinning up scoped helpers — all in one process, one trace.</li>
+      </ul>
+      <p>That is a serviced apartment, fully furnished. For a genuinely complex, long-running, branch-heavy workflow, throwing it away would be reckless. Keep that firmly in mind — this chapter is not here to sell you a downgrade.</p>
+
+      <h2>The pain that drove a move</h2>
+      <p>So why do teams move at all? Not because the framework is bad — because for a large class of apps you were paying for a whole kitchen to boil an egg. The pain is real and defensible engineering pain, not vendor-bashing:</p>
+      <ul>
+        <li><strong>The graph mental model is overhead for a straight line.</strong> Many production agents are just a <a href="ch045-react-loop-by-hand.html">ReAct loop</a> (chapter 46) — think, call a tool, observe, repeat. Expressing that as nodes, edges, channels and reducers is ceremony around what is honestly a <code>while</code> loop. You write graph boilerplate to describe a straight line.</li>
+        <li><strong>Framework coupling and version churn.</strong> Your agent's shape is bound to one framework's abstractions and one framework's release cadence. When the framework reorganises its APIs, your code follows whether you wanted the change or not. That is the landlord's remodel.</li>
+        <li><strong>Getting a rich, streaming, interactive UI out is awkward.</strong> The graph runs beautifully server-side, but surfacing its live activity — token-by-token text, which tool is firing, shared state the user can edit — to a real frontend was always a bolt-on. There was no first-class, standard <dfn>agent-to-user</dfn> channel.</li>
+        <li><strong>Orchestration you did not need.</strong> If your app never branches, never runs for hours, never resumes across a crash, the durable-graph machinery is weight you carry and never use.</li>
+        <li><strong>Lock-in.</strong> Rewrite everything as a graph and your UI, your team's skills and your deploy story are all fused to that one runtime. Swapping it later means a rewrite.</li>
+      </ul>
+
+      <h2>What AG-UI gives instead: a streaming contract, not a runtime</h2>
+      <p><dfn>AG-UI</dfn> — the Agent-User Interaction Protocol, created by <strong>CopilotKit</strong> — is an open, event-based standard for how an agent backend streams its work to a user-facing frontend, and how the UI sends state and actions back. It is the third member of the trio you have met across this handbook: MCP connects an agent to its tools, <a href="ch080-a2a-protocol.html">A2A</a> connects an agent to other agents, and AG-UI connects an agent to the human watching it. Concretely it gives you, first-class and standardised: live streaming of text and tool calls, tool-call visibility, shared bidirectional agent-and-UI state, <dfn>generative UI</dfn> (the agent asking the frontend to render a real component), and human-in-the-loop — all as a wire format any frontend can consume.</p>
+      <p>Here is the sentence that governs the whole chapter: <strong>AG-UI is a protocol, not a runtime.</strong> It standardises the <em>shape of what you stream out</em>. It does not give you a control loop, orchestration, checkpointing, durable state, or branching. The glass pass shows the kitchen's work; it is not the fridge. That is not a flaw — it is the design decision — but it is exactly the line where your new responsibilities begin.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>Because it is a wire contract and not an engine, "AG-UI <em>versus</em> LangGraph" is partly a false binary. They sit on different layers: LangGraph is orchestration (agent↔runtime), AG-UI is presentation (agent↔user). You can run AG-UI <em>in front of</em> a LangGraph agent — an adapter exists. The real decision this chapter frames is narrower and more honest: for <em>this</em> app, do you also drop the heavy graph runtime and drive AG-UI from a light hand-loop instead? Sometimes yes, sometimes emphatically no.</p></div>
+
+      <h2>The trade, drawn as a journey</h2>
+      <p>Step through what actually changes when a team swaps a graph runtime for a light loop behind an AG-UI contract. Watch the <span class="d-box hot" style="padding:0 .3em">highlight</span> move from "the framework holds it" to "you hold it".</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Before">
+          <h3>1. Before: the framework holds everything</h3>
+          <div class="diagram">
+            <div class="d-box hot">Graph runtime<small>loop + state + branching + resume</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">UI<small>bolted-on streaming</small></div>
+          </div>
+          <p class="step-cap">LangGraph runs the show. Orchestration, checkpointing and routing live inside the compiled graph. The UI gets whatever streaming you could rig up on the side.</p>
+        </div>
+        <div class="step" data-title="The itch">
+          <h3>2. The itch: a UI-first app</h3>
+          <div class="diagram">
+            <div class="d-box">Graph runtime</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">UI<small>needs live tokens, tool visibility, editable state</small></div>
+          </div>
+          <p class="step-cap">The product is really a chat surface with a live view of the agent's thinking. The graph's durable machinery is barely used, but the UI channel is fighting you every day.</p>
+        </div>
+        <div class="step" data-title="Install the glass">
+          <h3>3. Install AG-UI: a first-class UI contract</h3>
+          <div class="diagram">
+            <div class="d-box">Agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">AG-UI events<small>RUN_STARTED, TEXT_MESSAGE_CONTENT, STATE_DELTA…</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">UI<small>streams, renders, edits state</small></div>
+          </div>
+          <p class="step-cap">Now the backend emits a standard event stream and any AG-UI frontend (CopilotKit) consumes it. Streaming, tool visibility, shared state and generative UI are free and standardised.</p>
+        </div>
+        <div class="step" data-title="Pick up the runtime">
+          <h3>4. But you pick up the runtime</h3>
+          <div class="diagram">
+            <div class="d-box hot">Your light loop<small>you own: loop, retries, state, resume, routing</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">AG-UI events</div>
+          </div>
+          <p class="step-cap">The contract does not run your agent. If you dropped the graph, the loop, retries, durable state and branching are now code you write and maintain. Freedom and responsibility, same coin.</p>
+        </div>
+      </div>
+
+      <h2>The honest ledger: what you now own yourself</h2>
+      <p>This is the table to photograph. For each capability: did the graph framework give it, does AG-UI give it, and if you go AG-UI-plus-a-light-loop, what do you now build? Read the last column as your new to-do list.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Capability</th><th>LangGraph / Deep Agents give it</th><th>AG-UI gives it</th><th>You now build it (AG-UI + light loop)</th></tr>
+        <tr><td>Control loop (think-act-observe)</td><td>Yes — inside the compiled graph / agent node</td><td>No — it is a wire protocol</td><td>Yes — a straight loop (chapter 46) or a light framework</td></tr>
+        <tr><td>Streaming to a UI (tokens, tool calls, state)</td><td>Partial — awkward bolt-on</td><td><strong>Yes — first-class, the whole point</strong></td><td>Nothing — you get it free</td></tr>
+        <tr><td>Checkpointing &amp; durable resume</td><td>Yes — checkpointers keyed by <code>thread_id</code> (chapter 62)</td><td>No</td><td>Yes — your own store / DB (chapter 86)</td></tr>
+        <tr><td>Branching / conditional routing</td><td>Yes — conditional edges</td><td>No</td><td>Yes — plain <code>if/else</code> in your loop</td></tr>
+        <tr><td>Built-in state reducers</td><td>Yes — channel reducers</td><td>Partial — <code>STATE_DELTA</code> carries updates, no reducer engine</td><td>Yes — you merge state yourself</td></tr>
+        <tr><td>Interrupt / human-in-the-loop pause</td><td>Yes — <code>interrupt()</code> + <code>Command(resume=…)</code> (chapter 63)</td><td>The UI half — via <code>renderAndWaitForResponse</code></td><td>The backend pause/resume plumbing</td></tr>
+        <tr><td>Multi-agent orchestration</td><td>Yes — subgraphs / subagents (chapter 64)</td><td>No</td><td>Yes — you wire it</td></tr>
+        <tr><td>Retries / error policy</td><td>Built-in hooks</td><td><code>RUN_ERROR</code> event to report it</td><td>Yes — your <code>try/except</code></td></tr>
+        <tr><td>Shared agent&#8596;UI state</td><td>No native UI channel</td><td><strong>Yes — <code>STATE_SNAPSHOT</code>/<code>STATE_DELTA</code> + <code>useCoAgent</code></strong></td><td>Nothing — you get it free</td></tr>
+        <tr><td>Generative UI (agent renders components)</td><td>No</td><td><strong>Yes — tool call &#8594; <code>useCopilotAction</code> render</strong></td><td>Nothing — you get it free</td></tr>
+      </table></div>
+
+      <p>Look at the shape of it. AG-UI's "Yes" column is everything facing the <em>human</em>; the graph framework's "Yes" column is everything facing the <em>runtime</em>. They are strong in opposite directions. Rough illustrative picture of the ownership shift:</p>
+
+      <div data-bars data-title="Roughly how much of the runtime you own yourself (illustrative)" data-unit="parts" data-note="Illustrative, not measured: AG-UI hands you the UI contract and hands the runtime back to you; a graph framework keeps the runtime in the box.">
+        <div class="bar" data-label="LangGraph / Deep Agents" data-value="2"></div>
+        <div class="bar" data-label="AG-UI + a light loop" data-value="7"></div>
+      </div>
+
+      <h2>Reading the wire: the backend that emits the contract</h2>
+      <p>Here is the thing you actually own on the backend — a generator that emits AG-UI events. Notice what is <em>not</em> here: no checkpointer, no graph, no resume. Click the annotated lines.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">agent_endpoint.py — a FastAPI backend speaking AG-UI</div>
+        <div class="wl-line"><code>from ag_ui.core import RunAgentInput, RunStartedEvent, \</code>
+          <div class="wl-note">The Python SDK's event classes. Each maps to one wire event. Their constructors take <em>snake_case</em> kwargs (<code>thread_id=</code>) that serialise to <em>camelCase</em> JSON (<code>threadId</code>) — the SDK bridges the two conventions for you.</div></div>
+        <div class="wl-line"><code>    TextMessageContentEvent, RunFinishedEvent, EventType</code></div>
+        <div class="wl-line"><code>from ag_ui.encoder import EventEncoder</code>
+          <div class="wl-note">The <dfn>EventEncoder</dfn> turns a typed event object into the exact SSE string <code>data: {json}\n\n</code>. It is the only piece that knows the transport; your logic just yields events.</div></div>
+        <div class="wl-line"><code>@app.post("/")</code>
+          <div class="wl-note">A single POST endpoint. The frontend POSTs a <code>RunAgentInput</code> here (fields: <code>threadId</code>, <code>runId</code>, <code>messages</code>, <code>state</code>, <code>tools</code>, <code>context</code>) and the backend streams events back. That is the whole protocol surface.</div></div>
+        <div class="wl-line"><code>async def run(input: RunAgentInput, request: Request):</code>
+          <div class="wl-note"><code>input</code> carries the conversation so far and the current shared state. <em>You</em> decide what to do with it — this function is your control loop, and nothing in AG-UI wrote it.</div></div>
+        <div class="wl-line"><code>    encoder = EventEncoder(accept=request.headers.get("accept"))</code>
+          <div class="wl-note">The encoder is created per request from the client's <code>Accept</code> header, so it can pick plain SSE or the high-performance binary encoding the client asked for.</div></div>
+        <div class="wl-line"><code>    async def gen():</code>
+          <div class="wl-note">An async generator (chapters 39–40): each <code>yield</code> pushes one encoded event down the open HTTP connection the instant it is ready. This is why the user sees tokens appear live instead of waiting for the whole answer.</div></div>
+        <div class="wl-line"><code>        yield encoder.encode(RunStartedEvent(</code>
+          <div class="wl-note">Every run opens with <code>RUN_STARTED</code> and closes with <code>RUN_FINISHED</code> (or <code>RUN_ERROR</code>). Between them you emit whatever text, tool-call and state events describe the work.</div></div>
+        <div class="wl-line"><code>            type=EventType.RUN_STARTED,</code></div>
+        <div class="wl-line"><code>            thread_id=input.thread_id, run_id=input.run_id))</code></div>
+        <div class="wl-line"><code>        # ... your loop: call the model, run tools, emit events ...</code>
+          <div class="wl-note">This comment is the whole point of the chapter. The loop, the tool execution, the retries, any durable state — all of it lives here, hand-written. AG-UI never fills this in.</div></div>
+        <div class="wl-line"><code>        yield encoder.encode(RunFinishedEvent(</code></div>
+        <div class="wl-line"><code>            type=EventType.RUN_FINISHED,</code></div>
+        <div class="wl-line"><code>            thread_id=input.thread_id, run_id=input.run_id))</code></div>
+        <div class="wl-line"><code>    return StreamingResponse(gen(), media_type="text/event-stream")</code>
+          <div class="wl-note"><code>text/event-stream</code> is the default AG-UI transport: HTTP + server-sent events. Transport-agnostic by design (a binary option and WebSockets exist), but SSE is the one you will meet first.</div></div>
+      </div>
+
+      <p>And the freedom this buys: because the contract is standard, the frontend does not care what runtime sits behind it. The same React code below works whether the backend is a raw LLM loop, CrewAI, Mastra, Pydantic AI, or LangGraph — you can swap the engine without touching the UI. That is the anti-lock-in payoff, made concrete:</p>
+
+      <div class="code-title">app.tsx — the CopilotKit frontend (unchanged when you swap the backend)</div>
+      <pre><code class="language-jsx">import { CopilotKit, useCoAgent } from "@copilotkit/react-core";
+import { CopilotChat } from "@copilotkit/react-ui";
+
+function BalanceApp() {
+  // Bidirectional shared state. The agent's STATE_SNAPSHOT / STATE_DELTA
+  // events flow into `state`; setState() pushes edits back to the agent.
+  const { state, setState, running } = useCoAgent({
+    name: "myAgent",
+    initialState: { status: "idle" },
+  });
+
+  return (
+    &lt;div&gt;
+      &lt;p&gt;Agent status: {state.status} {running ? "(working)" : ""}&lt;/p&gt;
+      &lt;CopilotChat /&gt;
+    &lt;/div&gt;
+  );
+}
+
+export default function App() {
+  return (
+    &lt;CopilotKit runtimeUrl="/api/copilotkit" agent="myAgent"&gt;
+      &lt;BalanceApp /&gt;
+    &lt;/CopilotKit&gt;
+  );
+}</code></pre>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>React cannot run on this page, so the block above is for reading, not running. The Python runner below <em>simulates</em> the same round trip — a backend generator emitting AG-UI events, and a tiny reducer standing in for what <code>useCoAgent</code> does inside CopilotKit. Watching the two halves in one language is the fastest way to feel where the protocol ends and your code begins.</p></div>
+
+      <h2>Run it: a light loop that emits AG-UI, and the UI that consumes it</h2>
+      <p>Press <strong>Run</strong>. The left half is a hand-written control loop — the runtime you now own — emitting standard AG-UI event dicts. The right half is a stand-in frontend applying them. Every line marked <code>YOU OWN</code> is something the graph framework used to do for you.</p>
+
+      <div class="pyrun" data-title="A hand-loop emitting AG-UI events, plus a mini UI reducer">
+<textarea class="py-src" spellcheck="false">
+import json
+
+# ---- THE AGENT: a light hand-loop. AG-UI does NOT give you
+# ---- this loop. You write it (or bring a small framework).
+def fake_llm(history):
+    if not any("OBSERVATION" in h for h in history):
+        return {"tool": "lookup_balance", "args": {"acct": "A-12"}}
+    return {"text": "Your balance is 42,000 rupees."}
+
+def run_agent(task):
+    history = ["TASK: " + task]
+    yield {"type": "RUN_STARTED", "runId": "run-1", "threadId": "t-1"}
+    yield {"type": "STATE_SNAPSHOT", "snapshot": {"status": "idle"}}
+    for step in range(1, 4):                 # YOU OWN: the control loop
+        yield {"type": "STEP_STARTED", "stepName": "step-%d" % step}
+        move = fake_llm(history)
+        if "tool" in move:                   # YOU OWN: routing / branching
+            cid = "call-%d" % step
+            yield {"type": "TOOL_CALL_START", "toolCallId": cid,
+                   "toolCallName": move["tool"]}
+            yield {"type": "TOOL_CALL_ARGS", "toolCallId": cid,
+                   "delta": json.dumps(move["args"])}
+            yield {"type": "TOOL_CALL_END", "toolCallId": cid}
+            result = "42000"                 # YOU OWN: running the tool + retries
+            yield {"type": "TOOL_CALL_RESULT", "toolCallId": cid,
+                   "content": result}
+            # STATE_DELTA is a JSON Patch (RFC 6902) array of ops
+            yield {"type": "STATE_DELTA",
+                   "delta": [{"op": "replace", "path": "/status",
+                              "value": "working"}]}
+            history.append("OBSERVATION: balance=" + result)
+            yield {"type": "STEP_FINISHED", "stepName": "step-%d" % step}
+            continue
+        mid = "msg-%d" % step
+        yield {"type": "TEXT_MESSAGE_START", "messageId": mid, "role": "assistant"}
+        yield {"type": "TEXT_MESSAGE_CONTENT", "messageId": mid, "delta": move["text"]}
+        yield {"type": "TEXT_MESSAGE_END", "messageId": mid}
+        yield {"type": "STATE_DELTA",
+               "delta": [{"op": "replace", "path": "/status", "value": "done"}]}
+        yield {"type": "STEP_FINISHED", "stepName": "step-%d" % step}
+        break
+    yield {"type": "RUN_FINISHED", "runId": "run-1"}   # YOU OWN: no checkpoint here
+
+# ---- THE FRONTEND: a tiny reducer. This is what CopilotKit's
+# ---- useCoAgent does for you in React, here in plain Python.
+def apply_patch(state, ops):
+    for op in ops:
+        key = op["path"].lstrip("/")
+        if op["op"] in ("replace", "add"):
+            state[key] = op["value"]
+    return state
+
+def encode_sse(event):                    # what EventEncoder.encode does
+    return "data: " + json.dumps(event) + "\n\n"
+
+state, transcript = {}, ""
+for ev in run_agent("What is my account balance?"):
+    print(encode_sse(ev).strip())         # the wire the UI receives
+    t = ev["type"]
+    if t == "STATE_SNAPSHOT":
+        state = dict(ev["snapshot"])
+    elif t == "STATE_DELTA":
+        state = apply_patch(state, ev["delta"])
+    elif t == "TEXT_MESSAGE_CONTENT":
+        transcript += ev["delta"]
+
+print()
+print("UI transcript ->", transcript)
+print("UI shared state ->", state)
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it to feel the ownership. Delete the <code>STATE_DELTA</code> after the tool result and watch the UI's status get stuck on <code>idle</code> — the protocol carried nothing, because <em>you</em> forgot to emit it. Now imagine the run crashing after <code>step 1</code>: with a graph checkpointer you would resume from step 2; here, there is no checkpoint, so you would start over. That missing resume is the single most important line item in the "you now build it" column.</p></div>
+
+      <h2>So which do you actually pick?</h2>
+      <p>This is where honesty earns its keep. There is no universal winner — there is a fit question, and you already have the tool for it: the <a href="ch095-capability-matrix-method.html">capability-matrix method</a> (chapter 96) and the <a href="ch093-is-langgraph-right.html">is-LangGraph-right test</a> (chapter 94). Score your actual app against what each layer is strong at:</p>
+
+      <div class="tbl"><table>
+        <tr><th>Keep the graph runtime (LangGraph / Deep Agents) when…</th><th>Go AG-UI + a light loop when…</th></tr>
+        <tr><td>The workflow is genuinely complex: many steps, real branching, multiple cooperating agents</td><td>The agent is essentially a straight ReAct loop — one tool at a time until done</td></tr>
+        <tr><td>You need durable, resumable state across crashes and days — built-in checkpointing is a hard requirement</td><td>Runs are short-lived; if one fails, restarting is fine</td></tr>
+        <tr><td>Human-in-the-loop must survive a process restart, not just a page reload</td><td>The product is streaming-first and UI-centric — the live view <em>is</em> the value</td></tr>
+        <tr><td>Conditional routing and state-merge rules are core to the logic</td><td>You want to avoid framework lock-in and keep freedom to swap the backend</td></tr>
+      </table></div>
+
+      <p>And the mature answer sits in the middle: <strong>use both, on their own layers.</strong> Keep LangGraph where you need durable orchestration, and put AG-UI in front of it for a first-class live view. Reach for AG-UI-plus-a-hand-loop only when the app truly does not need the graph's runtime. Choosing the light path because "graphs feel heavy" while quietly needing checkpointing and branching is how teams reinvent LangGraph badly, one bug at a time.</p>
+
+      <h2>The vocabulary, one more time</h2>
+      <p>Flip until the line between "protocol" and "runtime" is reflex:</p>
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">AG-UI</span><span class="flip-back">The Agent-User Interaction Protocol by CopilotKit: an open, event-based streaming contract between an agent backend and a user-facing frontend. The third protocol — agent&#8596;user.</span></button>
+        <button class="flip" type="button"><span class="flip-front">protocol vs runtime</span><span class="flip-back">A protocol standardises the shape of what crosses a boundary. A runtime runs your code. AG-UI is the first; LangGraph is the second. Do not expect one to do the other's job.</span></button>
+        <button class="flip" type="button"><span class="flip-front">control loop</span><span class="flip-back">The think-act-observe cycle that drives an agent. LangGraph gives you one; with AG-UI you write it yourself (or bring a light one).</span></button>
+        <button class="flip" type="button"><span class="flip-front">checkpointing</span><span class="flip-back">Saving the agent's whole state after each step so a run can resume after a crash. A graph framework has it built in; behind AG-UI you build it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">STATE_DELTA</span><span class="flip-back">The AG-UI event carrying an incremental state update as a JSON Patch (RFC 6902) array of ops. STATE_SNAPSHOT sends the whole state; DELTA sends just the change.</span></button>
+        <button class="flip" type="button"><span class="flip-front">generative UI</span><span class="flip-back">The agent asking the frontend to render a real interactive component from a tool call — via useCopilotAction. A thing AG-UI gives that a graph runtime never did.</span></button>
+      </div>
+
+      <h2>Who runs the standard</h2>
+      <p>Provenance, briefly, because it shapes trust. AG-UI was created and open-sourced by <strong>CopilotKit</strong> — the team behind the React copilot toolkit — to fill the agent-to-user gap that MCP (agent↔tools, seeded by Anthropic) and A2A (agent↔agents, now under the Linux Foundation) left open. It is deliberately framework-agnostic: the same event contract can front a raw LLM loop, CrewAI, Mastra, Agno, Pydantic AI, LlamaIndex, the Microsoft Agent Framework, or LangGraph, and integrations for those ship as adapters. The spec, the Python SDK (<code>ag_ui.core</code>, <code>ag_ui.encoder</code>) and the CopilotKit frontend are all public at docs.ag-ui.com and docs.copilotkit.ai. It has reached a 1.0-era spec — one sign of maturing being that the newer <code>REASONING_*</code> events replaced the deprecated <code>THINKING_*</code> set, which was removed on the way to 1.0.</p>
+
+      <h2>An honest maturity check</h2>
+      <p>Now the part the launch blog skips. AG-UI is young — it arrived in 2025, and that <code>THINKING_*</code> to <code>REASONING_*</code> removal is the kind of churn a not-yet-settled protocol goes through. The richest path today is CopilotKit's own React stack; the "front any backend" promise is real, but adapters vary in maturity, so verify your framework's adapter rather than assume parity. And the deepest caveat is the one this chapter is built around: <strong>AG-UI solves presentation, not orchestration, on purpose.</strong> The moment you drop the graph and drive AG-UI from a hand-loop, every runtime concern in that fourth table column becomes yours, forever — a fine trade for a streaming-first app, a bad one for a durable, branch-heavy workflow. The protocol is worth learning now; just size the runtime you are signing up to own.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet AG-UI first as a dependency — <code>@copilotkit/react-core</code> in a frontend's <code>package.json</code>, <code>ag-ui</code> / <code>ag_ui</code> in a backend's, and a single <code>@app.post("/")</code> returning a <code>StreamingResponse</code> with <code>media_type="text/event-stream"</code>. In the browser dev-tools Network tab, the tell is one long-lived request whose response is a stream of <code>data: {"type":"TEXT_MESSAGE_CONTENT",…}</code> lines. In a design review, "let's put AG-UI in front of the agent" means: expose the backend as an event stream and adopt CopilotKit, without necessarily changing the runtime underneath. And when a teammate says "we dropped the graph and hand-rolled the loop behind AG-UI", your next question — the one this chapter trained — is: "so who owns checkpointing and resume now?"</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What is the single most important thing to understand about AG-UI relative to LangGraph?</p>
+          <div class="q-opts">
+            <button data-opt="a">AG-UI is a faster, newer graph runtime that replaces LangGraph entirely</button>
+            <button data-opt="b">AG-UI is a protocol (a streaming contract between agent and UI), not a runtime — it does not give you a loop, checkpointing or orchestration</button>
+            <button data-opt="c">AG-UI is a checkpointing library that adds durability to any UI</button>
+          </div>
+          <p class="q-explain">AG-UI standardises the shape of what an agent streams to the user. It is the glass pass, not the kitchen. LangGraph is a runtime that actually runs your agent — a different layer of the stack.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Your app is a streaming chat surface: one tool at a time, short runs, and the live view of the agent's work is the whole product. Which fit is most defensible?</p>
+          <div class="q-opts">
+            <button data-opt="a">LangGraph, because every agent should be a durable graph</button>
+            <button data-opt="b">Neither — build a custom binary protocol from scratch</button>
+            <button data-opt="c">AG-UI plus a light hand-loop — you gain first-class streaming and shared state, and you do not need the graph's durable orchestration</button>
+          </div>
+          <p class="q-explain">A straight ReAct loop with no branching and no need to resume across crashes does not exercise the graph runtime. AG-UI's strengths (streaming, tool visibility, shared state) are exactly this product's value.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. You drop the graph and drive AG-UI from a hand-written loop. Which of these is now YOUR responsibility that LangGraph used to handle?</p>
+          <div class="q-opts">
+            <button data-opt="a">Checkpointing and durable resume across a crash</button>
+            <button data-opt="b">Live token-by-token streaming to the UI</button>
+            <button data-opt="c">Shared bidirectional agent-and-UI state</button>
+          </div>
+          <p class="q-explain">Streaming and shared state are exactly what AG-UI gives you for free. Checkpointing, the control loop, branching and retries are runtime concerns AG-UI never provides — they move into your code.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. In the wire event <code>STATE_DELTA</code>, how is the state update represented?</p>
+          <div class="q-opts">
+            <button data-opt="a">As the entire new state object, replacing the old one</button>
+            <button data-opt="b">As a JSON Patch (RFC 6902) array of operations — the incremental change only</button>
+            <button data-opt="c">As a LangGraph checkpoint blob</button>
+          </div>
+          <p class="q-explain"><code>STATE_DELTA</code> carries just the change as a JSON Patch array (<code>{"op":"replace","path":…,"value":…}</code>). The full-state variant is a separate event, <code>STATE_SNAPSHOT</code>.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A teammate argues "AG-UI versus LangGraph — we must choose one". Why is that framing partly wrong?</p>
+          <div class="q-opts">
+            <button data-opt="a">Because LangGraph is deprecated and AG-UI is the only option now</button>
+            <button data-opt="b">Because AG-UI and LangGraph are the same thing under different names</button>
+            <button data-opt="c">Because they sit on different layers — presentation vs orchestration — and you can run AG-UI in front of a LangGraph agent; the real choice is whether you also drop the graph runtime</button>
+          </div>
+          <p class="q-explain">AG-UI is agent&#8596;user; LangGraph is agent&#8596;runtime. An adapter lets AG-UI front a LangGraph backend, so adopting AG-UI is not automatically leaving LangGraph. The narrower, honest decision is whether this app needs the graph's durable orchestration at all.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>LangGraph and Deep Agents gave you a whole runtime — durable orchestration, checkpointing, conditional branching, state reducers, interrupts and subgraphs. For complex, long-running, branch-heavy workflows that is worth keeping.</li>
+          <li>The pain that drives a move is real: graph boilerplate around what is often a straight loop, framework coupling and version churn, an awkward path to a rich streaming UI, orchestration many apps never use, and lock-in.</li>
+          <li>AG-UI is a thin, open, framework-agnostic streaming contract between agent and UI — first-class streaming, tool visibility, shared bidirectional state, generative UI and human-in-the-loop. It is a protocol, not a runtime.</li>
+          <li>The critical honest part: with AG-UI you now own the control loop, orchestration, checkpointing and durable resume, branching, and retries yourself. AG-UI's strengths face the human; the graph framework's strengths face the runtime.</li>
+          <li>There is no universal winner — score your real app with the capability-matrix method (chapter 96) and the is-LangGraph-right test (chapter 94). Keep the graph for durable, branch-heavy, resumable work; go AG-UI-plus-a-light-loop for streaming-first, UI-centric agents.</li>
+          <li>The mature pattern is both, on their own layers: run AG-UI in front of your runtime. "AG-UI vs LangGraph" is partly a false binary — the honest question is whether this app needs the graph's runtime at all.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

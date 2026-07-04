@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AG-UI: closing the agent-to-user gap — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch118">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XIV · The Agent-User Layer: AG-UI</div>
+        <h1>AG-UI: closing the agent-to-user gap</h1>
+        <p class="ch-tagline">MCP connects agents to tools, A2A to each other — AG-UI connects them to the human. The event-stream protocol that makes an agent's work visible, live, in a real UI.</p>
+        <div class="ch-meta"><span>~28 min</span><span>Chapter 118 of 123</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Two kitchens, same order. In the first, you hand your ticket through a hatch and the shutter comes down. A single word glows above it: <em>preparing</em>. Twenty minutes pass. Is the chef searing your fish or has he wandered off for a smoke? You cannot tell. You cannot even tell if he read the note about the allergy. All you can do is stare at the shutter and hope. When the dish finally slides out, it is a surprise — sometimes a good one.</p>
+        <p>The second kitchen is a glass counter. You watch the chef pick up your ticket, call out "one grilled fish, no butter", reach for the pan, sear, plate. Halfway through he leans over: "the fish is small today — add prawns?" You nod, he adjusts, and thirty seconds later the plate is in front of you. Same food, same chef, same twenty minutes — but you were <em>with him the whole way</em>. You trusted the meal before you tasted it.</p>
+        <p>Every AI agent is a chef. The first kitchen is a frozen <code>loading...</code> spinner. The second is a chat window that streams its thinking, shows the tool it just grabbed, and asks you a question mid-task. The glass counter has a name now. It is called <strong>AG-UI</strong>.</p>
+      </section>
+
+      <h2>The third protocol — the leg that was missing</h2>
+      <p>Step back and look at the whole stack you have built across this handbook. In <a href="ch074-why-mcp-exists.html">chapter 75</a> you met <dfn>MCP</dfn> — the Model Context Protocol — connecting an agent <em>downward</em> to its tools and data. In <a href="ch080-a2a-protocol.html">chapter 81</a> you met <dfn>A2A</dfn>, connecting an agent <em>sideways</em> to other agents, as peers. Both point outward, into the machine world. Neither says a word about the one participant who started all this: the human at a screen, waiting.</p>
+      <p>That is the gap. Your agent can query a database, hire a colleague across the network, and reason for two minutes straight — and the person who asked sees a spinner. The work is invisible; when it lands, it lands as a wall of text with no story behind it. Trust leaks out of exactly this gap.</p>
+      <p><dfn>AG-UI</dfn> — the Agent-User Interaction Protocol — is the third leg. It is an open, event-based protocol, created by <strong>CopilotKit</strong>, that standardises how an agent <em>backend</em> streams its activity to a user-facing <em>frontend</em>, and how that UI sends state and actions back the other way. The one-sentence pitch completes the trio you already know:</p>
+      <p><strong>MCP connects an agent to its tools. A2A connects it to other agents. AG-UI connects it to the human in front of it.</strong> Tools below, colleagues across, the user in front.</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>MCP</th><th>A2A</th><th>AG-UI</th></tr>
+        <tr><td>Connects an agent to</td><td>Tools, data — its hands</td><td>Other agents — its colleagues</td><td>The user and their frontend — its face</td></tr>
+        <tr><td>The far side is</td><td>A server offering passive capabilities</td><td>A peer agent with its own model and loop</td><td>A live UI a human is watching right now</td></tr>
+        <tr><td>Typical payload</td><td>A tool call — request in, result out</td><td>A task with a lifecycle, minutes to days</td><td>A stream of small events — tokens, tool chips, state patches</td></tr>
+        <tr><td>Who started it</td><td>Anthropic</td><td>Google, now the Linux Foundation</td><td>CopilotKit</td></tr>
+      </table></div>
+
+      <h2>What a request/response API cannot say</h2>
+      <p>Why invent a protocol at all? Because the plain <a href="ch039-async-await.html">request/response</a> shape you would reach for by default — send a request, wait, get one JSON blob back — physically cannot express what a running agent needs to say. An agent's work is not one answer; it is a <em>performance over time</em>. Five things happen during that performance, and a single blob can carry none of them:</p>
+      <ul>
+        <li><strong>Streaming text.</strong> The answer arrives token by token, the way you met in <a href="ch040-streaming-responses.html">chapter 41</a>, so the reader starts reading before the sentence is finished.</li>
+        <li><strong>Progress and tool visibility.</strong> "I am now searching the invoices" — the little chip that shows which tool the agent grabbed and what it got back, so a two-minute wait feels like watching, not hoping.</li>
+        <li><strong>Shared state.</strong> A structured object — a draft document, a form, a plan — that both sides hold and both sides can change, kept in sync as the agent edits it.</li>
+        <li><strong>Generative UI.</strong> The agent asks the frontend to render a real widget — a chart, a confirmation card, a date picker — instead of dumping raw text.</li>
+        <li><strong>Human-in-the-loop.</strong> The agent pauses mid-run, shows you a card, and waits for your click before continuing — the glass-counter chef asking about the prawns.</li>
+      </ul>
+      <p>A request/response API gives you exactly one moment to speak: the end. AG-UI turns that one moment into a live channel. The mechanism is the humble <dfn>event stream</dfn> — instead of one big reply, the backend emits a sequence of small, typed <dfn>events</dfn> as things happen, and the UI reacts to each the instant it arrives. If <a href="ch038-generators-and-yield.html">generators and <code>yield</code></a> from chapter 39 are ringing a bell, hold that thought — you are about to run exactly that idea.</p>
+
+      <h2>The architecture: where AG-UI sits in the stack</h2>
+      <p>Before the wire details, see the whole board. AG-UI is the pipe in the middle — the frontend on one end, the agent backend on the other, the machine world (MCP tools, A2A peers) hanging off the back. Walk the round trip:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The stack">
+          <h3>1. The four layers, end to end</h3>
+          <div class="diagram">
+            <div class="d-box hot">User<small>at a screen</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Frontend<small>CopilotKit / React</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">AG-UI stream<small>events over SSE</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Agent backend<small>the loop</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">MCP tools<br>A2A peers</div>
+          </div>
+          <p class="step-cap">Read left to right: the human, the UI they see, the AG-UI event channel, the agent doing the work, and behind it the tools and peer agents from the last two Acts. AG-UI owns exactly the middle pipe — nothing more, nothing less.</p>
+        </div>
+        <div class="step" data-title="Request">
+          <h3>2. The UI opens a run</h3>
+          <div class="diagram">
+            <div class="d-box">User</div>
+            <div class="d-box hot">Frontend<small>POSTs RunAgentInput</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Agent backend<small>starts the loop</small></div>
+          </div>
+          <p class="step-cap">The human types. The frontend sends one HTTP POST carrying a <code>RunAgentInput</code> — the thread id, a run id, the messages so far, the shared state, and the tools the UI can render. That kicks off a single <em>run</em> of the agent.</p>
+        </div>
+        <div class="step" data-title="Stream">
+          <h3>3. The backend streams events back</h3>
+          <div class="diagram">
+            <div class="d-box dim">Frontend</div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Agent backend<small>RUN_STARTED, TEXT_MESSAGE_CONTENT, TOOL_CALL_START ...</small></div>
+          </div>
+          <p class="step-cap">Instead of one reply, the backend holds the connection open and emits a sequence of typed events as work happens — the loop from <a href="ch045-react-loop-by-hand.html">chapter 46</a> narrating itself out loud. The default carrier is Server-Sent Events.</p>
+        </div>
+        <div class="step" data-title="Render">
+          <h3>4. The UI renders each event live</h3>
+          <div class="diagram">
+            <div class="d-box good">Frontend<small>bubble grows, tool chip appears, chart renders</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">User<small>watches it happen</small></div>
+          </div>
+          <p class="step-cap">Text events grow the chat bubble. Tool events draw a "calling search..." chip. A state event re-renders a live form. The human watches the chef cook — the glass counter, in software.</p>
+        </div>
+        <div class="step" data-title="Reply">
+          <h3>5. The human answers back into the run</h3>
+          <div class="diagram">
+            <div class="d-box hot">User<small>clicks Approve</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Frontend<small>setState / respond()</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Agent backend<small>resumes</small></div>
+          </div>
+          <p class="step-cap">The channel is two-way. When the agent pauses for a decision, the UI sends the human's answer back into the same run, and the agent continues — the prawns question, answered. Then the loop finishes and the run ends.</p>
+        </div>
+      </div>
+
+      <h2>The wire: a stream of typed events</h2>
+      <p>Now the plumbing, and it is refreshingly ordinary. The default <dfn>transport</dfn> — the way bytes actually travel — is HTTP plus <dfn>Server-Sent Events (SSE)</dfn>, a decades-old web standard where the server keeps one connection open and pushes text frames as they occur. Each event is serialised as a line beginning <code>data:</code>, a JSON object, and a blank line. (A high-performance binary HTTP option exists for production, and the protocol is transport-agnostic — WebSockets and webhooks work too — but SSE is the one you will meet first.)</p>
+      <p>Read a real stream the way the frontend does. Each event has a <code>type</code> in <strong>SCREAMING_SNAKE_CASE</strong>; the JSON field names are camelCase. Click the annotated lines:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">the SSE response body — one agent run, narrated event by event</div>
+        <div class="wl-line"><code>data: {"type": "RUN_STARTED", "threadId": "t-1", "runId": "r-1"}</code>
+          <div class="wl-note">The opening bracket of the whole performance. Lifecycle events (<code>RUN_STARTED</code>, <code>RUN_FINISHED</code>, <code>RUN_ERROR</code>) frame every run; the UI flips the spinner on here. Note the field names — <code>threadId</code>, <code>runId</code> — are camelCase on the wire.</div></div>
+        <div class="wl-line"><code>data: {"type": "TEXT_MESSAGE_START", "messageId": "m-1", "role": "assistant"}</code>
+          <div class="wl-note">A new chat bubble is beginning. The message will arrive in pieces, so it is bracketed by a START and an END with content in between — the same shape as the streaming you saw in chapter 41.</div></div>
+        <div class="wl-line"><code>data: {"type": "TEXT_MESSAGE_CONTENT", "messageId": "m-1", "delta": "Let me check "}</code>
+          <div class="wl-note">One token-ish chunk of text. The <dfn>delta</dfn> — the little "what changed" fragment — is appended to the bubble. Dozens of these stream by, and the sentence grows on screen in real time.</div></div>
+        <div class="wl-line"><code>data: {"type": "TOOL_CALL_START", "toolCallId": "tc-1", "toolCallName": "search_invoices"}</code>
+          <div class="wl-note">The agent decided to use a tool. This is the "calling search_invoices..." chip lighting up. Tool events come as a START / ARGS / END trio, mirroring the tool-calling handshake from <a href="ch035-tool-calling.html">chapter 36</a>.</div></div>
+        <div class="wl-line"><code>data: {"type": "TOOL_CALL_ARGS", "toolCallId": "tc-1", "delta": "{\"vendor\": \"Acme\"}"}</code>
+          <div class="wl-note">The tool's arguments, also streamed as deltas because the model writes them token by token. The UI can show the query forming live.</div></div>
+        <div class="wl-line"><code>data: {"type": "TOOL_CALL_RESULT", "toolCallId": "tc-1", "content": "3 invoices found"}</code>
+          <div class="wl-note">What the tool returned, flowing back so the chip can show its result. The agent will see this too and reason on it — the observation step of the loop, made visible.</div></div>
+        <div class="wl-line"><code>data: {"type": "STATE_DELTA", "delta": [{"op": "replace", "path": "/total", "value": 1770}]}</code>
+          <div class="wl-note">A patch to the <dfn>shared state</dfn> — the structured object both sides hold. The <code>delta</code> here is a JSON Patch array (RFC 6902): a list of tiny <em>op / path / value</em> edits, so only what changed travels. A full <code>STATE_SNAPSHOT</code> is sent occasionally to resync.</div></div>
+        <div class="wl-line"><code>data: {"type": "TEXT_MESSAGE_END", "messageId": "m-1"}</code>
+          <div class="wl-note">This bubble is complete. Balanced against the START — the UI now knows the assistant message is final and can stop its typing cursor.</div></div>
+        <div class="wl-line"><code>data: {"type": "RUN_FINISHED", "threadId": "t-1", "runId": "r-1"}</code>
+          <div class="wl-note">The closing bracket. Spinner off, run over. There are ~16 standard event types in all — the lifecycle, text, tool and state families you just saw, plus <code>RAW</code> and <code>CUSTOM</code> escape hatches for anything the standard set does not cover. <a href="ch119-ag-ui-event-model.html">The next chapter</a> maps the full event model, family by family.</div></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The event set is versioned and it evolves. The newer <code>REASONING_*</code> events (for streaming an agent's chain-of-thought) replaced an older <code>THINKING_*</code> set that was removed at the 1.0 release. When you read a stream in the wild and see a type this chapter did not name, that is expected — check the current event reference at docs.ag-ui.com rather than assuming it is a bug.</p></div>
+
+      <h2>Six words that carry the protocol</h2>
+      <p>Flip each card until the definition feels obvious:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">agent-to-user gap</span><span class="flip-back">The missing link: an agent can reach tools (MCP) and peers (A2A) but has no standard way to show its live work to the human watching. AG-UI fills exactly this gap.</span></button>
+        <button class="flip" type="button"><span class="flip-front">event stream</span><span class="flip-back">Instead of one final reply, the backend emits a sequence of small typed events as things happen, over SSE by default. The UI reacts to each the instant it arrives.</span></button>
+        <button class="flip" type="button"><span class="flip-front">generative UI</span><span class="flip-back">The agent asks the frontend to render a real component — a chart, a form, a confirmation card — from a tool call, instead of returning plain text.</span></button>
+        <button class="flip" type="button"><span class="flip-front">shared state</span><span class="flip-back">A structured object both sides hold. The backend syncs it with STATE_SNAPSHOT / STATE_DELTA events; the UI can edit it and push changes back into the agent's next turn.</span></button>
+        <button class="flip" type="button"><span class="flip-front">framework-agnostic</span><span class="flip-back">AG-UI is a wire contract, not a runtime. It can front a raw LLM loop, CrewAI, Mastra, Agno, LangGraph, Pydantic AI, the Microsoft Agent Framework — anything that can emit the events.</span></button>
+        <button class="flip" type="button"><span class="flip-front">protocol, not engine</span><span class="flip-back">AG-UI defines the messages between agent and UI. It does not give you the agent loop, orchestration, checkpointing or branching — you build or bring those. Say this out loud before adopting it.</span></button>
+      </div>
+
+      <h2>Feel the difference in Python</h2>
+      <p>React cannot run on this page, so we will not fake it. Instead, here is the <em>heart</em> of AG-UI in pure Python: the contrast between a silent function that returns only the final answer, and a <a href="ch038-generators-and-yield.html">generator</a> that <code>yield</code>s an event every time something happens — plus a tiny reducer standing in for the CopilotKit frontend. Press <strong>Run</strong> and watch the two experiences diverge.</p>
+
+      <div class="pyrun" data-title="Silent function vs AG-UI event stream — run me">
+<textarea class="py-src" spellcheck="false">
+# ---- THE OLD WAY: one silent function --------------------
+# The UI calls this, then waits. Nothing to show until the
+# very end, so the screen is a frozen "loading..." spinner.
+def answer_silently(question):
+    # (pretend this thinks, calls a tool, writes a paragraph)
+    return "Your invoice total is 1770 rupees (1500 + 18% GST)."
+
+# ---- THE AG-UI WAY: a generator of events ---------------
+# Same work, but it YIELDS a typed event whenever something
+# happens. Event 'type' is SCREAMING_SNAKE_CASE; JSON field
+# names are camelCase, exactly as on the real wire.
+def answer_streaming(question):
+    yield {"type": "RUN_STARTED", "runId": "r-1"}
+    yield {"type": "TEXT_MESSAGE_START", "messageId": "m-1"}
+    for chunk in ["Let me ", "check ", "the invoice. "]:
+        yield {"type": "TEXT_MESSAGE_CONTENT", "messageId": "m-1",
+               "delta": chunk}
+    yield {"type": "TOOL_CALL_START", "toolCallId": "tc-1",
+           "toolCallName": "calc_gst"}
+    yield {"type": "TOOL_CALL_RESULT", "toolCallId": "tc-1",
+           "content": "270"}
+    for chunk in ["Total is ", "1770 rupees."]:
+        yield {"type": "TEXT_MESSAGE_CONTENT", "messageId": "m-1",
+               "delta": chunk}
+    yield {"type": "TEXT_MESSAGE_END", "messageId": "m-1"}
+    yield {"type": "RUN_FINISHED", "runId": "r-1"}
+
+# ---- THE FRONTEND: a ~15-line reducer + render log ------
+# This is, in spirit, what CopilotKit does in React: fold
+# each event into on-screen state as it arrives.
+def render_ui(events):
+    bubble = ""
+    for e in events:
+        t = e["type"]
+        if t == "RUN_STARTED":
+            print("[spinner ON] agent is working...")
+        elif t == "TEXT_MESSAGE_CONTENT":
+            bubble += e["delta"]
+            print("  bubble:", repr(bubble))
+        elif t == "TOOL_CALL_START":
+            print("  [tool chip] calling", e["toolCallName"], "...")
+        elif t == "TOOL_CALL_RESULT":
+            print("  [tool chip] ->", e["content"])
+        elif t == "RUN_FINISHED":
+            print("[spinner OFF] done")
+
+print("=== OLD WAY: silent function ===")
+print("UI shows: loading...")
+print("UI shows: loading...  (still nothing)")
+print("final:", answer_silently("invoice total with GST?"))
+print()
+print("=== AG-UI WAY: event stream ===")
+render_ui(answer_streaming("invoice total with GST?"))
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it to learn it. Add a <code>STATE_DELTA</code> event carrying a JSON Patch (<code>[{"op": "replace", "path": "/total", "value": 1770}]</code>) and teach the reducer to apply it to a state dict — now you have modelled shared state. Or delete the <code>TEXT_MESSAGE_END</code> event and notice the UI never knows the bubble is finished: that missing bracket is a real class of streaming bug.</p></div>
+
+      <h2>The two sides in real code</h2>
+      <p>On the backend, the Python SDK gives you typed event classes and an encoder that turns them into SSE frames. The event classes take snake_case keyword arguments that serialise to the camelCase JSON you saw on the wire. A minimal endpoint is just a generator wrapped in a streaming response:</p>
+
+      <div class="code-title">agent_server.py — the backend, with the ag_ui SDK</div>
+      <pre><code class="language-python">from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from ag_ui.core import (RunAgentInput, RunStartedEvent,
+                        TextMessageStartEvent, TextMessageContentEvent,
+                        TextMessageEndEvent, RunFinishedEvent)
+from ag_ui.encoder import EventEncoder
+
+app = FastAPI()
+
+@app.post("/")
+async def run(input: RunAgentInput, accept: str = "text/event-stream"):
+    encoder = EventEncoder(accept=accept)
+
+    def gen():
+        # snake_case kwargs -&gt; camelCase JSON on the wire
+        yield encoder.encode(RunStartedEvent(
+            thread_id=input.thread_id, run_id=input.run_id))
+        yield encoder.encode(TextMessageStartEvent(message_id="m-1"))
+        for chunk in ["Let me ", "check ", "the invoice."]:
+            yield encoder.encode(TextMessageContentEvent(
+                message_id="m-1", delta=chunk))
+        yield encoder.encode(TextMessageEndEvent(message_id="m-1"))
+        yield encoder.encode(RunFinishedEvent(
+            thread_id=input.thread_id, run_id=input.run_id))
+
+    return StreamingResponse(gen(), media_type="text/event-stream")</code></pre>
+
+      <p>On the frontend, <strong>CopilotKit</strong> (React) consumes that stream. You wrap your app in a provider, drop in a prebuilt chat, and — this is the powerful part — use hooks to wire shared state and human-in-the-loop widgets. The syntax below is illustrative React; you are reading it, not running it:</p>
+
+      <div class="code-title">App.jsx — the frontend, with CopilotKit</div>
+      <pre><code class="language-jsx">import { CopilotKit, CopilotChat } from "@copilotkit/react-ui";
+import { useCoAgent, useCopilotAction } from "@copilotkit/react-core";
+
+function Invoice() {
+  // Shared state: the agent's STATE_SNAPSHOT / STATE_DELTA
+  // events update `state`; setState() pushes UI edits back
+  // into the agent's next turn.
+  const { state, setState, running } = useCoAgent({
+    name: "invoiceAgent",
+    initialState: { total: 0 },
+  });
+
+  // Human-in-the-loop: renderAndWaitForResponse keeps this
+  // card mounted until the human clicks. `respond(value)`
+  // returns that value to the agent as the tool result.
+  useCopilotAction({
+    name: "confirmPayment",
+    description: "Ask the human to approve a payment.",
+    parameters: [{ name: "amount", type: "number" }],
+    renderAndWaitForResponse: ({ args, respond }) =&gt; (
+      &lt;div&gt;
+        Approve ₹{args.amount}?
+        &lt;button onClick={() =&gt; respond("approved")}&gt;Yes&lt;/button&gt;
+        &lt;button onClick={() =&gt; respond("declined")}&gt;No&lt;/button&gt;
+      &lt;/div&gt;
+    ),
+  });
+
+  return &lt;div&gt;Total: ₹{state.total} {running &amp;&amp; "…"}&lt;/div&gt;;
+}
+
+export default function App() {
+  return (
+    &lt;CopilotKit runtimeUrl="/api/copilotkit" agent="invoiceAgent"&gt;
+      &lt;Invoice /&gt;
+      &lt;CopilotChat /&gt;
+    &lt;/CopilotKit&gt;
+  );
+}</code></pre>
+
+      <p>Read what those two hooks buy you. <code>useCoAgent</code> gives the component a live copy of the agent's shared state and a <code>setState</code> to push edits back — that is <dfn>bidirectional state</dfn>, the draft document both sides can hold. <code>useCopilotAction</code> with <code>renderAndWaitForResponse</code> is <dfn>human-in-the-loop</dfn>: an agent tool call renders a real React card, the run <em>pauses</em> while the card waits, and the human's click becomes the tool's result — the same pause-and-resume idea you met as an <a href="ch062-human-in-the-loop.html">interrupt</a> in chapter 63, but drawn on the user's screen instead of a debugger.</p>
+
+      <h2>Who made it, and what it fronts</h2>
+      <p>Provenance matters for a protocol, so name it plainly. AG-UI was created and open-sourced by <strong>CopilotKit</strong>, the team behind the React toolkit of the same name, to standardise the agent-to-frontend link they kept rebuilding by hand. Its whole selling point is that it is <dfn>framework-agnostic</dfn>: the events are a neutral contract, so the same CopilotKit frontend can sit in front of a raw LLM loop you wrote yourself, or CrewAI, Mastra, Agno, LangGraph, Pydantic AI, LlamaIndex, or the Microsoft Agent Framework. Whatever runs the agent, if it can emit AG-UI events, the UI does not care which engine is behind the glass. That neutrality is the same play that made MCP and A2A stick: a protocol nobody has to marry a single vendor to adopt.</p>
+
+      <h2>An honest maturity check — protocol, not engine</h2>
+      <p>Here is the part a vendor slide would skip, and it is the single most important sentence in this Act. <strong>AG-UI is a protocol, not an orchestration engine.</strong> It is the contract between an agent and a UI — the wire format for events flowing both ways. It is emphatically <em>not</em> a runtime like <a href="ch057-why-graphs.html">LangGraph</a>. It does not give you the agent loop, the orchestration, the <a href="ch061-checkpointing.html">checkpointing</a>, the durable state, or the branching. Those you still build or bring yourself.</p>
+      <p>Get this backwards and you will be disappointed. AG-UI will not manage a multi-step plan, resume a crashed run, or route between sub-agents. It happily <em>carries</em> the events a LangGraph run emits, or an interrupt a durable engine raises — but the durability and routing live in that engine, not the protocol. It is the glass counter and the order-callouts: it makes the kitchen visible and lets you talk to the chef. It is not the kitchen. <a href="ch093-is-langgraph-right.html">Chapter 94's</a> question — do you even need a heavy graph framework? — is a different axis from "do you want your agent's work visible in a UI?" You answer them independently, and <a href="ch122-ag-ui-vs-langgraph-deep-agents.html">chapter 122</a> takes that comparison head-on.</p>
+      <p>The ecosystem is younger than the idea. The event set churned on the way to 1.0 (the <code>THINKING_*</code> to <code>REASONING_*</code> rename is one visible scar), integration polish varies across the frameworks it fronts, and much of what teams ship today is still a bespoke SSE stream reinvented per project. But the direction is real: event stream, shared state, generative UI, human-in-the-loop are the durable vocabulary of agent frontends now. Learn the shapes; verify the exact event names against the current docs before you code.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet AG-UI first as a dependency — <code>@copilotkit/react-core</code> in a <code>package.json</code>, or <code>ag-ui</code> in a <code>requirements.txt</code> — and as an endpoint that returns <code>Content-Type: text/event-stream</code> instead of <code>application/json</code>. In the browser network tab it looks like a request that never "finishes": a long-lived response with <code>data: {...}</code> lines ticking in. In a merge request, "stream the agent over AG-UI" means: emit the lifecycle/text/tool events from your loop and mount a CopilotKit provider on the frontend. And when a teammate says the chat "renders the tool call live" or "waits on a human approval card mid-run", you now know precisely which events and which hook are doing that work.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. MCP connects an agent to tools and A2A connects it to other agents. What gap does AG-UI fill?</p>
+          <div class="q-opts">
+            <button data-opt="a">A faster transport for MCP tool calls</button>
+            <button data-opt="b">A way for two agents to share memory</button>
+            <button data-opt="c">The link from the agent backend to the human's frontend — streaming its live work and taking input back</button>
+          </div>
+          <p class="q-explain">MCP points down to tools, A2A points across to peers; both face the machine world. AG-UI is the third leg — the standard channel between the agent and the user watching at a screen. Tools below, colleagues across, the user in front.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Why can a plain request/response API not express what a running agent needs to show?</p>
+          <div class="q-opts">
+            <button data-opt="a">Request/response is too slow over HTTP</button>
+            <button data-opt="b">It offers one moment to speak — the end — but an agent's work is a performance over time: streaming text, tool progress, state changes, pauses for input</button>
+            <button data-opt="c">JSON cannot represent tool calls</button>
+          </div>
+          <p class="q-explain">One request, one blob back, at the very end. That shape cannot carry token-by-token text, a live tool chip, an evolving shared object, or a mid-run pause for a human decision. An event stream turns the single final moment into a live channel.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. In an AG-UI stream you see <code>{"type": "STATE_DELTA", "delta": [{"op": "replace", "path": "/total", "value": 1770}]}</code>. What is this?</p>
+          <div class="q-opts">
+            <button data-opt="a">A JSON Patch describing a small change to the shared state both sides hold, so only what changed travels</button>
+            <button data-opt="b">An error, because state cannot be sent as an event</button>
+            <button data-opt="c">The final answer, encoded in a special format</button>
+          </div>
+          <p class="q-explain">Shared state is synced with <code>STATE_SNAPSHOT</code> (the whole object) and <code>STATE_DELTA</code> (a JSON Patch array of op/path/value edits, RFC 6902). Sending only the delta keeps a live document in sync without re-transmitting all of it.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. A colleague says "let's adopt AG-UI so we get orchestration, checkpointing and branching for free." What is the honest correction?</p>
+          <div class="q-opts">
+            <button data-opt="a">Correct — AG-UI is a full replacement for LangGraph</button>
+            <button data-opt="b">Correct, but only if you also install CopilotKit on the backend</button>
+            <button data-opt="c">AG-UI is a protocol, not an engine — it is the agent-to-UI contract; it does not provide the loop, orchestration, checkpointing or branching, which you still build or bring</button>
+          </div>
+          <p class="q-explain">AG-UI standardises the events between agent and UI. It happily carries the output of a LangGraph run, but the durability and routing live in that engine, not in the protocol. It is the glass counter, not the kitchen.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">5. Which claim about AG-UI's origin and reach is accurate?</p>
+          <div class="q-opts">
+            <button data-opt="a">Anthropic created it and it only works with Claude</button>
+            <button data-opt="b">CopilotKit created it, and it is framework-agnostic — it can front a raw loop, CrewAI, Mastra, Agno, LangGraph, Pydantic AI, the Microsoft Agent Framework, and more</button>
+            <button data-opt="c">Google created it and it only fronts LangGraph</button>
+          </div>
+          <p class="q-explain">AG-UI was created and open-sourced by CopilotKit. Its whole value is neutrality: the events are a wire contract, so the same frontend sits in front of whatever engine emits them — no vendor marriage required.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>AG-UI is the third protocol in the stack: MCP connects an agent to tools, A2A to other agents, and AG-UI to the human's frontend — tools below, colleagues across, the user in front.</li>
+          <li>It exists because a request/response API gives an agent one moment to speak; AG-UI replaces that with a live event stream carrying streaming text, tool progress, shared state, generative UI and human-in-the-loop pauses.</li>
+          <li>The wire is ordinary: HTTP + Server-Sent Events by default, ~16 typed events with SCREAMING_SNAKE_CASE <code>type</code> and camelCase JSON fields; <code>STATE_DELTA</code> carries JSON Patch edits so only changes travel.</li>
+          <li>Two sides: a Python backend emits events (the <code>ag_ui</code> SDK + an <code>EventEncoder</code>, streamed from FastAPI), and a CopilotKit React frontend consumes them — <code>useCoAgent</code> for shared state, <code>useCopilotAction</code> with <code>renderAndWaitForResponse</code> for human-in-the-loop.</li>
+          <li>It was created by CopilotKit and is framework-agnostic — the same UI can front a raw loop, CrewAI, Mastra, Agno, LangGraph, Pydantic AI or the Microsoft Agent Framework.</li>
+          <li>Honest limit: AG-UI is a protocol, not an orchestration engine. It does not give you the loop, checkpointing, durability or branching — you build or bring those, and chapter 122 weighs it against a heavy graph framework directly.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

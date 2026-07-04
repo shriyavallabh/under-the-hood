@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The frontend: CopilotKit, generative UI, shared state — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch121">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XIV · The Agent-User Layer: AG-UI</div>
+        <h1>The frontend: CopilotKit, generative UI, shared state</h1>
+        <p class="ch-tagline">Rendering the stream with React, useCoAgent for bidirectional state, useCopilotAction for generative UI, and renderAndWaitForResponse for human-in-the-loop.</p>
+        <div class="ch-meta"><span>~28 min</span><span>Chapter 121 of 123</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Sit in the co-pilot seat of a modern airliner. The captain — quick, tireless, a little too eager — is flying. In front of you the instruments are alive: the altimeter ticks up as she climbs, a moving-map redraws the route, a weather panel blooms over the next waypoint the instant she looks at it. You are not reading a report she wrote an hour ago. You are watching her fly, live, dial by dial.</p>
+        <p>And the panel is not a one-way screen. When she proposes a course change to dodge a storm, a switch on your console lights amber and the aircraft <em>waits</em> — she will not bank until you flip it to confirm. You can also reach up mid-flight and nudge the target altitude yourself; on her next scan she sees your number and adjusts. Two hands on one machine, each seeing what the other does.</p>
+        <p>That cockpit is a good AG-UI frontend. The captain is the agent; the glass is <strong>CopilotKit</strong>, a React library; the live dials are the streamed events; the amber confirm-switch is human-in-the-loop; and the altitude you dial back is shared state flowing the other way. This chapter builds that glass.</p>
+      </section>
+
+      <h2>Where we are: a stream with no windscreen yet</h2>
+      <p>Quick recap of the chapter before this one. In <a href="ch120-building-an-ag-ui-backend.html">building an AG-UI backend</a> you wired a FastAPI endpoint that accepts a <code>RunAgentInput</code> and streams back a sequence of AG-UI events — <code>RUN_STARTED</code>, a flurry of <code>TEXT_MESSAGE_CONTENT</code>, some <code>TOOL_CALL_*</code>, a <code>STATE_DELTA</code>, then <code>RUN_FINISHED</code> — each one serialised over <a href="ch040-streaming-responses.html">Server-Sent Events</a> as a <code>data: {json}\n\n</code> line. You had a firehose of typed events leaving the server. What you did not have was anything catching them and turning them into pixels.</p>
+      <p>That catcher is the frontend, and its job is unglamorous but exact: consume the event stream, keep a little state machine in sync, and paint. You could hand-write that reducer in raw JavaScript — almost nobody does, because the reference frontend already exists and is very good.</p>
+
+      <h2>CopilotKit: the React library that also authored the protocol</h2>
+      <p><dfn>CopilotKit</dfn> is an open-source React library for building agent-facing UIs — chat surfaces, in-app copilots, agent-driven dashboards. It matters here for one reason worth saying plainly: <strong>CopilotKit is the team that created AG-UI.</strong> The protocol was extracted from their product, not bolted on afterwards. So your frontend is the reference implementation of the standard, by the people who wrote the standard — unusually clean provenance.</p>
+      <p>Before any hook, there is a wrapper. The <dfn>provider</dfn> — a React component you put near the root of your app that hands shared context down to everything inside it — is <code>&lt;CopilotKit&gt;</code>. It needs two things: where the agent lives, and which agent to talk to.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">App.tsx — wrapping the app in the provider</div>
+        <div class="wl-line"><code>import { CopilotKit } from "@copilotkit/react-core";</code>
+          <div class="wl-note">CopilotKit ships as a few packages. <code>react-core</code> holds the provider and the hooks; a separate <code>react-ui</code> package holds prebuilt components like the chat panel.</div></div>
+        <div class="wl-line"><code>import { CopilotChat } from "@copilotkit/react-ui";</code></div>
+        <div class="wl-line"><code>&nbsp;</code></div>
+        <div class="wl-line"><code>export function App() {</code></div>
+        <div class="wl-line"><code>  return (</code></div>
+        <div class="wl-line"><code>    &lt;CopilotKit runtimeUrl="/api/copilotkit" agent="flightAgent"&gt;</code>
+          <div class="wl-note"><code>runtimeUrl</code> is where the browser POSTs its <code>RunAgentInput</code> — the endpoint that fronts your AG-UI backend. <code>agent="flightAgent"</code> names <em>which</em> registered agent this UI drives, so one app can host several. Everything nested inside can now see the stream.</div></div>
+        <div class="wl-line"><code>      &lt;FlightDeck /&gt;</code>
+          <div class="wl-note">Your own custom instruments — the moving map, the altimeter. These read agent state through hooks you will meet in a moment.</div></div>
+        <div class="wl-line"><code>      &lt;CopilotChat /&gt;</code>
+          <div class="wl-note">The prebuilt chat surface. It subscribes to the run automatically and renders the streamed <code>TEXT_MESSAGE_*</code> tokens as they arrive, plus tool calls as they happen — a whole working chat with zero event-handling code from you. This is the "just give me a copilot" path.</div></div>
+        <div class="wl-line"><code>    &lt;/CopilotKit&gt;</code></div>
+        <div class="wl-line"><code>  );</code></div>
+        <div class="wl-line"><code>}</code></div>
+      </div>
+
+      <p>That is the whole "hello world". <code>&lt;CopilotChat /&gt;</code> already turns the event firehose into a scrolling conversation, streaming word by word, showing tool calls as they run. If all you want is a chatbot glued to an AG-UI agent, you are done. The rest of the chapter is the three things that make a copilot feel like a cockpit rather than a chat box: <em>shared state</em>, <em>generative UI</em>, and <em>human-in-the-loop</em>.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>CopilotKit is React-only. AG-UI the protocol is framework-agnostic — the wire format is just JSON over SSE, so a Vue, Svelte or plain-JS client could consume the same stream. But the batteries-included frontend this chapter teaches is React. That is why the runnable exercise later is a <em>Python simulation</em> of the reducer rather than the React itself — React cannot run in our in-browser Python sandbox.</p></div>
+
+      <h2>Shared state: instruments that read the agent, and a dial you can turn back</h2>
+      <p>The chat panel is one-directional narration. A cockpit is not: the dials reflect the agent's live state, <em>and</em> you can reach in and change that state. AG-UI carries this with two event types you met in <a href="ch119-ag-ui-event-model.html">the event model chapter</a> — <code>STATE_SNAPSHOT</code> (here is the whole state object) and <code>STATE_DELTA</code> (here is a small <a href="ch119-ag-ui-event-model.html">JSON Patch</a> to apply to it). CopilotKit exposes both directions through one hook.</p>
+      <p><dfn>useCoAgent</dfn> is the hook that binds a React component to an agent's shared state. You give it the agent's name and an initial state; it gives you back the live state, a setter, and a running flag.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">FlightDeck.tsx — bidirectional shared state</div>
+        <div class="wl-line"><code>import { useCoAgent } from "@copilotkit/react-core";</code></div>
+        <div class="wl-line"><code>&nbsp;</code></div>
+        <div class="wl-line"><code>const { state, setState, running } = useCoAgent({</code>
+          <div class="wl-note">Three things come back. <code>state</code> is the current shared object, re-rendered whenever the agent sends a snapshot or delta. <code>setState</code> pushes a change from the UI <em>into</em> the agent. <code>running</code> is true while a run is in flight — handy for spinners and disabling controls.</div></div>
+        <div class="wl-line"><code>  name: "flightAgent",</code>
+          <div class="wl-note">Must match the <code>agent</code> named on the provider — this is how the hook knows whose state to mirror.</div></div>
+        <div class="wl-line"><code>  initialState: { altitude: 30000, heading: 90, autopilot: true },</code>
+          <div class="wl-note">The shape the UI assumes before the first event lands, so the dials render sensibly on cold load. Once a <code>STATE_SNAPSHOT</code> arrives it is replaced by the real thing.</div></div>
+        <div class="wl-line"><code>});</code></div>
+        <div class="wl-line"><code>&nbsp;</code></div>
+        <div class="wl-line"><code>// AGENT -&gt; UI: state updates itself as events stream in.</code></div>
+        <div class="wl-line"><code>&lt;Altimeter value={state.altitude} live={running} /&gt;</code>
+          <div class="wl-note">Read-only direction. When the agent emits <code>STATE_DELTA</code> with a patch on <code>/altitude</code>, CopilotKit applies it, <code>state.altitude</code> changes, and React re-renders the dial. You wrote no event listener — the hook did it.</div></div>
+        <div class="wl-line"><code>&nbsp;</code></div>
+        <div class="wl-line"><code>// UI -&gt; AGENT: your change rides along on the next turn.</code></div>
+        <div class="wl-line"><code>&lt;button onClick={() =&gt; setState({ ...state, altitude: 35000 })}&gt;</code>
+          <div class="wl-note">Write direction. <code>setState</code> updates the local copy immediately <em>and</em> hands the new state to the agent as part of the next <code>RunAgentInput</code>, so on its next turn the agent sees that you dialled 35,000 and can act on it. This is the amber-lit dial you turned yourself.</div></div>
+        <div class="wl-line"><code>  Climb to FL350</code></div>
+        <div class="wl-line"><code>&lt;/button&gt;</code></div>
+      </div>
+
+      <p>Trace the loop as a picture. The key idea: <em>the same state object</em> lives in two places at once, each side keeping the other in sync — the agent by streaming deltas, the UI by pushing setState.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Snapshot">
+          <h3>1. The agent sends the full picture</h3>
+          <div class="diagram">
+            <div class="d-box hot">Agent<small>emits STATE_SNAPSHOT</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">useCoAgent<small>state = {altitude: 30000}</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Dials<small>render</small></div>
+          </div>
+          <p class="step-cap">On run start the agent streams a snapshot — the whole shared object. The hook stores it; every instrument bound to <code>state</code> paints its first frame.</p>
+        </div>
+        <div class="step" data-title="Delta">
+          <h3>2. Small changes ride as patches</h3>
+          <div class="diagram">
+            <div class="d-box hot">Agent<small>STATE_DELTA: replace /altitude 31000</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">useCoAgent<small>applies JSON Patch</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Altimeter<small>re-renders 31000</small></div>
+          </div>
+          <p class="step-cap">As the agent climbs it sends a tiny <code>STATE_DELTA</code> (a JSON Patch) instead of the whole object. CopilotKit applies the patch and React re-renders only what changed.</p>
+        </div>
+        <div class="step" data-title="Pilot turns the dial">
+          <h3>3. The UI changes state locally</h3>
+          <div class="diagram">
+            <div class="d-box hot">You<small>setState({altitude: 35000})</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Dials<small>show 35000 at once</small></div>
+            <div class="d-box dim">Agent<small>not told yet</small></div>
+          </div>
+          <p class="step-cap">You press "Climb to FL350". <code>setState</code> updates the local copy immediately so the UI feels instant — the agent has not heard about it yet.</p>
+        </div>
+        <div class="step" data-title="Back to the agent">
+          <h3>4. Your change flows upstream</h3>
+          <div class="diagram">
+            <div class="d-box">You</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">RunAgentInput<small>state: {altitude: 35000}</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Agent<small>sees 35000 next turn</small></div>
+          </div>
+          <p class="step-cap">On the next run the new state is packed into the <code>RunAgentInput</code> the browser POSTs. The agent reads it as fact — the human moved the target — and reasons from there.</p>
+        </div>
+      </div>
+
+      <h2>Generative UI: when a tool call becomes a component</h2>
+      <p>A chat that can only emit text is a teletype. The cockpit blooms a weather panel because the agent asked it to. That is <dfn>generative UI</dfn> — the agent, mid-run, causes a rich custom component to appear, rather than describing it in words. The mechanism rides on tool calls you already understand.</p>
+      <p>Recall from <a href="ch045-react-loop-by-hand.html">the ReAct chapter</a> that an agent "does" things by emitting a tool call — a name plus arguments — which your code then executes. Generative UI adds a twist: some tools do not run backend logic at all. Their entire job is to render something on screen. When the agent streams <code>TOOL_CALL_START</code> for such a tool, CopilotKit does not look for a Python function — it looks for a React component you registered under that name, and mounts it with the tool's arguments as props.</p>
+      <p><dfn>useCopilotAction</dfn> is the hook that registers one of these frontend actions. You declare a name, a description (written for the <em>agent's model</em> to read, exactly like a tool description), typed parameters, and a <code>render</code> function that returns JSX.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">WeatherAction.tsx — a tool call that renders a panel</div>
+        <div class="wl-line"><code>import { useCopilotAction } from "@copilotkit/react-core";</code></div>
+        <div class="wl-line"><code>&nbsp;</code></div>
+        <div class="wl-line"><code>useCopilotAction({</code></div>
+        <div class="wl-line"><code>  name: "show_weather_card",</code>
+          <div class="wl-note">The tool name the agent will "call". To the agent this is just another tool in its list; it has no idea the result is pixels rather than data.</div></div>
+        <div class="wl-line"><code>  description: "Display a weather panel for a waypoint.",</code>
+          <div class="wl-note">Read by the model when it decides whether to call this. Write it for the agent, not for a human — same discipline as any tool description.</div></div>
+        <div class="wl-line"><code>  parameters: [</code>
+          <div class="wl-note">The arguments the agent must supply, with types. CopilotKit turns these into the JSON schema the model sees, so the agent knows to send a <code>waypoint</code> and a <code>condition</code>.</div></div>
+        <div class="wl-line"><code>    { name: "waypoint", type: "string" },</code></div>
+        <div class="wl-line"><code>    { name: "condition", type: "string" },</code></div>
+        <div class="wl-line"><code>  ],</code></div>
+        <div class="wl-line"><code>  render: ({ args }) =&gt; (</code>
+          <div class="wl-note">The heart of generative UI. Instead of returning data, this returns a React element. The agent's arguments arrive as <code>args</code>; you spread them into your own component. When the tool call streams in, this panel appears.</div></div>
+        <div class="wl-line"><code>    &lt;WeatherCard waypoint={args.waypoint} condition={args.condition} /&gt;</code></div>
+        <div class="wl-line"><code>  ),</code></div>
+        <div class="wl-line"><code>});</code></div>
+      </div>
+
+      <p>So "the agent shows the pilot the weather" is, under the hood, "the agent emits a <code>show_weather_card</code> tool call and the UI mounts <code>&lt;WeatherCard/&gt;</code>". No new protocol — generative UI is tool calling pointed at the screen instead of at a function. The same <code>TOOL_CALL_*</code> events you already stream do the whole job.</p>
+
+      <h2>Human-in-the-loop: the tool call that waits for a hand</h2>
+      <p>Now the amber switch. Sometimes the agent should not proceed until a human decides — approve this refund, confirm this reroute, pick which fabric. You met this exact idea in LangGraph as <a href="ch062-human-in-the-loop.html">interrupt()</a>: the graph pauses mid-run, surfaces a question, and resumes only when you pass a value back with <code>Command(resume=…)</code>. AG-UI expresses the very same pattern, but at the UI layer, and CopilotKit gives it one small, memorable switch.</p>
+      <p>Take the generative-UI action from above and swap <code>render</code> for <dfn>renderAndWaitForResponse</dfn>. Everything else stays. The difference is enormous: <code>render</code> mounts a component and moves on; <code>renderAndWaitForResponse</code> mounts a component <em>and pauses the run</em>, handing your component a <code>respond</code> function. The agent's turn does not complete until your UI calls <code>respond(value)</code> — and whatever value you pass is delivered back to the agent as that tool's result.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">RerouteApproval.tsx — human-in-the-loop with respond()</div>
+        <div class="wl-line"><code>useCopilotAction({</code></div>
+        <div class="wl-line"><code>  name: "confirm_reroute",</code></div>
+        <div class="wl-line"><code>  description: "Ask the pilot to approve a new route before turning.",</code></div>
+        <div class="wl-line"><code>  parameters: [{ name: "reason", type: "string" }],</code></div>
+        <div class="wl-line"><code>  renderAndWaitForResponse: ({ args, respond, status }) =&gt; (</code>
+          <div class="wl-note">The one word that changes everything. Note the extra render prop: <code>respond</code>. The component now stays mounted — the run is parked — until you call it. <code>status</code> shows whether the ask is still pending or answered.</div></div>
+        <div class="wl-line"><code>    &lt;ApprovalDialog</code>
+          <div class="wl-note">Your own dialog. It could be one Approve/Reject pair, or a whole form — a fabric picker, an edited paragraph, a corrected address. Anything the human returns becomes the tool result.</div></div>
+        <div class="wl-line"><code>      reason={args.reason}</code></div>
+        <div class="wl-line"><code>      onApprove={() =&gt; respond("approved")}</code>
+          <div class="wl-note">Calling <code>respond("approved")</code> does two things at once: it unmounts the wait (the run continues) and sends <code>"approved"</code> back as the result of the <code>confirm_reroute</code> tool. To the agent it looks exactly like any tool returning a value.</div></div>
+        <div class="wl-line"><code>      onReject={() =&gt; respond("rejected")} /&gt;</code>
+          <div class="wl-note">The other branch. The agent gets <code>"rejected"</code> and reasons accordingly — perhaps proposing an alternative. A real colleague can be told no.</div></div>
+        <div class="wl-line"><code>  ),</code></div>
+        <div class="wl-line"><code>});</code></div>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Hold the symmetry in your head: LangGraph's <code>interrupt()</code> pauses a graph on the server and resumes on <code>Command(resume=value)</code>; CopilotKit's <code>renderAndWaitForResponse</code> pauses a run at the UI and resumes on <code>respond(value)</code>. Same shape — pause, ask a human, resume with their answer — expressed once for graph authors and once for interface builders. If your backend is a LangGraph agent, an <code>interrupt()</code> on the server can surface as a <code>renderAndWaitForResponse</code> dialog on the client. The two ends of the same wire.</p></div>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">useCoAgent</span><span class="flip-back">The hook that mirrors an agent's shared state into React. Returns { state, setState, running }: agent deltas update state; setState pushes your change into the agent's next turn.</span></button>
+        <button class="flip" type="button"><span class="flip-front">shared state</span><span class="flip-back">One state object living in both agent and UI, kept in sync via STATE_SNAPSHOT / STATE_DELTA downstream and setState upstream. The bidirectional cockpit dial.</span></button>
+        <button class="flip" type="button"><span class="flip-front">useCopilotAction</span><span class="flip-back">Registers a frontend action the agent can "call". Give it a name, model-facing description, typed parameters, and a render function returning JSX.</span></button>
+        <button class="flip" type="button"><span class="flip-front">generative UI</span><span class="flip-back">A tool call whose job is to render a component, not run backend logic. The agent calls show_weather_card; the UI mounts &lt;WeatherCard/&gt;. Tool calling pointed at the screen.</span></button>
+        <button class="flip" type="button"><span class="flip-front">render vs renderAndWaitForResponse</span><span class="flip-back">render mounts and moves on. renderAndWaitForResponse mounts AND pauses the run, giving a respond() prop; the run resumes only when respond(value) is called.</span></button>
+        <button class="flip" type="button"><span class="flip-front">CopilotChat</span><span class="flip-back">The prebuilt React chat surface. Drop it inside &lt;CopilotKit&gt; and it streams messages and tool calls automatically — a working copilot with no event handling from you.</span></button>
+      </div>
+
+      <h2>Run the reducer the frontend hides</h2>
+      <p>CopilotKit's real magic is a <dfn>reducer</dfn> — a function that takes the current UI state plus the next event and returns the new UI state — running once per streamed event. React cannot execute in this page, so below is that reducer written in plain Python: it consumes a canned AG-UI event stream and prints a <em>render log</em> — what the interface would paint at each step. Watch it apply a <code>STATE_DELTA</code> as a JSON Patch, mount a generative-UI component, and then <strong>pause</strong> at a human-in-the-loop action until <code>respond()</code> is called. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="Simulate the CopilotKit reducer — the render log">
+<textarea class="py-src" spellcheck="false">
+# A tiny stand-in for the CopilotKit frontend. It consumes AG-UI
+# events (wire type = SCREAMING_SNAKE_CASE) and prints what the UI
+# would render at each step. No React needed to see the shape.
+
+def apply_patch(state, ops):
+    "Minimal JSON Patch (RFC 6902): just replace / add on top-level keys."
+    for op in ops:
+        key = op["path"].lstrip("/")
+        if op["op"] in ("replace", "add"):
+            state[key] = op["value"]
+    return state
+
+# Which frontend actions pause the run (renderAndWaitForResponse)
+# versus just render. This is the whole render vs wait distinction.
+HITL_ACTIONS = {"confirm_reroute"}
+
+def reduce(events):
+    ui = {"messages": [], "state": {}, "components": [], "paused": None}
+    for ev in events:
+        t = ev["type"]
+
+        if t == "RUN_STARTED":
+            print("RENDER  run started, spinner ON")
+
+        elif t == "TEXT_MESSAGE_CONTENT":
+            # tokens stream in; the chat panel appends them live
+            ui["messages"].append(ev["delta"])
+            print("RENDER  chat:", "".join(ui["messages"]))
+
+        elif t == "STATE_SNAPSHOT":
+            ui["state"] = dict(ev["snapshot"])
+            print("RENDER  dials:", ui["state"])
+
+        elif t == "STATE_DELTA":
+            apply_patch(ui["state"], ev["delta"])
+            print("RENDER  dials:", ui["state"], "(patched)")
+
+        elif t == "TOOL_CALL_START":
+            name = ev["toolCallName"]
+            args = ev["args"]
+            if name in HITL_ACTIONS:
+                # renderAndWaitForResponse: mount AND freeze the run
+                ui["paused"] = name
+                print("RENDER  approval dialog:", args["reason"])
+                print("PAUSE   run frozen, waiting for respond() ...")
+                return ui           # nothing after this renders yet
+            else:
+                # plain render: mount a generative-UI component
+                ui["components"].append(name)
+                print("RENDER  component <" + name + ">", args)
+
+        elif t == "RUN_FINISHED":
+            print("RENDER  run finished, spinner OFF")
+
+    return ui
+
+def respond(ui, events_after, value):
+    "The pilot flips the switch: send the tool result, resume the run."
+    print()
+    print("RESPOND respond(%r) -> tool result for %s"
+          % (value, ui["paused"]))
+    ui["paused"] = None
+    reduce(events_after)      # the rest of the stream now flows
+
+# ---- a canned AG-UI event stream (the backend's output) ----------
+stream = [
+    {"type": "RUN_STARTED"},
+    {"type": "TEXT_MESSAGE_CONTENT", "delta": "Climbing "},
+    {"type": "TEXT_MESSAGE_CONTENT", "delta": "to avoid weather."},
+    {"type": "STATE_SNAPSHOT",
+     "snapshot": {"altitude": 30000, "heading": 90}},
+    {"type": "STATE_DELTA",
+     "delta": [{"op": "replace", "path": "/altitude", "value": 31000}]},
+    {"type": "TOOL_CALL_START", "toolCallName": "show_weather_card",
+     "args": {"waypoint": "ALPHA", "condition": "thunderstorm"}},
+    {"type": "TOOL_CALL_START", "toolCallName": "confirm_reroute",
+     "args": {"reason": "Storm cell on current heading"}},
+]
+# events the backend streams AFTER the human answers
+after = [
+    {"type": "TEXT_MESSAGE_CONTENT", "delta": " Rerouting now."},
+    {"type": "STATE_DELTA",
+     "delta": [{"op": "replace", "path": "/heading", "value": 120}]},
+    {"type": "RUN_FINISHED"},
+]
+
+ui = reduce(stream)
+respond(ui, after, "approved")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it to feel it. Add <code>"show_weather_card"</code> to <code>HITL_ACTIONS</code> and watch the run freeze on the weather panel instead — proof that the <em>only</em> thing separating generative UI from human-in-the-loop is whether the action waits for <code>respond()</code>. Or change the reroute reply to <code>respond(ui, after, "rejected")</code> and imagine the branch a real agent would take. Every render line here is a frame CopilotKit paints for you.</p></div>
+
+      <h2>Who owns this frontend standard</h2>
+      <p>Provenance is simpler here than for the other two protocols in the trio. Where <a href="ch045-react-loop-by-hand.html">MCP</a> came from Anthropic and <a href="ch080-a2a-protocol.html">A2A</a> came from Google and moved to the Linux Foundation, AG-UI came from CopilotKit — a company whose whole product is agent frontends. They open-sourced the protocol their React library already spoke, published it at <code>docs.ag-ui.com</code>, and kept the library as the reference client. Because the same team owns both, spec and library move together: a new event type shows up as a new hook or render prop, not six months later. The flip side of single-vendor origin is the usual one — a protocol is only as neutral as its governance, and this one is younger and more centralised than A2A's foundation model.</p>
+
+      <h2>An honest maturity check</h2>
+      <p>Now the part the demo videos skip. The chat path — provider plus <code>&lt;CopilotChat /&gt;</code> — is genuinely mature; you can wire a streaming copilot to an agent in an afternoon. Shared state, generative UI and human-in-the-loop all work, and are the reason to reach for CopilotKit over hand-rolling a reducer.</p>
+      <p>But keep three truths in view. First, <strong>this is a React story.</strong> If your app is Vue, Svelte, SwiftUI or a terminal, you get the protocol but not the batteries — you consume the SSE stream and write your own reducer, which is real work. Second, <strong>AG-UI gives you the streaming contract, not an agent.</strong> It does not orchestrate, checkpoint, branch, or run a control loop — you bring that from LangGraph, a deep agent, or fifty lines of your own, and AG-UI only carries the events between it and the glass. Confusing "I adopted AG-UI" with "I have an agent architecture" is the classic mistake, and the <a href="ch122-ag-ui-vs-langgraph-deep-agents.html">next chapter</a> is entirely about that boundary. Third, the ecosystem is young: the protocol reached its 1.0 shape recently, deprecated event families (the old <code>THINKING_*</code> set, replaced by <code>REASONING_*</code>) were removed along the way, and APIs still move. Learn the durable concepts — provider, shared state, generative UI, respond() — and check <code>docs.copilotkit.ai</code> for exact current prop names before you ship.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet this frontend as a <code>@copilotkit/react-core</code> line in a <code>package.json</code>, a <code>&lt;CopilotKit runtimeUrl=…&gt;</code> wrapper near the top of an app, and <code>useCoAgent</code> / <code>useCopilotAction</code> calls scattered through the components. In a merge request, "add a generative-UI card for the analytics tool" means a new <code>useCopilotAction</code> with a <code>render</code>; "gate the delete behind an approval" means switching that action to <code>renderAndWaitForResponse</code>. When a teammate says the copilot "hangs on the confirm dialog", you now know exactly what is happening: the run is parked in a <code>renderAndWaitForResponse</code> waiting for a <code>respond()</code> that never fired — the amber switch nobody flipped.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What does <code>useCoAgent</code> give you that a plain chat panel does not?</p>
+          <div class="q-opts">
+            <button data-opt="a">A faster SSE transport for the same messages</button>
+            <button data-opt="b">Bidirectional shared state — agent STATE_SNAPSHOT/STATE_DELTA updates the UI, and setState pushes UI changes into the agent's next turn</button>
+            <button data-opt="c">The ability to run the agent's model inside the browser</button>
+          </div>
+          <p class="q-explain">The chat panel narrates one way. <code>useCoAgent</code> binds a shared state object that flows both directions: deltas from the agent re-render your dials, and <code>setState</code> packs your change into the next <code>RunAgentInput</code> so the agent sees it. Two hands, one machine.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. The agent emits a <code>show_weather_card</code> tool call, but there is no backend function by that name. What happens?</p>
+          <div class="q-opts">
+            <button data-opt="a">The run errors because the tool is missing</button>
+            <button data-opt="b">CopilotKit asks the user to type the weather manually</button>
+            <button data-opt="c">CopilotKit mounts the React component registered under that name via useCopilotAction, using the tool arguments as props — that is generative UI</button>
+          </div>
+          <p class="q-explain">Generative UI is tool calling pointed at the screen. A <code>useCopilotAction</code> with a <code>render</code> function registers a frontend "tool" whose result is a mounted component, not backend data. The agent does not know or care that the result is pixels.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. You change <code>render</code> to <code>renderAndWaitForResponse</code> on an action. What is different?</p>
+          <div class="q-opts">
+            <button data-opt="a">The component stays mounted and the run pauses until you call respond(value); that value is returned to the agent as the tool result</button>
+            <button data-opt="b">The component renders twice as fast</button>
+            <button data-opt="c">The agent stops streaming text messages permanently</button>
+          </div>
+          <p class="q-explain"><code>render</code> mounts and moves on; <code>renderAndWaitForResponse</code> mounts <em>and freezes the run</em>, handing your component a <code>respond</code> prop. The run resumes only when <code>respond(value)</code> fires, and that value becomes the tool's result — the human-in-the-loop switch.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. How does CopilotKit's <code>renderAndWaitForResponse</code> relate to LangGraph's <code>interrupt()</code>?</p>
+          <div class="q-opts">
+            <button data-opt="a">They are unrelated — one is UI, one is orchestration, with no shared idea</button>
+            <button data-opt="b">Same pattern at two layers: pause a run, ask a human, resume with their answer — interrupt() resumes on Command(resume=value), respond(value) resumes at the UI</button>
+            <button data-opt="c">renderAndWaitForResponse replaces interrupt() and you should delete your LangGraph code</button>
+          </div>
+          <p class="q-explain">Both are pause-ask-resume. LangGraph interrupts on the server and resumes with <code>Command(resume=value)</code>; CopilotKit pauses at the interface and resumes with <code>respond(value)</code>. A server-side <code>interrupt()</code> can even surface as a client-side <code>renderAndWaitForResponse</code> dialog — two ends of one wire.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. A colleague says "we adopted AG-UI, so our agent architecture is handled." What is the honest correction?</p>
+          <div class="q-opts">
+            <button data-opt="a">Correct — AG-UI includes orchestration, checkpointing and a control loop</button>
+            <button data-opt="b">Correct — CopilotKit runs the agent for you</button>
+            <button data-opt="c">AG-UI is only the streaming contract between agent and UI; orchestration, checkpointing and the control loop still come from LangGraph, a deep agent, or your own loop</button>
+          </div>
+          <p class="q-explain">AG-UI standardises how an agent streams to a frontend and how the UI answers back — no more. The reasoning engine is still yours to bring. Mistaking the transport for the architecture is exactly the trap the next chapter unpacks.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>CopilotKit is the React library that consumes AG-UI — and the team that created the protocol, so the library and the spec move as one. Wrap the app in <code>&lt;CopilotKit runtimeUrl agent&gt;</code> and drop in <code>&lt;CopilotChat /&gt;</code> for a streaming copilot with zero event-handling code.</li>
+          <li>Shared state is bidirectional through <code>useCoAgent</code>: agent <code>STATE_SNAPSHOT</code>/<code>STATE_DELTA</code> events update <code>state</code> and re-render, while <code>setState</code> pushes UI changes into the agent's next turn — the same object synced from both ends.</li>
+          <li>Generative UI is tool calling aimed at the screen: <code>useCopilotAction</code> with a <code>render</code> function mounts a custom React component from an agent tool call, using its arguments as props.</li>
+          <li>Human-in-the-loop is one word away — swap <code>render</code> for <code>renderAndWaitForResponse</code>: the component stays mounted, the run pauses, and <code>respond(value)</code> both resumes the run and returns that value to the agent as the tool result. It is LangGraph's <code>interrupt()</code> expressed at the UI layer.</li>
+          <li>Be honest about the edges: CopilotKit's batteries are React-only, and AG-UI is the streaming contract, not an agent — orchestration, checkpointing and the loop still come from your backend. The concepts are durable; check current docs for exact prop names.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

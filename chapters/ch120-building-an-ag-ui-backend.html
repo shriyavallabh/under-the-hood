@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building an AG-UI backend — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch120">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XIV · The Agent-User Layer: AG-UI</div>
+        <h1>Building an AG-UI backend</h1>
+        <p class="ch-tagline">Emit RUN_STARTED, stream text deltas, report tool calls, sync state — a minimal runnable agent backend that any AG-UI frontend can render.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 120 of 123</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Picture a busy restaurant kitchen. For years your cooks scribbled what was ready on scraps of paper — and every waiter read them differently. One thought "table 4, done" meant serve now; another thought it meant plating had started. Chaos. So you install the standard kitchen ticket-printer: the little machine by the pass that spits out slips in one agreed format. <em>Order fired. Starter up. Chef needs a substitution — waiting. Main up. Table complete.</em> Now it does not matter who is on the floor tonight — a new waiter, a temp, the host covering a shift. Anyone who can read a ticket can run your dining room, because your kitchen speaks the printer's language.</p>
+        <p>Your cooks did not change how they cook. They just started announcing their work on the standard printer. That is exactly what building an AG-UI backend is: your agent keeps its own brain and its own recipes, but every meaningful moment — it started, it is talking, it is calling a tool, its state changed, it finished — comes out as a standard ticket that any frontend already knows how to read.</p>
+      </section>
+
+      <h2>Where this Act has taken you</h2>
+      <p>A quick recap before we start printing tickets. In <a href="ch119-ag-ui-event-model.html">the previous chapter</a> you met the AG-UI event model: the roughly sixteen standard event types an agent can emit, grouped into lifecycle (<code>RUN_STARTED</code>, <code>RUN_FINISHED</code>), text (<code>TEXT_MESSAGE_START</code> / <code>CONTENT</code> / <code>END</code>), tools (<code>TOOL_CALL_START</code> / <code>ARGS</code> / <code>END</code> / <code>RESULT</code>), and state (<code>STATE_SNAPSHOT</code>, <code>STATE_DELTA</code>). You learned that the wire <code>type</code> values are SCREAMING_SNAKE_CASE and the JSON field names are camelCase. This chapter turns that vocabulary into a running program: you are going to build the thing that <em>emits</em> those events.</p>
+      <p><dfn>AG-UI</dfn> — the Agent-User Interaction Protocol, an open standard from the team behind CopilotKit — is the third protocol in the trio you have been assembling all book. <a href="ch080-a2a-protocol.html">A2A</a> connects your agent to other agents; MCP connects it to tools; AG-UI connects it to the human at the screen. And like those siblings, AG-UI is a <em>contract about messages on a wire</em>, not a runtime. It tells you the shape of the tickets; it does not cook the food.</p>
+
+      <div class="tbl"><table>
+        <tr><th></th><th>What AG-UI gives you</th><th>What it does NOT give you</th></tr>
+        <tr><td>Scope</td><td>A standard event stream from agent to UI, and inputs from UI to agent</td><td>An agent loop, a planner, a control flow</td></tr>
+        <tr><td>Streaming</td><td>Token-by-token text, live tool-call reporting, state sync</td><td>The decision of <em>when</em> to emit each event</td></tr>
+        <tr><td>State</td><td>Two ways to ship it: whole snapshot or a JSON Patch delta</td><td>Durable storage, checkpointing, branching, resume</td></tr>
+        <tr><td>Transport</td><td>HTTP + Server-Sent Events by default; transport-agnostic</td><td>Retries, auth, rate-limiting — ordinary web concerns you add</td></tr>
+        <tr><td>Portability</td><td>Any conforming frontend can render any conforming backend</td><td>Your business logic — that stays entirely yours</td></tr>
+      </table></div>
+
+      <p>Keep that right-hand column in view for the whole chapter. It is the honest part, and the part vendor demos skip.</p>
+
+      <h2>The shape of a backend</h2>
+      <p>An AG-UI backend is astonishingly small. It is one HTTP endpoint that accepts a <dfn>RunAgentInput</dfn> — the request the frontend POSTs, carrying the conversation so far (its fields are <code>threadId</code>, <code>runId</code>, <code>messages</code>, <code>state</code>, <code>tools</code>, <code>context</code>) — and streams back a sequence of events. Two ideas from earlier in the book make this click. First, from <a href="ch038-generators-and-yield.html">the generators chapter</a>: a function with <code>yield</code> hands back values one at a time instead of building a whole list, which is precisely how you stream. Second, from <a href="ch039-async-await.html">async</a> and <a href="ch040-streaming-responses.html">streaming responses</a>: the web framework keeps the connection open and flushes each yielded chunk to the browser as it appears.</p>
+      <p>The Python SDK packages this. You import event classes from <code>ag_ui.core</code>, wrap each one in an <dfn>EventEncoder</dfn> — the helper that turns an event object into the exact <code>data: {json}\n\n</code> text a Server-Sent-Events stream expects — and hand the generator to a FastAPI <code>StreamingResponse</code>. Read the real thing, line by line. Click the annotated lines; the ones that carry the lesson are marked.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">agent.py — a minimal AG-UI endpoint (real SDK shape)</div>
+        <div class="wl-line"><code>from ag_ui.core import (RunAgentInput, EventType,</code>
+          <div class="wl-note">Everything comes from one package. <code>EventType</code> is the enum of those SCREAMING_SNAKE_CASE names from <a href="ch119-ag-ui-event-model.html">the last chapter</a>; the rest are typed event classes. They are Pydantic models — the same <a href="ch016-type-hints-and-pydantic.html">type-hint-driven validation</a> you met earlier — so a malformed event fails loudly at construction, not silently on the wire.</div></div>
+        <div class="wl-line"><code>    RunStartedEvent, TextMessageStartEvent,</code></div>
+        <div class="wl-line"><code>    TextMessageContentEvent, TextMessageEndEvent,</code></div>
+        <div class="wl-line"><code>    ToolCallStartEvent, ToolCallArgsEvent,</code></div>
+        <div class="wl-line"><code>    ToolCallEndEvent, ToolCallResultEvent,</code></div>
+        <div class="wl-line"><code>    StateDeltaEvent, RunFinishedEvent)</code></div>
+        <div class="wl-line"><code>from ag_ui.encoder import EventEncoder</code>
+          <div class="wl-note">The encoder is the ticket-printer itself: give it an event object, get back the exact SSE frame. You never hand-format <code>data:</code> lines — that is the one job you delegate to the SDK.</div></div>
+        <div class="wl-line"><code>from fastapi import FastAPI, Request</code></div>
+        <div class="wl-line"><code>from fastapi.responses import StreamingResponse</code></div>
+        <div class="wl-line"><code>app = FastAPI()</code></div>
+        <div class="wl-line"><code>@app.post("/")</code>
+          <div class="wl-note">One POST endpoint is the entire public surface. The frontend's reference client (<code>HttpAgent</code>) sends its <code>RunAgentInput</code> here; everything the user sees flows back out of this one door.</div></div>
+        <div class="wl-line"><code>async def run(input_data: RunAgentInput, request: Request):</code>
+          <div class="wl-note">FastAPI parses and validates the incoming JSON into a typed <code>RunAgentInput</code> for you. <code>input_data.thread_id</code> and <code>input_data.run_id</code> identify this conversation and this particular run.</div></div>
+        <div class="wl-line"><code>    encoder = EventEncoder(accept=request.headers.get("accept"))</code>
+          <div class="wl-note">The client's <code>Accept</code> header tells the encoder which wire format to produce — plain SSE text, or the high-performance binary encoding for production. Same events, different envelope.</div></div>
+        <div class="wl-line"><code>    async def gen():</code>
+          <div class="wl-note">The generator IS the stream. Every <code>yield</code> is one ticket off the printer, flushed to the browser the instant it is produced. Recall <a href="ch038-generators-and-yield.html">generators</a>: nothing is buffered into a giant list.</div></div>
+        <div class="wl-line"><code>        yield encoder.encode(RunStartedEvent(</code>
+          <div class="wl-note">The first ticket is always lifecycle: "a run has begun." The UI uses it to show a spinner, clear the previous turn, and start listening. Omit it and a strict frontend rejects the whole stream.</div></div>
+        <div class="wl-line"><code>            type=EventType.RUN_STARTED,</code>
+          <div class="wl-note">Python event classes take snake_case keyword arguments (<code>thread_id=</code>) and serialise to camelCase JSON (<code>threadId</code>) automatically. You write Python; the wire stays canonical.</div></div>
+        <div class="wl-line"><code>            thread_id=input_data.thread_id,</code></div>
+        <div class="wl-line"><code>            run_id=input_data.run_id))</code></div>
+        <div class="wl-line"><code>        msg_id = "msg-1"</code>
+          <div class="wl-note">One text message needs a stable id so the three text events (start, many contents, end) all refer to the same growing bubble in the UI.</div></div>
+        <div class="wl-line"><code>        yield encoder.encode(TextMessageStartEvent(</code>
+          <div class="wl-note">Open the message bubble. From here until the matching END, every CONTENT delta appends to this one bubble.</div></div>
+        <div class="wl-line"><code>            type=EventType.TEXT_MESSAGE_START,</code></div>
+        <div class="wl-line"><code>            message_id=msg_id, role="assistant"))</code></div>
+        <div class="wl-line"><code>        for token in call_your_model(input_data):</code>
+          <div class="wl-note">This is the ONLY line AG-UI does not own. Whatever produces tokens — a raw LLM stream, a <a href="ch045-react-loop-by-hand.html">ReAct loop</a>, CrewAI, LangGraph — lives here. AG-UI just wants each token as it arrives.</div></div>
+        <div class="wl-line"><code>            yield encoder.encode(TextMessageContentEvent(</code>
+          <div class="wl-note">One CONTENT event per chunk. This is streaming: the user watches the answer form character by character instead of waiting for the whole paragraph. The <code>delta</code> field must be non-empty — the SDK enforces it.</div></div>
+        <div class="wl-line"><code>                type=EventType.TEXT_MESSAGE_CONTENT,</code></div>
+        <div class="wl-line"><code>                message_id=msg_id, delta=token))</code></div>
+        <div class="wl-line"><code>        yield encoder.encode(TextMessageEndEvent(</code>
+          <div class="wl-note">Close the bubble. Start and end always come in a matched pair around the stream of contents — like opening and closing a tag.</div></div>
+        <div class="wl-line"><code>            type=EventType.TEXT_MESSAGE_END, message_id=msg_id))</code></div>
+        <div class="wl-line"><code>        yield encoder.encode(RunFinishedEvent(</code>
+          <div class="wl-note">The closing ticket. It tells the UI the run is over — stop the spinner, re-enable the input box. A failed run emits <code>RUN_ERROR</code> here instead. Every run ends with exactly one terminal lifecycle event.</div></div>
+        <div class="wl-line"><code>            type=EventType.RUN_FINISHED,</code></div>
+        <div class="wl-line"><code>            thread_id=input_data.thread_id,</code></div>
+        <div class="wl-line"><code>            run_id=input_data.run_id))</code></div>
+        <div class="wl-line"><code>    return StreamingResponse(gen(),</code>
+          <div class="wl-note">The generator is handed to FastAPI, which keeps the HTTP connection open and streams each yielded frame. This is the same machinery as any <a href="ch040-streaming-responses.html">streaming response</a> — AG-UI just standardises what flows through it.</div></div>
+        <div class="wl-line"><code>        media_type="text/event-stream")</code>
+          <div class="wl-note">The media type that tells the browser "this is Server-Sent Events, keep reading." Without it the client waits for the connection to close before showing anything — and streaming is the entire point.</div></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>That endpoint only streams text. Reporting a tool call and syncing state are two more clusters of events emitted from the same generator, at the moments your agent loop decides. We look at those next — and then run the whole thing.</p></div>
+
+      <h2>Reporting a tool call, in four tickets</h2>
+      <p>When your agent decides to call a tool, the UI wants to <em>show</em> that — "looking up invoice INV-204…" — long before the result lands. AG-UI reports a single tool call as an ordered burst of events, mirroring exactly how the model itself streams a tool call: name first, arguments dribbling in as text, then the outcome. A <dfn>tool call</dfn> on the wire is four events sharing one <code>toolCallId</code>:</p>
+      <ul>
+        <li><code>TOOL_CALL_START</code> — carries the <code>toolCallId</code>, the <code>toolCallName</code> (which the UI shows immediately), and an optional <code>parentMessageId</code> tying it to the message it belongs to.</li>
+        <li><code>TOOL_CALL_ARGS</code> — one or many, each a <code>delta</code> string that is a <em>fragment</em> of the arguments JSON. The frontend concatenates the fragments the same way it concatenates text deltas. This is why arguments can stream before they are even valid JSON.</li>
+        <li><code>TOOL_CALL_END</code> — the arguments are complete; the call is fully described.</li>
+        <li><code>TOOL_CALL_RESULT</code> — carries the <code>toolCallId</code> plus the <code>content</code> your tool actually returned. (Whether the backend runs the tool or the frontend does is a design choice AG-UI supports both ways — but the result is reported with this event either way.)</li>
+      </ul>
+      <p>Notice the symmetry with <a href="ch035-tool-calling.html">native tool calling</a>: the model emits a tool call as start/args/end; AG-UI simply forwards that shape to the UI so the human watches the same handshake the model is having.</p>
+
+      <h2>Syncing state: the whole photo, or the edit</h2>
+      <p>The last cluster is shared state — the structured data both sides care about (a form being filled, a document being drafted, a running total). AG-UI gives you two ways to ship it, and choosing between them is a bandwidth decision you will make constantly.</p>
+      <p>A <dfn>STATE_SNAPSHOT</dfn> carries the <em>entire</em> state object in one event — the whole photograph. Simple, unambiguous, and exactly what you want at the start of a run or when things have drifted. But if your state is a large document and you changed one field, resending all of it every keystroke is wasteful. So there is <dfn>STATE_DELTA</dfn>: its <code>delta</code> is a JSON Patch array (the RFC 6902 standard — a list of tiny <code>{"op", "path", "value"}</code> operations), describing only what changed. The UI applies the patch to the state it already holds. Snapshot is "here is the whole photo"; delta is "on the photo you have, change this one thing." Send a snapshot occasionally to stay in sync; send deltas in between to stay cheap.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">RunAgentInput</span><span class="flip-back">What the frontend POSTs to your endpoint: threadId, runId, messages, state, tools, context. FastAPI validates it into a typed object for you.</span></button>
+        <button class="flip" type="button"><span class="flip-front">EventEncoder</span><span class="flip-back">The ticket-printer. encoder.encode(event) turns a Python event object into the exact data: {json} SSE frame. You never format the wire by hand.</span></button>
+        <button class="flip" type="button"><span class="flip-front">text delta</span><span class="flip-back">One chunk of a streaming message, sent as a TEXT_MESSAGE_CONTENT event. Emit one per token and the answer appears live.</span></button>
+        <button class="flip" type="button"><span class="flip-front">toolCallId</span><span class="flip-back">The thread that ties a tool call's four events — START, ARGS, END, RESULT — together so the UI knows they are one call.</span></button>
+        <button class="flip" type="button"><span class="flip-front">STATE_SNAPSHOT</span><span class="flip-back">The whole state object in one event. Use at run start or to resync. Simple but heavy for big state.</span></button>
+        <button class="flip" type="button"><span class="flip-front">STATE_DELTA</span><span class="flip-back">Only what changed, as a JSON Patch (RFC 6902) array of op/path/value. Cheap incremental updates the UI applies to state it already holds.</span></button>
+      </div>
+
+      <h2>Emit a whole run, right now</h2>
+      <p>Here is one complete run as runnable Python. A real backend imports the SDK and calls an LLM; this page can do neither, so <code>emit_events</code> is a plain <a href="ch038-generators-and-yield.html">generator</a> that <code>yield</code>s the same event dicts the SDK would build, and <code>encode_sse</code> is a five-line stand-in for the <code>EventEncoder</code>. Everything else — the order of events, the field names, the JSON on the wire — is exactly what a CopilotKit frontend receives. Press <strong>Run</strong> and read the ticket tape: a run starts, text streams token by token, one tool call is reported in four parts, state is patched, the run finishes.</p>
+
+      <div class="pyrun" data-title="An AG-UI backend in miniature — emit one full run">
+<textarea class="py-src" spellcheck="false">
+import json
+
+# ---- The agent's "brain": a scripted stand-in for an LLM ----
+# A real backend streams tokens from a model here. The AG-UI
+# layer does not care what produces them.
+def fake_agent(user_msg):
+    return ["Your ", "invoice ", "total ", "is ", "1500 rupees."]
+
+# ---- The emitter: ONE run, as AG-UI event dicts -------------
+# This is the generator your FastAPI endpoint would yield from.
+def emit_events(user_msg):
+    thread_id, run_id, msg_id = "thread-1", "run-1", "msg-1"
+
+    # 1. LIFECYCLE — the run begins
+    yield {"type": "RUN_STARTED", "threadId": thread_id, "runId": run_id}
+
+    # 2. TEXT — open a bubble, stream tokens, close the bubble
+    yield {"type": "TEXT_MESSAGE_START", "messageId": msg_id, "role": "assistant"}
+    for token in fake_agent(user_msg):
+        yield {"type": "TEXT_MESSAGE_CONTENT", "messageId": msg_id, "delta": token}
+    yield {"type": "TEXT_MESSAGE_END", "messageId": msg_id}
+
+    # 3. TOOL CALL — start, args as JSON fragments, end, result
+    call_id = "call-1"
+    yield {"type": "TOOL_CALL_START", "toolCallId": call_id,
+           "toolCallName": "lookup_invoice", "parentMessageId": msg_id}
+    yield {"type": "TOOL_CALL_ARGS", "toolCallId": call_id, "delta": '{"id":'}
+    yield {"type": "TOOL_CALL_ARGS", "toolCallId": call_id, "delta": '"INV-204"}'}
+    yield {"type": "TOOL_CALL_END", "toolCallId": call_id}
+    yield {"type": "TOOL_CALL_RESULT", "messageId": "msg-2",
+           "toolCallId": call_id, "content": "1500", "role": "tool"}
+
+    # 4. STATE — sync shared state with a JSON Patch delta
+    yield {"type": "STATE_DELTA", "delta": [
+        {"op": "add", "path": "/lastInvoice", "value": "INV-204"},
+        {"op": "add", "path": "/total", "value": 1500}]}
+
+    # 5. LIFECYCLE — the run is done
+    yield {"type": "RUN_FINISHED", "threadId": thread_id, "runId": run_id}
+
+# ---- The transport: encode each event as one SSE frame ------
+# The real EventEncoder does exactly this: data: {json}\n\n
+def encode_sse(event):
+    return "data: " + json.dumps(event) + "\n\n"
+
+# ---- Run it: this is the exact byte stream the UI receives --
+print("=== SSE stream on the wire ===\n")
+count = 0
+for event in emit_events("What is invoice INV-204's total?"):
+    count += 1
+    print(encode_sse(event), end="")
+print("--- stream closed:", count, "events emitted ---")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Break it and learn. Add more tokens to <code>fake_agent</code> and watch extra <code>TEXT_MESSAGE_CONTENT</code> frames appear — that is streaming getting finer-grained. Delete the <code>RUN_FINISHED</code> yield and imagine the UI: the spinner never stops, because nothing told it the run ended. Swap the <code>STATE_DELTA</code> for a <code>STATE_SNAPSHOT</code> carrying a whole <code>{"lastInvoice": ..., "total": ...}</code> object and feel the trade-off between "the whole photo" and "just the edit."</p></div>
+
+      <h2>The same emitter, in front of anything</h2>
+      <p>The quiet superpower of that generator is what it is <em>not</em> coupled to. <code>fake_agent</code> could be a raw LLM stream, a hand-written <a href="ch045-react-loop-by-hand.html">ReAct loop</a>, CrewAI, LangGraph, or Pydantic AI. AG-UI sits <em>in front of</em> your agent as a translation layer: your loop does its thing, and at each meaningful moment you emit the matching ticket. This is why a team can standardise on AG-UI without betting on any single orchestration framework — the frontend never learns which engine is behind the curtain. Swap the engine; keep the printer.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Request">
+          <h3>1. The frontend POSTs a RunAgentInput</h3>
+          <div class="diagram">
+            <div class="d-box hot">Frontend<small>threadId, runId, messages</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Your endpoint<small>@app.post("/")</small></div>
+            <div class="d-box dim">Agent loop</div>
+          </div>
+          <p class="step-cap">The UI sends the whole conversation so far to your one POST endpoint. FastAPI validates it into a typed <code>RunAgentInput</code>. Nothing has streamed yet.</p>
+        </div>
+        <div class="step" data-title="Run starts">
+          <h3>2. Emit RUN_STARTED, hand off to your loop</h3>
+          <div class="diagram">
+            <div class="d-box">Frontend<small>spinner on</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Your endpoint<small>RUN_STARTED</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">Agent loop</div>
+          </div>
+          <p class="step-cap">The first ticket goes out immediately. The UI shows activity while your agent loop — whatever framework it is — starts thinking.</p>
+        </div>
+        <div class="step" data-title="Stream text">
+          <h3>3. Stream tokens as CONTENT deltas</h3>
+          <div class="diagram">
+            <div class="d-box good">Frontend<small>answer appears live</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Your endpoint<small>TEXT_MESSAGE_CONTENT ×N</small></div>
+          </div>
+          <p class="step-cap">Each token your model produces becomes one CONTENT event, flushed instantly. The user reads the reply forming — the whole reason for streaming.</p>
+        </div>
+        <div class="step" data-title="Report tool">
+          <h3>4. A tool call, reported in four events</h3>
+          <div class="diagram">
+            <div class="d-box">Frontend<small>"looking up invoice…"</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box hot">Your endpoint<small>TOOL_CALL_START / ARGS / END / RESULT</small></div>
+          </div>
+          <p class="step-cap">When your loop decides to call a tool, four tickets sharing one <code>toolCallId</code> let the UI show the call, its arguments, and its result as they happen.</p>
+        </div>
+        <div class="step" data-title="Sync and finish">
+          <h3>5. STATE_DELTA, then RUN_FINISHED</h3>
+          <div class="diagram">
+            <div class="d-box good">Frontend<small>state updated, spinner off</small></div>
+            <span class="d-arrow">&#8592;</span>
+            <div class="d-box good">Your endpoint<small>STATE_DELTA · RUN_FINISHED</small></div>
+          </div>
+          <p class="step-cap">Shared state is patched with a JSON Patch delta, then one terminal lifecycle event closes the run. The stream ends; the UI is ready for the next turn.</p>
+        </div>
+      </div>
+
+      <h2>Who owns the standard</h2>
+      <p>Provenance matters for a protocol, so here it is plainly. AG-UI is an open, MIT-licensed protocol created by <dfn>CopilotKit</dfn> — the company behind the popular React library of the same name for building in-app AI copilots. They shipped the frontend for years, kept re-inventing the agent-to-UI glue for every backend, and eventually extracted that glue into a named, versioned standard so the whole ecosystem could share it. It is deliberately positioned as the third member of a trio: MCP (agent-to-tools, from Anthropic), A2A (agent-to-agent, now under the Linux Foundation), and AG-UI (agent-to-user). Official SDKs exist for Python and TypeScript, and the protocol reached its 1.0 line in 2026 — the release that removed the old <code>THINKING_*</code> events in favour of <code>REASONING_*</code>. Integrations ship for CrewAI, LangGraph, Mastra, Agno, Pydantic AI, LlamaIndex and more, which is the real signal: a protocol is only a standard if more than its author builds on it.</p>
+
+      <h2>An honest maturity check</h2>
+      <p>Now the part the launch blog skips. The thing AG-UI does, it does well and it does <em>only</em> that: emitting well-formed events is genuinely easy — the SDK is thin, the encoder is a one-liner, and you saw the whole backend fit on one screen. But that ease hides the actual hard problem. <strong>AG-UI does not decide when to emit anything.</strong> Knowing that the model just started a tool call, that a token arrived, that state changed and by how much — that is your agent loop's job, and AG-UI supplies none of it. It is the ticket-printer, not the kitchen. If your loop never tells the printer a tool call started, no <code>TOOL_CALL_START</code> ticket prints, and the user stares at a frozen screen wondering what the agent is doing.</p>
+      <p>So be clear-eyed about the boundary. AG-UI gives you the streaming <em>contract</em> between agent and UI: a stable, portable, framework-agnostic wire format any conforming frontend can render. It does not give you orchestration, a control loop, checkpointing, durable state, or branching — you either write those yourself or bring a framework (LangGraph, deep agents) that does. Comparing AG-UI to LangGraph is a category error. The ecosystem is young but the shape is stable, and the reason to learn it now is the reason you install a standard ticket-printer: so any waiter can read your kitchen.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet an AG-UI backend first as a single POST route — often literally <code>@app.post("/")</code> — in a file named <code>agent.py</code> or <code>server.py</code>, with <code>ag_ui.core</code> and <code>ag_ui.encoder</code> in the imports and a <code>StreamingResponse(..., media_type="text/event-stream")</code> at the bottom. In the browser dev-tools Network tab, the tell is a request whose response streams <code>data: {"type":"TEXT_MESSAGE_CONTENT",...}</code> lines rather than returning all at once. In a merge request, "expose the research agent over AG-UI" means: wrap the existing loop in this generator, emit lifecycle plus text plus tool events at the right moments, return a streaming response. And when a teammate says "the UI spinner never stops," you now know exactly which ticket nobody printed — the terminal <code>RUN_FINISHED</code>.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What is the minimal shape of an AG-UI backend?</p>
+          <div class="q-opts">
+            <button data-opt="a">A graph of nodes and edges compiled with a checkpointer</button>
+            <button data-opt="b">One HTTP endpoint that accepts a RunAgentInput and streams back a sequence of events</button>
+            <button data-opt="c">A WebSocket server that must maintain durable state across runs</button>
+          </div>
+          <p class="q-explain">An AG-UI backend is just one POST endpoint returning a streaming response of events. Graphs, checkpointers and durable state are orchestration concerns AG-UI deliberately leaves to you or to a framework you bring.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. To stream a reply token by token, which event do you emit repeatedly?</p>
+          <div class="q-opts">
+            <button data-opt="a">RUN_STARTED, once per token</button>
+            <button data-opt="b">STATE_SNAPSHOT, once per token</button>
+            <button data-opt="c">TEXT_MESSAGE_CONTENT, once per token, all sharing one messageId</button>
+          </div>
+          <p class="q-explain">A message is one START, many CONTENT deltas, and one END. Each CONTENT carries a chunk in its delta field, and they share a messageId so the UI appends them into the same bubble.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">3. A tool call is reported to the UI as which sequence?</p>
+          <div class="q-opts">
+            <button data-opt="a">A single TOOL_CALL event carrying name, args and result together</button>
+            <button data-opt="b">TOOL_CALL_START, then one or more TOOL_CALL_ARGS (JSON fragments), then TOOL_CALL_END, then TOOL_CALL_RESULT — all sharing one toolCallId</button>
+            <button data-opt="c">STATE_DELTA events describing the tool's effect on state</button>
+          </div>
+          <p class="q-explain">The four tool events share a toolCallId. START gives the name, ARGS stream the arguments as concatenable JSON fragments, END closes the arguments, and RESULT carries the returned content. This mirrors how the model itself streams a tool call.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">4. Your shared state is a large document and one field changed. Which is the efficient choice, and what is it?</p>
+          <div class="q-opts">
+            <button data-opt="a">STATE_DELTA — a JSON Patch (RFC 6902) array of op/path/value describing only the change</button>
+            <button data-opt="b">STATE_SNAPSHOT — resend the entire document every time</button>
+            <button data-opt="c">TEXT_MESSAGE_CONTENT — state is just text</button>
+          </div>
+          <p class="q-explain">STATE_DELTA sends only what changed as a JSON Patch the UI applies to state it already holds — "change this one thing on the photo you have." STATE_SNAPSHOT sends the whole object, which is simple but wasteful for big state with tiny edits.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">5. Which statement is the honest description of what AG-UI does and does not do?</p>
+          <div class="q-opts">
+            <button data-opt="a">It replaces LangGraph by providing orchestration, checkpointing and a control loop</button>
+            <button data-opt="b">It decides when your agent should call tools and manages the run for you</button>
+            <button data-opt="c">It standardises the event stream between agent and UI, but deciding WHEN to emit each event is your agent loop's job — AG-UI is the printer, not the kitchen</button>
+          </div>
+          <p class="q-explain">Emitting well-formed events is easy; knowing when to emit them is orchestration, which AG-UI does not supply. It gives you the streaming contract to the UI and nothing more — you bring the loop, or a framework that has one.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>An AG-UI backend is one HTTP POST endpoint: it accepts a <code>RunAgentInput</code> and streams back a sequence of standard events — usually a FastAPI route returning a <code>StreamingResponse</code> with media type <code>text/event-stream</code>.</li>
+          <li>The Python SDK is thin: import event classes from <code>ag_ui.core</code>, wrap each in an <code>EventEncoder</code>, and <code>yield</code> the encoded frames from a generator. Python takes snake_case kwargs; the wire stays camelCase.</li>
+          <li>Stream text as one <code>TEXT_MESSAGE_START</code>, many <code>TEXT_MESSAGE_CONTENT</code> deltas, one <code>TEXT_MESSAGE_END</code>; report a tool call as <code>START</code> to <code>ARGS</code> to <code>END</code> to <code>RESULT</code>, all sharing a <code>toolCallId</code>.</li>
+          <li>Sync state two ways: <code>STATE_SNAPSHOT</code> ships the whole object; <code>STATE_DELTA</code> ships only what changed as a JSON Patch (RFC 6902). Snapshot to resync, deltas to stay cheap.</li>
+          <li>The emitter is framework-agnostic — the same generator can front a raw LLM loop, a ReAct loop, CrewAI or LangGraph — which is why a team standardises on it instead of betting on one heavy graph framework.</li>
+          <li>Be honest about the boundary: AG-UI standardises the streaming contract to the UI but supplies no loop, orchestration, checkpointing or durable state. Deciding <em>when</em> to emit is your agent's job — AG-UI is the ticket-printer, not the kitchen.</li>
+        </ul>
+      </section>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>You have the kitchen printing standard tickets. Next: the dining room that reads them. <a href="ch121-ag-ui-frontend-copilotkit.html">The frontend chapter</a> wires this backend to CopilotKit in React — the <code>&lt;CopilotChat /&gt;</code> component, generative UI from tool calls, and the shared-state hook that lets the UI push data back into your agent's next turn.</p></div>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>
