@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evaluating agents, not just models — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch128">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XV · The Enterprise Agent Platform</div>
+        <h1>Evaluating agents, not just models</h1>
+        <p class="ch-tagline">You tweaked a prompt and it "feels" better. Feelings are not evidence. Evals are unit tests for behaviour you cannot assert with == - and judging a whole agent is harder than judging one answer.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 128 of 133</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A restaurant hires a new chef and the owner tastes one dish. "Delicious - hired." For a month the reviews are fine, then they slide. What happened? The chef was brilliant at the dish the owner tasted and mediocre at the other forty on the menu, which nobody ever checked. The owner made a decision from a sample of one and a gut feeling, and the whole kitchen paid for it.</p>
+        <p>You do this to your agent every time you change a prompt and eyeball a single reply. It looks better, so you ship it. But that one tweak might have quietly broken five cases you did not think to try. There is no compiler error for "the agent is now worse at refunds," and no test that == can write, because the output is different every run. The discipline that replaces the owner's single taste-test is <strong>evaluation</strong>: a menu of cases, run every time, scored the same way, so "it feels better" becomes "it went from 71 to 88 on the suite - and here are the three cases that regressed."</p>
+      </section>
+
+      <h2>What an eval actually is</h2>
+      <p>An <dfn>evaluation</dfn> - "eval" for short - is scoring your system's outputs against expectations over a fixed dataset. It is a test, but for probabilistic behaviour: instead of asserting one exact value, you run many cases and measure how well the outputs match what you wanted. Wire that suite into your pipeline and a change that drops the score can block a merge, exactly like a failing unit test - a habit you already met in the <a href="ch101-gitlab-pipelines.html">pipelines chapter</a>.</p>
+      <p>The first big distinction decides how hard your job is.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">model-eval</span><span class="flip-back">Scoring a single input to a single output - classification accuracy, a QA answer against a reference. One shot in, one shot out, easy to grade.</span></button>
+        <button class="flip" type="button"><span class="flip-front">agent-eval</span><span class="flip-back">Scoring a whole TRAJECTORY - did it pick the right tools, in the right order, recover from errors, and reach the goal? Multi-step, stochastic, and the path matters, not just the last line. Much harder.</span></button>
+        <button class="flip" type="button"><span class="flip-front">LLM-as-judge</span><span class="flip-back">Using a model to grade another model's output against a rubric. Cheap and scalable, but the judge is itself fallible - calibrate it against human scores.</span></button>
+        <button class="flip" type="button"><span class="flip-front">golden set</span><span class="flip-back">A curated dataset of inputs with known-good expectations - your menu of cases. The bedrock every eval runs against.</span></button>
+        <button class="flip" type="button"><span class="flip-front">faithfulness</span><span class="flip-back">A RAG metric: is the answer grounded in the retrieved context, or did the model make it up? The main hallucination catcher.</span></button>
+        <button class="flip" type="button"><span class="flip-front">regression</span><span class="flip-back">A change that makes a case that used to pass now fail. Evals exist mostly to catch these before your users do.</span></button>
+      </div>
+
+      <h2>Why judging an agent is harder than judging a model</h2>
+      <p><dfn>Model-eval</dfn> scores one input to one output: was this answer right, was this label correct. You can grade it with an exact match or a reference. <dfn>Agent-eval</dfn> scores a whole <dfn>trajectory</dfn> - the full path the agent took through the <a href="ch045-react-loop-by-hand.html">loop</a>. Did it choose the right tool? In the right order? Did it notice a tool error and recover, or barrel on? Did it reach the goal at all? The final answer can look fine while the path was a disaster - three wasted tool calls, a wrong turn it happened to recover from. And because the agent is stochastic, the same input can take a different path next run. Judging that is genuinely harder, which is why - honestly, as of mid-2026 - agent-trajectory eval tooling is still maturing, and several platforms that began with model-eval are only now extending toward full agent evaluation.</p>
+
+      <h2>How you grade, when there is no single right answer</h2>
+      <p>Evaluators come in a ladder of sophistication. <strong>Exact-match and heuristics</strong> work when there is a crisp answer (a number, a label, a required substring). <strong>Reference-based</strong> scoring compares against a known-good answer with a similarity measure. And <strong>LLM-as-judge</strong> hands the output to a model with a rubric - "score 0 to 1 for whether this answer is grounded, polite, and complete" - which scales to fuzzy, open-ended replies that no <code>==</code> could grade. Human evaluation remains the gold standard, but it is slow and costly, so you use it to calibrate the cheaper judges, not to grade every run.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Build the set">
+          <h3>1. Build a golden set</h3>
+          <div class="diagram">
+            <div class="d-box hot">golden set<small>inputs + expectations</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">run agent</div>
+            <div class="d-box dim">score</div>
+            <div class="d-box dim">compare</div>
+          </div>
+          <p class="step-cap">Curate the menu: real inputs paired with known-good expectations, including the tricky cases that broke before. This dataset is the thing you defend.</p>
+        </div>
+        <div class="step" data-title="Run">
+          <h3>2. Run the agent over every case</h3>
+          <div class="diagram">
+            <div class="d-box good">golden set</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">run agent<small>capture answer + trajectory</small></div>
+            <div class="d-box dim">score</div>
+            <div class="d-box dim">compare</div>
+          </div>
+          <p class="step-cap">Run the candidate version over the whole set, capturing not just the final answer but the trajectory (which tools, what order) if you are doing agent-eval.</p>
+        </div>
+        <div class="step" data-title="Score">
+          <h3>3. Score each output</h3>
+          <div class="diagram">
+            <div class="d-box good">golden set</div>
+            <div class="d-box good">run agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">score<small>exact-match · judge · RAG metrics</small></div>
+            <div class="d-box dim">compare</div>
+          </div>
+          <p class="step-cap">Apply your evaluators - exact-match where the answer is crisp, an LLM-as-judge where it is fuzzy, RAG metrics where retrieval is involved. Every case gets a number.</p>
+        </div>
+        <div class="step" data-title="Compare">
+          <h3>4. Compare versions and gate the merge</h3>
+          <div class="diagram">
+            <div class="d-box good">score</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">v2 = 88<small>up from 71</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">merge</div>
+          </div>
+          <p class="step-cap">Line the new version up against the old on a leaderboard. If it improved and nothing regressed, merge; if the refund cases dropped, you caught it here instead of in production.</p>
+        </div>
+      </div>
+
+      <h2>RAG has its own metrics</h2>
+      <p>When your agent retrieves documents and answers from them, the failure modes are specific, so the metrics are too. A popular open toolkit (Ragas) provides the standard ones - verify the exact names against current docs, but the shapes are stable: <dfn>faithfulness</dfn> (is the answer grounded in the retrieved context, or hallucinated?), <strong>answer relevance</strong> (does it actually address the question?), and <strong>context precision / recall</strong> (did retrieval fetch the right material, and enough of it?). Faithfulness is the one people reach for first, because it is the direct hallucination alarm: a fluent, confident answer that the retrieved documents do not support scores low, and that low score is what saves you.</p>
+
+      <h2>Run a tiny eval yourself</h2>
+      <p>An eval harness is not a mystery. It is a dataset, an agent, a scorer, and a loop. Below, a fake agent answers three questions; one answer is wrong on purpose. We score with exact-match and with a simple stand-in for an LLM-as-judge, then print the pass rate. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A pocket eval harness with an LLM-as-judge">
+<textarea class="py-src" spellcheck="false">
+# A golden set: inputs paired with known-good answers.
+dataset = [
+    {"q": "capital of France?", "expected": "Paris"},
+    {"q": "2 + 2?",             "expected": "4"},
+    {"q": "opposite of hot?",   "expected": "cold"},
+]
+
+def agent_v1(q):
+    # stand-in for a real agent; gets the last one wrong on purpose.
+    answers = {"capital of France?": "Paris",
+               "2 + 2?": "4",
+               "opposite of hot?": "warm"}
+    return answers.get(q, "?")
+
+def exact_match(got, expected):
+    return got.strip().lower() == expected.strip().lower()
+
+def llm_judge(got, expected):
+    # a faked LLM-as-judge: lenient about near-misses, returns a score.
+    if exact_match(got, expected):
+        return 1.0, "exact"
+    if expected.lower() in got.lower():
+        return 0.7, "contains the answer"
+    return 0.0, "wrong"
+
+passed, total_score = 0, 0.0
+for row in dataset:
+    got = agent_v1(row["q"])
+    ok = exact_match(got, row["expected"])
+    score, reason = llm_judge(got, row["expected"])
+    passed += 1 if ok else 0
+    total_score += score
+    print(f"{'PASS' if ok else 'FAIL'}  q={row['q']:22} got={got:6} judge={score} ({reason})")
+
+n = len(dataset)
+print()
+print(f"exact-match pass rate: {passed}/{n}")
+print(f"judge average score:   {total_score / n:.2f}")
+print("a regression is any case that flips from PASS to FAIL between versions")
+</textarea>
+      </div>
+
+      <div class="viz-tiles">
+        <div class="tile"><div class="tile-label">suite score v1</div><div class="tile-value">71</div><div class="tile-delta">illustrative</div></div>
+        <div class="tile"><div class="tile-label">suite score v2</div><div class="tile-value">88</div><div class="tile-delta">after the prompt change</div></div>
+        <div class="tile"><div class="tile-label">regressions</div><div class="tile-value">2</div><div class="tile-delta">caught before merge</div></div>
+        <div class="tile"><div class="tile-label">faithfulness</div><div class="tile-value">0.94</div><div class="tile-delta">grounded, low hallucination</div></div>
+      </div>
+
+      <h2>The harness that holds it together</h2>
+      <p>Around the loop sits an <dfn>experiment-tracking</dfn> platform (an MLflow-style tool): it logs each run with its parameters and metrics, keeps a leaderboard so you can compare versions, and plugs into your pipeline so a regression blocks the merge. A strategic pattern many teams land on is one platform for both experiment tracking and evaluation, with pluggable metric libraries - so a plain accuracy eval and a RAG-metrics eval (the Ragas-style scores) live and compare in the same place, instead of two disconnected tools. One home for "how good is it, across every version we have tried."</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will see an <code>evals/</code> folder with a dataset and a runner, an eval job wired into CI so a merge request shows a score delta, and review comments like "faithfulness dropped 8 points - what changed in retrieval?" You will meet MLflow runs on a leaderboard and LLM-as-judge prompts checked into the repo. When a team at a large bank debates "is model-eval enough, or do we need full agent-eval?", they are living this chapter: grading the final answer is easy, grading the whole trajectory is the frontier.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Why is "I changed the prompt and the reply looks better" not enough to ship?</p>
+          <div class="q-opts">
+            <button data-opt="a">Prompts should never be changed</button>
+            <button data-opt="b">One eyeballed reply is a sample of one; the change may have regressed cases you did not test - only a scored suite reveals that</button>
+            <button data-opt="c">The reply is always worse after a change</button>
+          </div>
+          <p class="q-explain">Like the owner tasting one dish, a single reply hides regressions across the rest of the menu. An eval runs many cases, scored the same way, so improvements and regressions both show up.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. What makes agent-eval harder than model-eval?</p>
+          <div class="q-opts">
+            <button data-opt="a">Agents produce shorter outputs</button>
+            <button data-opt="b">Nothing - they are the same</button>
+            <button data-opt="c">Agent-eval scores a whole multi-step trajectory (tool choices, order, recovery), which is stochastic and where the path matters, not just the final answer</button>
+          </div>
+          <p class="q-explain">Model-eval grades one input to one output. Agent-eval must judge the entire path through the loop, which can differ run to run and can be wrong even when the final line looks right.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What does the RAG metric "faithfulness" measure?</p>
+          <div class="q-opts">
+            <button data-opt="a">Whether the answer is grounded in the retrieved context rather than made up</button>
+            <button data-opt="b">How fast the retrieval was</button>
+            <button data-opt="c">Whether the user liked the answer</button>
+          </div>
+          <p class="q-explain">Faithfulness is the direct hallucination alarm: a confident answer the retrieved documents do not support scores low, flagging that the model invented it.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. What is an "LLM-as-judge"?</p>
+          <div class="q-opts">
+            <button data-opt="a">A human panel that reviews every output</button>
+            <button data-opt="b">Using a model to grade another model's output against a rubric - scalable but itself fallible, so calibrate it against human scores</button>
+            <button data-opt="c">A rule that only exact matches count</button>
+          </div>
+          <p class="q-explain">LLM-as-judge scores fuzzy, open-ended outputs that == cannot grade. It is cheap and scalable, but because the judge can be wrong, you calibrate it against a sample of human judgements.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>An eval is a test for probabilistic behaviour: run a fixed dataset, score the outputs, and let a drop block a merge - "it feels better" becomes a measured delta.</li>
+          <li>Model-eval scores one input to one output; agent-eval scores a whole trajectory (tool choices, order, recovery) and is much harder because the path matters and is stochastic.</li>
+          <li>Grade with a ladder: exact-match and heuristics for crisp answers, references for similarity, and LLM-as-judge for fuzzy ones - with human eval as the calibration gold standard.</li>
+          <li>RAG has its own metrics - faithfulness (grounded vs hallucinated), answer relevance, context precision/recall - and faithfulness is the first-reach hallucination alarm.</li>
+          <li>An eval harness is just a golden set, an agent, a scorer, and a loop - you ran one - wrapped by experiment tracking that leaderboards versions.</li>
+          <li>A strong pattern is one platform for experiment tracking and evaluation with pluggable metric libraries, so plain and RAG-style evals compare in one place.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

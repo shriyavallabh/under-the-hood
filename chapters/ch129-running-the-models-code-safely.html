@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Running the model's code without losing the box — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch129">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XV · The Enterprise Agent Platform</div>
+        <h1>Running the model's code without losing the box</h1>
+        <p class="ch-tagline">When the agent writes code you must actually run, a normal container is not a safe place to run it. The shared-kernel problem, and the hardware-isolated sandboxes that solve it.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 129 of 133</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A bank teller can do a great deal for you - but there is bulletproof glass between you and the vault, and a drawer that passes cash through a slot. Why the theatre? Because the bank does not know you. Most customers are honest; a few are not; and the bank cannot tell which is which at the counter. So it does not rely on trust. It relies on a wall, and hands things through a controlled opening. Every customer, honest or not, meets the same glass.</p>
+        <p>Now your agent writes a neat Python snippet to crunch a spreadsheet and asks you to run it. You could just <code>exec()</code> it - on your server. But the model can be wrong, the input can be hostile, and generated code is a stranger at the counter. Run it on your host and a mistake or an attack runs with your host's hands: your files, your network, your credentials. The question every coding agent must answer is the bank's question - <em>where does the stranger's code run, and what wall stands between it and everything that matters?</em></p>
+      </section>
+
+      <h2>Code execution is powerful - and untrusted</h2>
+      <p>Letting an agent run code is one of the biggest upgrades you can give it. Real coding agents do it constantly: compute, transform files, test a fix, plot a chart. But the code is <dfn>untrusted</dfn> - not because the model is malicious, but because you cannot verify in advance that a generated program is safe, and the data it processes might be crafted to make it misbehave. The entire design problem reduces to one question: how strong is the wall between that code and your system? That strength has a name - the <dfn>isolation boundary</dfn> - and not all boundaries are equal.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">sandbox</span><span class="flip-back">An isolated environment where untrusted code can run without reaching the host. The bulletproof glass for generated code.</span></button>
+        <button class="flip" type="button"><span class="flip-front">shared kernel</span><span class="flip-back">Ordinary containers all use the host's single operating-system kernel. Break the kernel and you break out of every container - which is why plain containers are not a security wall for hostile code.</span></button>
+        <button class="flip" type="button"><span class="flip-front">microVM</span><span class="flip-back">A tiny, fast virtual machine (e.g. Firecracker) that boots in a fraction of a second and gives each sandbox its OWN kernel, so an escape stays trapped inside the VM.</span></button>
+        <button class="flip" type="button"><span class="flip-front">gVisor</span><span class="flip-back">A user-space kernel that intercepts a container's system calls, so the code never talks to the host kernel directly. A software isolation layer stronger than a plain container.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Kata Containers</span><span class="flip-back">Runs each container inside its own lightweight VM, so you get container ergonomics with VM-grade isolation. Verify specifics against current docs.</span></button>
+        <button class="flip" type="button"><span class="flip-front">egress guardrail</span><span class="flip-back">Blocking the sandbox's outbound network so even code that runs cannot phone home, exfiltrate data, or fetch more attack tools.</span></button>
+      </div>
+
+      <h2>Recall: a container shares the kernel</h2>
+      <p>Back in <a href="ch110-containers-and-images.html">containers and images</a>, you learned that a container is not a little virtual machine - it is a process on the host, walled off with kernel features (namespaces and cgroups) that give it its own view of the filesystem, its own process list, its own resource limits. That is wonderful for packaging and for keeping well-behaved services out of each other's way. But notice the load-bearing detail: every container on a machine shares the <em>same host kernel</em>. The walls are drawn <em>by</em> that one kernel.</p>
+      <p>For hostile code, that is the whole problem. Namespaces and cgroups are isolation of convenience, not a security boundary designed to withstand an attacker. If generated code finds a kernel bug or a misconfiguration, it can climb out of the container and onto the host - and because the kernel is shared, escaping one container can mean reaching all of them. A plain Docker container is a fine box for your own service; it is <strong>not</strong> a safe place to run arbitrary code a model just wrote.</p>
+
+      <h2>The ladder of isolation</h2>
+      <p>Think of a ladder from "no wall" to "hardware wall," and match the rung to the trust you have in the code.</p>
+
+      <div class="viz-tiles">
+        <div class="tile"><div class="tile-label">exec / eval in-process</div><div class="tile-value">no wall</div><div class="tile-delta">never for untrusted code</div></div>
+        <div class="tile"><div class="tile-label">OS process / user</div><div class="tile-value">weak</div><div class="tile-delta">same kernel, few limits</div></div>
+        <div class="tile"><div class="tile-label">plain container</div><div class="tile-value">shared kernel</div><div class="tile-delta">escape reaches the host</div></div>
+        <div class="tile"><div class="tile-label">microVM / gVisor / Kata</div><div class="tile-value">own kernel</div><div class="tile-delta">escape stays contained</div></div>
+      </div>
+
+      <p>Running the code in your own process with <code>exec()</code> is no wall at all - the code has everything your program has. A separate OS process or user is a weak wall on the same kernel. A plain container is the shared-kernel box above. The top rung is <strong>hardware or VM isolation</strong>: give each sandbox its own kernel. <dfn>microVMs</dfn> like Firecracker boot a tiny VM in a fraction of a second; <dfn>gVisor</dfn> puts a user-space kernel between the code and the host so syscalls never hit the real kernel; <dfn>Kata Containers</dfn> run each container inside its own lightweight VM. The rule is blunt: <strong>for arbitrary model-generated code, use a hardware/kernel-isolated sandbox, never a plain container.</strong></p>
+
+      <div class="stepper">
+        <div class="step" data-title="Agent writes code">
+          <h3>1. The agent produces code</h3>
+          <div class="diagram">
+            <div class="d-box hot">agent<small>writes a Python snippet</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">sandbox</div>
+            <div class="d-box dim">result</div>
+          </div>
+          <p class="step-cap">As in the loop, the model emits an action - here, a block of code to run. Nothing has executed yet. This is the moment to decide where it runs.</p>
+        </div>
+        <div class="step" data-title="Spawn an isolated sandbox">
+          <h3>2. Spawn a fresh, isolated sandbox</h3>
+          <div class="diagram">
+            <div class="d-box good">agent</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">sandbox<small>own kernel · no network</small></div>
+            <div class="d-box dim">result</div>
+          </div>
+          <p class="step-cap">A hardware-isolated sandbox is created just for this run, with its own kernel and its outbound network cut off. Even if the code is hostile, its blast radius is this disposable box.</p>
+        </div>
+        <div class="step" data-title="Run and capture">
+          <h3>3. Run inside the wall, capture the output</h3>
+          <div class="diagram">
+            <div class="d-box good">agent</div>
+            <div class="d-box hot">sandbox<small>runs the code</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">result<small>stdout, files</small></div>
+          </div>
+          <p class="step-cap">The code runs behind the glass. Its output - printed text, produced files - is handed back through the slot. What it cannot do is touch your host, your network, or another user's sandbox.</p>
+        </div>
+        <div class="step" data-title="Destroy">
+          <h3>4. Destroy the sandbox</h3>
+          <div class="diagram">
+            <div class="d-box good">result</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">sandbox destroyed<small>ephemeral</small></div>
+          </div>
+          <p class="step-cap">The sandbox is thrown away after the run. Nothing persists, nothing accumulates, and the next run starts clean. Ephemerality is itself a defence.</p>
+        </div>
+      </div>
+
+      <h2>Defence in depth</h2>
+      <p>Isolation is the wall, but a careful sandbox layers more on top: an <dfn>egress guardrail</dfn> that blocks outbound network so code cannot phone home or fetch more tools; a read-only base image; strict CPU, memory, and time limits so a runaway snippet cannot exhaust the machine; and ephemerality so each run starts clean. And before any of that, a policy can simply refuse obviously dangerous code. Here is that first, cheapest layer - a policy that inspects a snippet and declines the risky ones. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="A policy that refuses dangerous code before running it">
+<textarea class="py-src" spellcheck="false">
+# The cheapest layer: inspect the code and refuse obvious danger
+# BEFORE it reaches the sandbox at all. Not a substitute for real
+# isolation - a first filter on top of it.
+DENY = ["import socket", "urllib", "requests.", "open(", "subprocess",
+        "os.system", "/etc/"]
+
+def policy_check(code):
+    for bad in DENY:
+        if bad in code:
+            return False, f"refused (contains {bad!r})"
+    return True, "allowed"
+
+def sandbox_run(code):
+    ok, reason = policy_check(code)
+    if not ok:
+        return reason
+    # a REAL sandbox would now run this inside a hardware-isolated
+    # VM with no network; here we just note that it passed the filter.
+    return "allowed -> would run in an isolated sandbox"
+
+snippets = [
+    "total = sum(range(100))",
+    "import socket; socket.connect(('evil.example', 80))",
+    "data = open('/etc/passwd').read()",
+    "avg = sum([3, 5, 7]) / 3",
+]
+for s in snippets:
+    verdict = sandbox_run(s)
+    print(f"{verdict:44}  <-  {s}")
+</textarea>
+      </div>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>A deny-list like the one above is a speed bump, not the wall - a determined attacker can dodge string matching. It reduces noise and catches accidents, but the real safety is the hardware-isolated sandbox with no network behind it. Never let a clever filter tempt you into running untrusted code on a plain container "because we check it first."</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>Every hosted code-interpreter feature you have used runs your code in something like this - Firecracker microVMs power a lot of serverless and code-sandbox products, and services built for agents (e.g. e2b, Modal) exist precisely to offer safe execution as an API. In a design review you will hear "we run tool code in a gVisor sandbox," "the sandbox has no egress," and "why can't the agent pip install?" - the answer to the last being that the network is deliberately cut. When a platform team at a large bank refuses to run generated code on the shared cluster's normal nodes, the shared kernel is exactly why.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. Why is a plain Docker container not a safe place to run arbitrary model-generated code?</p>
+          <div class="q-opts">
+            <button data-opt="a">Containers are too slow to start</button>
+            <button data-opt="b">Containers share the host kernel, so a kernel exploit or misconfiguration can let the code escape onto the host</button>
+            <button data-opt="c">Containers cannot run Python</button>
+          </div>
+          <p class="q-explain">A container's isolation is drawn by the shared host kernel with namespaces and cgroups - convenience, not a security wall. Break the kernel and you are on the host, and potentially in every other container.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. What is the defining property of a microVM, gVisor, or Kata sandbox that a plain container lacks?</p>
+          <div class="q-opts">
+            <button data-opt="a">They are written in Rust</button>
+            <button data-opt="b">They run faster than containers</button>
+            <button data-opt="c">They give the sandbox its own kernel / isolation boundary, so an escape stays contained instead of reaching the host</button>
+          </div>
+          <p class="q-explain">Hardware/VM isolation means the untrusted code does not share the host kernel, so even a successful escape is trapped inside the disposable sandbox.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Besides isolation, which of these is a standard extra guardrail on a code sandbox?</p>
+          <div class="q-opts">
+            <button data-opt="a">Blocking outbound network so the code cannot phone home or exfiltrate data</button>
+            <button data-opt="b">Giving the code your API keys so it can be useful</button>
+            <button data-opt="c">Letting it write to the host filesystem for convenience</button>
+          </div>
+          <p class="q-explain">Defence in depth: cut egress, limit CPU/memory/time, use a read-only base, and destroy the sandbox after each run. Handing it credentials or host access would defeat the point.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. A teammate suggests running generated code on a normal container "because we deny-list dangerous strings first." What is the right response?</p>
+          <div class="q-opts">
+            <button data-opt="a">Agree - string checks are sufficient</button>
+            <button data-opt="b">Agree, as long as the deny-list is long</button>
+            <button data-opt="c">Push back - a deny-list is a speed bump; the real wall must be hardware isolation, with the filter only as an extra layer</button>
+          </div>
+          <p class="q-explain">A determined attacker dodges string matching. Filters reduce noise and catch accidents, but the security boundary has to be a kernel-isolated sandbox, not clever pre-checks on a shared-kernel box.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Running code is a huge capability, but generated code is untrusted - the whole design reduces to how strong the isolation boundary is between it and your system.</li>
+          <li>A plain container shares the host kernel; its namespaces and cgroups are convenience, not a security wall, so an escape can reach the host and other containers.</li>
+          <li>For arbitrary generated code, use hardware/kernel isolation - a microVM (Firecracker), gVisor, or Kata - so each sandbox has its own kernel and an escape stays trapped.</li>
+          <li>Layer defence in depth: block outbound network, use a read-only base, cap CPU/memory/time, and make the sandbox ephemeral so every run starts clean.</li>
+          <li>A policy that refuses obviously dangerous code is a cheap first filter, but it is a speed bump - never a replacement for real isolation.</li>
+          <li>Hosted code interpreters run on exactly this - microVMs and sandbox services - which is why "the sandbox has no internet" and "you can't pip install" are features, not bugs.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anatomy of a sandbox service — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch130">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XV · The Enterprise Agent Platform</div>
+        <h1>Anatomy of a sandbox service</h1>
+        <p class="ch-tagline">You know the code needs a hardware-isolated box. Now build the service that manages those boxes - sessions, file projection in and out, guardrails, and why the execute tool is a plain agent tool, not an MCP call.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 130 of 133</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A chemistry lab does not let researchers work at their desks. It has a fume hood: you carry in exactly the samples you need, do the reaction behind the glass with the extractor running, and carry the results back out. The hood is booked as a session, used, and cleaned. Nobody mounts their entire office into the hood; they bring the three vials that matter and take back whatever they produced. And when they leave, the hood is reset for the next person.</p>
+        <p>That is a sandbox service. Last chapter gave you the fume hood itself - the hardware-isolated box. But a lab is more than one hood; it is the booking desk, the trolley that carries samples in and results out, the timer that clears an idle station, and the rule that you only bring what you need. This chapter builds that surrounding machinery: the small service the agent talks to whenever it wants to run code, and the careful choreography of getting files in, running safely, and getting results back without ever handing the stranger the keys to the whole building.</p>
+      </section>
+
+      <h2>What the service exposes</h2>
+      <p>A <dfn>sandbox service</dfn> is a small control plane over disposable isolated compute. The agent's harness talks to it through a handful of endpoints - a booking desk for fume hoods. The core API is short:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">session</span><span class="flip-back">A booked, isolated sandbox you hold a handle to. Create one, run several commands in it, then delete it. The unit of work and of cleanup.</span></button>
+        <button class="flip" type="button"><span class="flip-front">projection</span><span class="flip-back">Copying a chosen set of files INTO the sandbox before running, and copying results back OUT after. Copy, not mount - so the sandbox can only ever see what you handed it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">workspace</span><span class="flip-back">The main file namespace for a conversation - the documents the agent is working on. Projected in, and its new/changed files projected back.</span></button>
+        <button class="flip" type="button"><span class="flip-front">scratch</span><span class="flip-back">A temporary file namespace for throwaway files the agent does not need kept. NOT projected back to the harness - it evaporates with the sandbox.</span></button>
+        <button class="flip" type="button"><span class="flip-front">ephemeral</span><span class="flip-back">Sessions are short-lived: a max lifetime and/or idle timeout, after which the orchestrator reclaims the pod. Nothing accumulates.</span></button>
+        <button class="flip" type="button"><span class="flip-front">execute tool</span><span class="flip-back">The agent's tool for running code. Crucially a plain structured tool in the harness's own logic - it connects, projects, runs, rehydrates - NOT an MCP call.</span></button>
+      </div>
+
+      <p>Put together, the endpoints are: <strong>create a session</strong> (spawns an isolated pod), <strong>project files in</strong>, <strong>execute a command</strong> (bash or Python), <strong>snapshot / project files out</strong>, and <strong>delete the session</strong>. Five moves, and the agent can safely run whatever it writes.</p>
+
+      <h2>Projection: copy in, copy out</h2>
+      <p>The subtle, important choice is <dfn>projection</dfn>. Rather than mounting your whole workspace into the sandbox - which would give hostile code a path back to everything - the service <em>copies</em> a defined set of files in, and copies results back out. Because it is a copy, the sandbox physically cannot reach beyond what you handed it. And not everything comes back: files live in namespaces, and the temporary <dfn>scratch</dfn> namespace is deliberately left behind. Follow the round-trip:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Create session">
+          <h3>1. Create a session</h3>
+          <div class="diagram">
+            <div class="d-box hot">harness<small>create session</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box">sandbox pod<small>fresh, isolated</small></div>
+            <div class="d-box dim">workspace</div>
+          </div>
+          <p class="step-cap">The harness asks the service for a session; the service spawns a hardware-isolated pod and hands back a handle. The box is empty and walled.</p>
+        </div>
+        <div class="step" data-title="Project in">
+          <h3>2. Project the workspace in</h3>
+          <div class="diagram">
+            <div class="d-box good">harness</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">sandbox pod<small>data.csv, notes.txt copied in</small></div>
+            <div class="d-box dim">result</div>
+          </div>
+          <p class="step-cap">Only the conversation's files are copied into the pod. Not your whole disk - the specific workspace for this run. The sandbox now has exactly what it needs and nothing else.</p>
+        </div>
+        <div class="step" data-title="Execute">
+          <h3>3. Execute the code</h3>
+          <div class="diagram">
+            <div class="d-box good">harness</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">sandbox pod<small>runs; writes result.txt + scratch/tmp</small></div>
+            <div class="d-box dim">result</div>
+          </div>
+          <p class="step-cap">The agent's command runs behind the glass. It reads the inputs, writes a result, and drops a throwaway file in scratch. No network, only the projected files.</p>
+        </div>
+        <div class="step" data-title="Project out and destroy">
+          <h3>4. Snapshot back, drop scratch, destroy</h3>
+          <div class="diagram">
+            <div class="d-box good">sandbox pod</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">harness<small>result.txt returned</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">session deleted</div>
+          </div>
+          <p class="step-cap">New and modified workspace files are snapshotted back to the harness; the scratch namespace is dropped; the session is destroyed. The harness now holds the results, and nothing of the sandbox remains.</p>
+        </div>
+      </div>
+
+      <p>Both <em>new</em> and <em>modified</em> files are detected and returned - if the code edits <code>data.csv</code>, the change comes back; if it writes <code>result.txt</code>, that appears; if it scribbles in <code>scratch/</code>, that stays behind. Run the projection logic yourself:</p>
+
+      <div class="pyrun" data-title="Projection: only new/modified workspace files come back">
+<textarea class="py-src" spellcheck="false">
+# Files are COPIED into the sandbox, code runs, then only NEW or
+# MODIFIED workspace files are copied back - scratch is dropped.
+workspace = {"data.csv": "a,b/1,2/3,4", "notes.txt": "keep me"}
+
+def project_in(files):
+    return dict(files)   # a copy, not a mount
+
+def run_in_sandbox(box):
+    box["result.txt"] = "sum=10"       # a new workspace file
+    box["notes.txt"] = "keep me (edited)"  # a modified file
+    box["scratch/tmp.bin"] = "junk"    # temporary - scratch namespace
+    return box
+
+def project_out(before, after):
+    out = {}
+    for name, content in after.items():
+        if name.startswith("scratch/"):
+            continue                    # scratch never returns
+        if name not in before or before[name] != content:
+            out[name] = content         # new or modified only
+    return out
+
+box = run_in_sandbox(project_in(workspace))
+returned = project_out(workspace, box)
+
+print("projected back to the harness:")
+for name in sorted(returned):
+    print("  +", name)
+print()
+print("left behind (scratch):",
+      [n for n in box if n.startswith("scratch/")])
+</textarea>
+      </div>
+
+      <h2>The execute tool is a plain agent tool - not MCP</h2>
+      <p>Here is a design point that surprises people. You met <a href="ch035-tool-calling.html">tool calling</a>, and later the idea of MCP as the way agents reach <em>external</em> capabilities. So you might expect "run code in a sandbox" to be an MCP tool. It usually is not. The <dfn>execute tool</dfn> is a plain structured tool implemented directly in the harness's own business logic - it sits alongside read, write, and list - and its body does the whole dance: connect to the sandbox service, project files in, run the command, rehydrate the results. It does not go through MCP, because sandboxed execution is <em>core harness plumbing</em>, not a pluggable external service. Read its shape:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">execute_tool.py - a structured tool in the harness</div>
+        <div class="wl-line"><code>def execute(command: str, language: str = "python") -&gt; str:</code>
+          <div class="wl-note">A normal typed tool the model can call, just like a calculator. Its signature is simple; all the machinery hides in the body. To the model it is one more tool on the menu.</div></div>
+        <div class="wl-line"><code>    session = sandbox.create_session()</code>
+          <div class="wl-note">Book a fume hood: the service spawns an isolated pod and returns a handle. This is business logic in the harness, not a call out over MCP.</div></div>
+        <div class="wl-line"><code>    sandbox.project_in(session, workspace_files())</code>
+          <div class="wl-note">Copy the conversation's workspace into the pod. The tool decides what to send - the model never gets to point the sandbox at arbitrary paths.</div></div>
+        <div class="wl-line"><code>    result = sandbox.run(session, command, language)</code>
+          <div class="wl-note">Run the command behind the glass and capture stdout and errors. No network reaches out; only the projected files are visible.</div></div>
+        <div class="wl-line"><code>    save(sandbox.project_out(session))</code>
+          <div class="wl-note">Snapshot new and modified workspace files back into the conversation. Scratch is dropped by the service. The harness now owns the results.</div></div>
+        <div class="wl-line"><code>    sandbox.delete_session(session)</code>
+          <div class="wl-note">Tear the sandbox down. Ephemeral by default - the next execution starts from a clean, isolated box.</div></div>
+        <div class="wl-line"><code>    return result.stdout</code>
+          <div class="wl-note">Hand the output back to the model as the tool's observation, closing the loop. From the model's side it simply called <code>execute(...)</code> and got text.</div></div>
+      </div>
+
+      <h2>Lifecycle, guardrails, and the sharp edges</h2>
+      <p>Sessions are <dfn>ephemeral</dfn>: the service sets a max lifetime and/or idle timeout, and the orchestrator (Kubernetes, or a microVM manager) reclaims the pod. Sandbox pods live in a <em>separate namespace</em> from the app - recall from <a href="ch116-day2-on-aks.html">day-two on the cluster</a> that a namespace is a walled section of the cluster - so a burst of sandbox sessions never crowds the agent itself. The guardrails from last chapter still apply: no outbound network, strict resource limits, only the projected files. Two sharp edges are worth knowing. First, <strong>authorization</strong>: a session must be scoped to a user and run - an unscoped session id that anyone could reuse is a real security hole to close before multi-tenant use. Second, <strong>human-in-the-loop</strong>: when a tool call is paused for approval, the harness typically kills the session and recreates it on resume, so nothing lingers half-run. And a practical quirk - execution policies can force patterns like "write a temp file, then run it," turning one logical action into two tool calls.</p>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>One more decision the platform owns: what is <em>in</em> the sandbox image. A fully curated image ships only the Python standard library - predictable and locked down. A tenant-extensible one lets teams add packages like pandas. It is a genuine trade-off between safety and usefulness, and, like most things in this act, it is a choice you make deliberately, not a default you inherit.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet a "sandbox" or "code-exec" microservice with a small OpenAPI page (create-session, execute, delete), ephemeral pods appearing and vanishing in a <code>sandbox-sessions</code> namespace, and an <code>execute</code> tool sitting right next to <code>read_file</code> and <code>write_file</code> in an agent's toolset. In a review you will hear "the session isn't scoped to the user yet" (the authorization hole) and "it needed two calls because the policy blocks direct script exec" (the quirk). When a platform team at a large bank builds this, the debate is almost always projection rules and image contents - exactly the choices above.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Why does a sandbox service copy (project) files in rather than mounting the whole workspace?</p>
+          <div class="q-opts">
+            <button data-opt="a">Mounting is slower</button>
+            <button data-opt="b">Copying uses less disk</button>
+            <button data-opt="c">A copy means the sandbox can only ever see the files you handed it, with no path back to everything else</button>
+          </div>
+          <p class="q-explain">Projection is a security choice: copy in exactly the needed files, so hostile code has no route to the rest of your system, and copy results back out explicitly.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. What happens to files the agent writes into the scratch namespace?</p>
+          <div class="q-opts">
+            <button data-opt="a">They are projected back to the harness like workspace files</button>
+            <button data-opt="b">They are dropped - scratch is temporary and not returned</button>
+            <button data-opt="c">They are emailed to the user</button>
+          </div>
+          <p class="q-explain">Scratch is for throwaway files; only new and modified workspace files are projected back. Scratch evaporates with the ephemeral sandbox.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Is the execute tool typically an MCP call?</p>
+          <div class="q-opts">
+            <button data-opt="a">No - it is a plain structured tool in the harness's own business logic (connect, project, run, rehydrate), because sandboxed execution is core plumbing</button>
+            <button data-opt="b">Yes - it is always exposed over MCP</button>
+            <button data-opt="c">It is not a tool at all; the model runs code directly</button>
+          </div>
+          <p class="q-explain">MCP is for pluggable external capabilities. Sandboxed execution is core harness machinery, so the execute tool sits alongside read/write/list and implements the projection dance itself.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. What is the authorization risk to close before a sandbox service is multi-tenant?</p>
+          <div class="q-opts">
+            <button data-opt="a">Sessions run too long</button>
+            <button data-opt="b">An unscoped session id that anyone could reuse - sessions must be scoped to a user and run</button>
+            <button data-opt="c">The scratch namespace is too small</button>
+          </div>
+          <p class="q-explain">If a session is not tied to a user and run, a leaked or guessed session id could let one caller reach another's sandbox. Scoping sessions is the fix before opening it to many tenants.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>A sandbox service is a small control plane over disposable isolated compute: create a session, project files in, execute, project results out, delete.</li>
+          <li>Projection copies (never mounts) a chosen set of files in and copies new/modified workspace files back - so the sandbox only ever sees what you handed it.</li>
+          <li>Files live in namespaces: the workspace round-trips, but the temporary scratch namespace is deliberately dropped and never returned.</li>
+          <li>The execute tool is a plain structured tool in the harness's own logic - not an MCP call - because sandboxed execution is core plumbing, not a pluggable external service.</li>
+          <li>Sessions are ephemeral (max lifetime / idle timeout) and run in a separate cluster namespace, with the same no-network, resource-limited guardrails.</li>
+          <li>Close the sharp edges: scope sessions to a user and run (authorization), kill and recreate on human-in-the-loop pauses, and decide curated vs tenant-extensible images.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shipping a harness as a product — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch132">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XV · The Enterprise Agent Platform</div>
+        <h1>Shipping a harness as a product</h1>
+        <p class="ch-tagline">Deploying one agent is a task; shipping the whole harness so other teams can deploy it themselves is a product. Helm charts, managed namespaces, infrastructure-as-code, and golden paths.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 132 of 133</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>There is a difference between cooking a meal for a guest and selling a meal kit. The meal you plate once, to your own taste, in your own kitchen. The kit has to work in a stranger's kitchen, with a stranger's oven, following a card that leaves nothing to guess - measured packets, one clear sequence, no step that assumes you already know the trick. The kit is harder to design, but it feeds a thousand kitchens instead of one table.</p>
+        <p>Earlier in the course you deployed a single agent as a pod - you cooked the meal. This chapter is the meal kit: packaging the whole harness so that <em>other</em> teams can deploy it, in <em>their</em> environment, repeatably, without you in the room. That means turning "the way we run it" into an artifact with knobs, a card that describes the infrastructure, and a paved path that leaves as little as possible to guess. Ship it as a product, not as a favour.</p>
+      </section>
+
+      <h2>Not one artifact - several</h2>
+      <p>The first surprise: a harness is not a single binary you hand over. It is <em>several</em> pieces that must be deployed together - the runtime that runs agents, the sandbox for code execution, the storage for conversations. Shipping it means packaging all of them and giving a tenant a repeatable way to stand them up. The standard vehicle for that on Kubernetes is a <dfn>Helm chart</dfn>.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">Helm chart</span><span class="flip-back">A package of templated Kubernetes manifests plus a values file. Install it and the whole harness (runtime, sandbox, storage) comes up - the meal kit for a cluster.</span></button>
+        <button class="flip" type="button"><span class="flip-front">values.yaml</span><span class="flip-back">The knobs a tenant fills in: telemetry endpoints, model credentials, resource sizes. The measured packets on the recipe card.</span></button>
+        <button class="flip" type="button"><span class="flip-front">managed namespace</span><span class="flip-back">A reserved, centrally-run slice of a shared cluster. You request namespace + CPU/GPU/quota; you do NOT manage the nodes. Simple, but limited.</span></button>
+        <button class="flip" type="button"><span class="flip-front">node pool</span><span class="flip-back">A group of cluster machines with particular properties (e.g. the special nodes a hardware-isolated sandbox needs). Cluster-level - not something a managed namespace can add.</span></button>
+        <button class="flip" type="button"><span class="flip-front">IaC drift</span><span class="flip-back">When live infrastructure diverges from what the infrastructure-as-code declares - e.g. a resource made by a one-off script that the next code apply then deletes.</span></button>
+        <button class="flip" type="button"><span class="flip-front">golden path</span><span class="flip-back">A paved, opinionated self-service flow that scaffolds an agent on the harness AND generates its supporting infrastructure - the blessed, low-guesswork way.</span></button>
+      </div>
+
+      <h2>Where does it run: managed namespace vs your own cluster</h2>
+      <p>A tenant deploys into one of two kinds of home, and the difference shapes what you can offer. Many enterprises hand each team a <dfn>managed namespace</dfn> - a reserved, centrally-run slice of a shared cluster. You request a namespace plus CPU, GPU, and quota; you do not manage the nodes underneath. It is simpler and safer, but you cannot add cluster-level things. That matters directly: the hardware-isolated sandbox from earlier in this act often needs a special <dfn>node pool</dfn>, and you cannot conjure a node pool inside a managed namespace. Your own cluster gives full control - any node pool you like - at the cost of far more operations work.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Aspect</th><th>Managed namespace</th><th>Your own cluster</th></tr>
+        <tr><td>Who runs the nodes</td><td>Central platform team</td><td>Your team</td></tr>
+        <tr><td>Operations burden</td><td>Low</td><td>High</td></tr>
+        <tr><td>Add special node pools</td><td>No - request quota only</td><td>Yes - full control</td></tr>
+        <tr><td>Hardware-isolated sandbox</td><td>Constrained - depends on what the platform allows</td><td>Possible - you can add the node pool</td></tr>
+      </table></div>
+
+      <p>The clever part is that a single Helm chart can deploy into either. The chart is agnostic; a managed namespace is really just a reserved slice on top of the same kind of cluster, so you comply with its specific settings and deploy the same package. Design once, ship to both.</p>
+
+      <h2>The knobs live in values.yaml</h2>
+      <p>Everything a tenant needs to tune is in one file. Read it the way they will:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">values.yaml - the tenant fills this in</div>
+        <div class="wl-line"><code>runtime:</code></div>
+        <div class="wl-line"><code>  replicas: 2</code>
+          <div class="wl-note">How many copies of the agent runtime to run. A resource knob - the tenant sizes it to their load without touching a manifest.</div></div>
+        <div class="wl-line"><code>telemetry:</code></div>
+        <div class="wl-line"><code>  otlpEndpoint: "central-collector:4317"</code>
+          <div class="wl-note">Where to send OpenTelemetry - the address of the central Collector from earlier in this act. One line wires the whole observability pipeline to the shared LGTM.</div></div>
+        <div class="wl-line"><code>sandbox:</code></div>
+        <div class="wl-line"><code>  enabled: true</code>
+          <div class="wl-note">Turn code execution on or off. On a managed namespace without the right node pool, a tenant may have to leave this off - the constraint from above, surfaced as a switch.</div></div>
+        <div class="wl-line"><code>storage:</code></div>
+        <div class="wl-line"><code>  postgresUrl: "postgres://conversations"</code>
+          <div class="wl-note">Where conversations persist - the store behind the time machine. The chart wires the runtime to it; the tenant just supplies the address.</div></div>
+        <div class="wl-line"><code>models:</code></div>
+        <div class="wl-line"><code>  credentialsSecret: "model-keys"</code>
+          <div class="wl-note">A reference to a secret, not the key itself - recall never baking credentials into an image. The chart mounts it at runtime.</div></div>
+      </div>
+
+      <p>You met this YAML fluency back in <a href="ch005-yaml-and-json.html">YAML and JSON</a>; a values file is just that skill pointed at a deployment. Install with the chart and those knobs become a running harness.</p>
+
+      <h2>Deploy the infrastructure first, in code</h2>
+      <p>A harness needs infrastructure the chart alone does not create: namespaces, databases, node pools. Define these as <dfn>infrastructure-as-code</dfn> (Terraform), for the same reason you version anything - so it is repeatable and reviewable. But there is a sharp lesson here about <dfn>IaC drift</dfn>. If someone creates a resource out-of-band - a quick script, a manual CLI command - without updating the infrastructure code's state, then the next time the infrastructure team runs their code, it sees a resource it does not know about and <em>deletes</em> it. Your hand-made sandbox node pool vanishes overnight. The rule that falls out of this: <strong>deploy the infrastructure up front, through code, then deploy the harness onto it</strong> - never bolt runtime infrastructure on by hand.</p>
+
+      <div class="callout warn"><span class="co-label">Careful</span>
+      <p>"I'll just add the node pool with one CLI command to unblock myself" is how the drift bites. It works today and is deleted on the next infrastructure apply, taking your sandboxes with it. If it is not in the code, it does not really exist. Add it to the Terraform, apply, then build on top.</p></div>
+
+      <h2>Golden paths: the paved road</h2>
+      <p>The best way to ship a product to many teams is to remove choices they should not have to make. A <dfn>golden path</dfn> is a paved, opinionated self-service flow: a tenant picks "Python agent," and the platform scaffolds an agent that already uses the harness engine <em>and</em> generates the infrastructure-as-code for the supporting pieces they selected - a managed namespace, a Postgres, whatever they need - all wired together. Instead of a stack of decisions and glue, they get a working, blessed starting point. Walk the path:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Choose">
+          <h3>1. Choose a template</h3>
+          <div class="diagram">
+            <div class="d-box hot">golden path<small>"Python agent"</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">scaffold</div>
+            <div class="d-box dim">infra</div>
+            <div class="d-box dim">deploy</div>
+          </div>
+          <p class="step-cap">The tenant picks a template and answers a few questions (which storage, which region). No blank page, no menu of a hundred options.</p>
+        </div>
+        <div class="step" data-title="Scaffold">
+          <h3>2. Scaffold the agent on the harness</h3>
+          <div class="diagram">
+            <div class="d-box good">golden path</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">agent repo<small>harness engine wired in</small></div>
+            <div class="d-box dim">infra</div>
+            <div class="d-box dim">deploy</div>
+          </div>
+          <p class="step-cap">Out comes a starter project that already uses the harness as its engine - the meal kit, pre-portioned. The tenant writes their logic, not the plumbing.</p>
+        </div>
+        <div class="step" data-title="Generate infra">
+          <h3>3. Generate the supporting infrastructure</h3>
+          <div class="diagram">
+            <div class="d-box good">agent repo</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">Terraform<small>namespace, Postgres, chart values</small></div>
+            <div class="d-box dim">deploy</div>
+          </div>
+          <p class="step-cap">The path also emits the infrastructure-as-code for the pieces they chose, wired to the chart's values. Infra and agent are generated together, so they fit.</p>
+        </div>
+        <div class="step" data-title="Deploy">
+          <h3>4. Deploy - agent and infra together</h3>
+          <div class="diagram">
+            <div class="d-box good">Terraform</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">running harness<small>agent + infra</small></div>
+          </div>
+          <p class="step-cap">Apply the infrastructure, install the chart, and a working agent is live on the harness. One blessed flow instead of a week of glue - and the same shape every time.</p>
+        </div>
+      </div>
+
+      <h2>Keep the scope honest</h2>
+      <p>A product succeeds partly by what it refuses to do. The harness offering should be: <em>get an agent up and running, and connect it to existing data sources and MCP servers.</em> Creating those data sources and MCP servers - standing up the database a tenant queries, building their internal tool server - is the tenant's job, not the harness's. Blurring that line turns a focused platform into an everything-machine nobody can maintain. Ship the engine and the paved road to it; let tenants bring their own destinations.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet a <code>Chart.yaml</code> with a <code>values.yaml</code> beside it, a <code>helm install</code> in a deploy pipeline, and Terraform modules that a review comment insists must run "before the app." An internal developer platform with a "create new agent" button is a golden path. When a platform team at a large bank says "we only support the managed namespace for now," they are drawing the scope line - and the reason code execution might not ship everywhere is usually the missing node pool. "It worked yesterday and Terraform deleted it" is drift, learned the hard way.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. Why is shipping a harness different from deploying one agent?</p>
+          <div class="q-opts">
+            <button data-opt="a">It uses a different programming language</button>
+            <button data-opt="b">There is no difference</button>
+            <button data-opt="c">It must work repeatably in other teams' environments, so you package several pieces (runtime, sandbox, storage) with knobs, like a meal kit not a plated meal</button>
+          </div>
+          <p class="q-explain">Deploying once is cooking a meal; shipping a product is a meal kit that works in a stranger's kitchen - packaged, parameterised, and repeatable, covering the whole multi-part harness.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. Why might a tenant on a managed namespace be unable to enable the code-execution sandbox?</p>
+          <div class="q-opts">
+            <button data-opt="a">Managed namespaces cannot run Python</button>
+            <button data-opt="b">A hardware-isolated sandbox often needs a special node pool, and you cannot add cluster-level node pools inside a managed namespace - you only request quota</button>
+            <button data-opt="c">The Helm chart does not support sandboxes</button>
+          </div>
+          <p class="q-explain">A managed namespace gives you a reserved slice with quota, not control of the nodes. The special node pool a Kata/microVM sandbox needs is cluster-level, so that feature can be constrained there.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What is IaC drift, and how do you avoid it biting your harness?</p>
+          <div class="q-opts">
+            <button data-opt="a">Live infra diverging from the code; avoid it by deploying infra up front through code, never bolting resources on by hand</button>
+            <button data-opt="b">The chart slowly using more memory over time</button>
+            <button data-opt="c">Telemetry endpoints changing on their own</button>
+          </div>
+          <p class="q-explain">A resource made out-of-band is invisible to the infrastructure code, which deletes it on the next apply. Declare everything in code and deploy infra first, then the harness on top.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. What does a golden path give a tenant?</p>
+          <div class="q-opts">
+            <button data-opt="a">A faster model</button>
+            <button data-opt="b">Root access to the cluster</button>
+            <button data-opt="c">A paved, opinionated flow that scaffolds an agent on the harness AND generates its supporting infrastructure, wired together</button>
+          </div>
+          <p class="q-explain">A golden path removes choices teams should not have to make: pick a template and get a working agent plus its infrastructure-as-code, blessed and consistent, instead of a week of glue.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Deploying one agent is a task; shipping the harness is a product - it must work repeatably in other teams' environments, so you package the whole thing with knobs.</li>
+          <li>A harness is several pieces (runtime, sandbox, storage) shipped as a Helm chart, with a values.yaml holding the tenant's knobs (telemetry, credentials, sizes).</li>
+          <li>Managed namespace vs your own cluster is the key fork: the namespace is simple but cannot add cluster-level node pools, which constrains features like hardware-isolated sandboxes.</li>
+          <li>Define infrastructure as code and deploy it up front, then the harness on top - out-of-band resources cause drift and get deleted on the next apply.</li>
+          <li>Golden paths pave the road: pick a template, get a scaffolded agent on the harness plus generated infrastructure, wired together and consistent.</li>
+          <li>Keep scope honest - ship the engine and connections to existing data sources and MCP servers; creating those destinations stays the tenant's job.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

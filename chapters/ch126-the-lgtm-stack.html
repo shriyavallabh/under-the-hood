@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The LGTM stack: where telemetry lives — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch126">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XV · The Enterprise Agent Platform</div>
+        <h1>The LGTM stack: where telemetry lives</h1>
+        <p class="ch-tagline">OpenTelemetry emits the signals; now they need a home and a window. Meet the four stores behind one dashboard - and learn to read a real conversation trace, span by span.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 126 of 133</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Think of a busy hospital. Different records go to different departments: the pharmacy keeps the medication log, radiology keeps the scans, the billing office keeps the invoices. Each is a specialist archive, shaped for the thing it stores. But when a doctor sits down to understand one patient, she does not walk to three buildings - she opens one screen that pulls from all of them, and the patient's whole story appears in one place, cross-linked, so a line in the medication log jumps her straight to the scan that prompted it.</p>
+        <p>Your telemetry works the same way. Last chapter, OpenTelemetry became the tap that emits logs, metrics, and traces. But a tap with nothing under it just floods the floor. Each signal needs a store shaped for it, and you need one screen - one dashboard - that reads from all of them and lets you jump between them. The most common open-source answer to "where does it all live, and how do I look?" is a bundle nicknamed by its four initials: <strong>LGTM</strong>.</p>
+      </section>
+
+      <h2>Four stores, one window</h2>
+      <p><dfn>LGTM</dfn> is a stack of open-source tools from Grafana Labs, and the name is just the first letters of its parts. Each specialises in one signal, and the last one is the window you look through:</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">Loki</span><span class="flip-back">The LOGS store. Keeps your timestamped event lines and lets you search them fast. Query language: LogQL.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Grafana</span><span class="flip-back">The VISUALISATION layer - the dashboard. It does not store anything itself; it queries the other three as "data sources" and draws the panels you look at.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Tempo</span><span class="flip-back">The TRACES store. Keeps your spans and lets you pull up a full request as a waterfall. Query language: TraceQL.</span></button>
+        <button class="flip" type="button"><span class="flip-front">Mimir</span><span class="flip-back">The METRICS store - the scalable, long-term home for counters and histograms (it extends the classic Prometheus). Query language: PromQL / MetricsQL.</span></button>
+        <button class="flip" type="button"><span class="flip-front">data source</span><span class="flip-back">In Grafana, a configured connection to one backend (Loki, Tempo, Mimir, or others). A dashboard panel is just a query against a data source.</span></button>
+        <button class="flip" type="button"><span class="flip-front">TraceQL</span><span class="flip-back">Tempo's query language for finding traces by service, name, or attribute - e.g. spans on the agent service slower than a second.</span></button>
+      </div>
+
+      <p>The shape to remember: <strong>Loki holds logs, Tempo holds traces, Mimir holds metrics, and Grafana is the single screen that reads all three.</strong> Your OpenTelemetry pipeline from last chapter feeds them; Grafana lets you look.</p>
+
+      <h2>The superpower: correlation</h2>
+      <p>Storing three signals separately is useful. <em>Linking</em> them is the leap. Because every span and every log line can carry the same <a href="ch124-why-you-cant-debug-what-you-cant-see.html">trace id</a>, Grafana can offer a "trace to logs" jump: you find a slow span in Tempo, click once, and land on exactly the Loki logs that span produced. No more copying a timestamp and grepping a wall of text - the tools already know which log lines belong to which span. That single click is why teams put the effort into stitching a trace id onto their logs in the first place.</p>
+
+      <h2>Reading a conversation trace</h2>
+      <p>Here is what it actually looks like to debug an agent turn on this stack. No screenshots - just the sequence of clicks, drawn as boxes. Follow the highlight: you start at a list of recent conversations and drill down until you are staring at the exact request and response the model saw.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Trace list">
+          <h3>1. A list of recent conversation traces</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box hot">conversation 8f3a<small>1.84 s · 3 spans</small></div>
+              <div class="d-box">conversation 7c11<small>0.62 s · 2 spans</small></div>
+              <div class="d-box">conversation 4d90<small>5.10 s · 9 spans</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Grafana queries Tempo and lists recent traces, each one a whole conversation turn. You spot the slow one and click in. (The 5.1-second outlier would be the one to open on a bad day.)</p>
+        </div>
+        <div class="step" data-title="Span waterfall">
+          <h3>2. The turn opens as a waterfall of spans</h3>
+          <div class="diagram">
+            <div class="d-col">
+              <div class="d-box">user_turn<small>=================== 1840 ms</small></div>
+              <div class="d-box">llm.plan<small>===== 520 ms</small></div>
+              <div class="d-box hot">tool.search<small>========= 900 ms</small></div>
+              <div class="d-box">llm.answer<small>==== 400 ms</small></div>
+            </div>
+          </div>
+          <p class="step-cap">Each span is a bar; its width is its duration. The eye goes straight to the widest child - the search tool. This is the tree you built by hand in the opening chapter, now drawn for you.</p>
+        </div>
+        <div class="step" data-title="Span attributes">
+          <h3>3. Click the span to read its attributes</h3>
+          <div class="diagram">
+            <div class="d-box hot">tool.search<small>attributes</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col">
+              <div class="d-box">status: ok</div>
+              <div class="d-box">query: "q3 revenue"</div>
+              <div class="d-box">results: 12</div>
+            </div>
+          </div>
+          <p class="step-cap">Every attribute you recorded is here: for a model span you would see the model name, input and output token counts, and latency; for this tool span, the query and result count. Facts, not guesses.</p>
+        </div>
+        <div class="step" data-title="Jump to logs">
+          <h3>4. One click jumps to the linked logs</h3>
+          <div class="diagram">
+            <div class="d-box good">tool.search</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">Loki logs<small>same trace id</small></div>
+          </div>
+          <p class="step-cap">The "trace to logs" link carries the trace id across to Loki and shows only the log lines this span emitted - including the exact endpoint it called and any warning it logged. Trace said WHERE; the log now says WHAT, verbatim.</p>
+        </div>
+      </div>
+
+      <p>Grafana adds a few more views on top: a node/graph picture of the agent's steps, a live-tail of logs streaming from Loki, and metric panels (request rate, memory, total requests) drawn from Mimir. And crucially, a dashboard is just <dfn>a saved set of queries</dfn> stored as JSON - which means you can clone someone else's and adapt it, or write your own by pointing panels at your service.</p>
+
+      <div class="viz-tiles">
+        <div class="tile"><div class="tile-label">input tokens (this span)</div><div class="tile-value">180</div><div class="tile-delta">illustrative</div></div>
+        <div class="tile"><div class="tile-label">output tokens</div><div class="tile-value">90</div><div class="tile-delta">illustrative</div></div>
+        <div class="tile"><div class="tile-label">span latency</div><div class="tile-value">520 ms</div><div class="tile-delta">llm.plan</div></div>
+        <div class="tile"><div class="tile-label">turn total</div><div class="tile-value">1.84 s</div><div class="tile-delta">3 child spans</div></div>
+      </div>
+      <p>Those tiles are the kind of numbers a real span panel shows - here they are illustrative, but on your dashboard they are read straight off the trace you just opened.</p>
+
+      <h2>Who hosts all this?</h2>
+      <p>You almost never run LGTM yourself for one agent. In a large organisation, a central <dfn>platform team</dfn> runs one shared LGTM instance for everyone; your app simply points its OpenTelemetry exporter at that instance's address, and you are handed a starter dashboard to clone. The alternatives are a managed service (Grafana Cloud) or, for a small project, self-hosting the stack. Either way, the split is the same as last chapter: your code emits standard OTLP; where it lands and how you view it is someone else's infrastructure, reachable by a config line.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will hear "add a Tempo data source," "clone the agent dashboard," or "the p95 panel is red" in any team running this stack. A TraceQL query like <code>{ .service.name = "agent" &amp;&amp; duration &gt; 1s }</code> in a review means "show me every agent turn slower than a second." When a platform team at a large bank says "send your telemetry to the central Grafana," they are pointing you at exactly this: their hosted LGTM, one dashboard to clone, and a "trace to logs" button that turns a 4pm Thursday argument into a thirty-second investigation.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. In the LGTM stack, which component actually stores your traces?</p>
+          <div class="q-opts">
+            <button data-opt="a">Grafana</button>
+            <button data-opt="b">Tempo</button>
+            <button data-opt="c">Loki</button>
+          </div>
+          <p class="q-explain">Tempo is the traces store, Loki holds logs, Mimir holds metrics. Grafana stores nothing - it is the window that queries all three.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. What does Grafana itself do?</p>
+          <div class="q-opts">
+            <button data-opt="a">It is the long-term metrics database</button>
+            <button data-opt="b">It emits telemetry from your app</button>
+            <button data-opt="c">It is the visualisation layer that queries the other stores as data sources and draws the dashboards</button>
+          </div>
+          <p class="q-explain">Grafana is the single screen. It holds no data of its own; each panel is a query against a data source (Loki, Tempo, or Mimir).</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. The "trace to logs" jump works because of what shared piece of data?</p>
+          <div class="q-opts">
+            <button data-opt="a">The trace id, stamped on both the span and the log lines</button>
+            <button data-opt="b">The user's email address</button>
+            <button data-opt="c">The dashboard's JSON</button>
+          </div>
+          <p class="q-explain">Correlation is the whole superpower, and it rides on the trace id: because a span and its logs carry the same id, one click can carry you from the slow span straight to the exact log lines it produced.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. You are one agent team at a large organisation. How do you usually get an LGTM dashboard?</p>
+          <div class="q-opts">
+            <button data-opt="a">Each team installs and runs its own full LGTM stack from scratch</button>
+            <button data-opt="b">A central platform team hosts one shared instance; you point your exporter at it and clone a starter dashboard</button>
+            <button data-opt="c">Grafana is built into your agent framework automatically</button>
+          </div>
+          <p class="q-explain">Central hosting is the norm: your app emits standard OTLP to the shared instance, and you clone a dashboard. Same as the OTel split - you emit, the platform stores and shows.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>LGTM is a Grafana Labs stack named by its parts: Loki (logs), Grafana (visualisation), Tempo (traces), Mimir (metrics). Your OpenTelemetry pipeline feeds them.</li>
+          <li>Grafana stores nothing; it queries the other three as data sources and draws the panels. Loki, Tempo, and Mimir are the specialist stores.</li>
+          <li>The superpower is correlation: because spans and logs share a trace id, one click jumps you from a slow span in Tempo to the exact logs in Loki.</li>
+          <li>Reading an agent trace is a drill-down: trace list to span waterfall to span attributes to linked logs - the same tree from the opening chapter, drawn for you.</li>
+          <li>A dashboard is just a saved set of queries (JSON) you can clone and adapt, or write yourself with TraceQL, LogQL, and PromQL.</li>
+          <li>A central platform team usually hosts one shared LGTM; you emit standard OTLP to it and clone a starter dashboard rather than running the stack yourself.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Merging two platforms into one — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch133">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XV · The Enterprise Agent Platform</div>
+        <h1>Merging two platforms into one</h1>
+        <p class="ch-tagline">Two teams built two agent harnesses that do overlapping things, and leadership wants one. This is not a code problem first - it is a decision problem, and the final chapter of the course.</p>
+        <div class="ch-meta"><span>~30 min</span><span>Chapter 133 of 133</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Two neighbouring villages each built a bridge across the same river, a little apart, not quite knowing about each other. Now the region wants one road, which means one bridge. The tempting move - tear both down and build a grand new one from scratch - is also the slowest and the riskiest, and it insults two teams of proud bridge-builders. The wiser move is quieter: keep the bridge that already carries daily traffic, study what the other one did better - a smarter railing, a cleverer support - and graft those improvements onto the one people already cross. Nobody's work is wasted; the road opens sooner; and the builders of the second bridge see their best ideas live on.</p>
+        <p>This is the last thing this act teaches, and it is barely about code. When an organisation ends up with two agent harnesses and decides it wants one offering, the hard questions are human and strategic: whose foundation do we build on, which features survive, and how do we merge without wasting anyone's effort or bruising their pride? Get that right and the diff writes itself. Get it wrong and the best-engineered platform still fails.</p>
+      </section>
+
+      <h2>Start from what is already in production</h2>
+      <p>The going-in position that survives contact with reality: build on the harness that is <em>already in production with real users</em>. It is the lower-risk foundation - it works, it is battle-tested, it has people depending on it - so you keep it as the base, <dfn>port</dfn> the best features from the other one, and refactor to adopt its better practices. Resist the rewrite-from-scratch urge; a grand new bridge that carries no traffic yet is a bet, not a plan. Consolidation is addition and grafting, not demolition.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">consolidation</span><span class="flip-back">Merging two overlapping platforms into one offering. Usually done by keeping the in-production base and porting the best of the other, not by rebuilding.</span></button>
+        <button class="flip" type="button"><span class="flip-front">feature port</span><span class="flip-back">Lifting a capability from one codebase into another - e.g. taking conversation replay from harness B and adding it to harness A. Each port is a win-win.</span></button>
+        <button class="flip" type="button"><span class="flip-front">ADR</span><span class="flip-back">An Architecture Decision Record: a short doc capturing what was compared and why a choice was made, so absent people and future maintainers understand it was not arbitrary.</span></button>
+        <button class="flip" type="button"><span class="flip-front">tenant-contributor</span><span class="flip-back">A model where the teams that USE the harness also contribute code to it - raising merge requests the core team reviews - so delivery scales past the core team's capacity.</span></button>
+        <button class="flip" type="button"><span class="flip-front">skills middleware</span><span class="flip-back">A pluggable capability layer in the harness. A stable seam like this is architecture glue that lets two platforms' features coexist after a merge.</span></button>
+        <button class="flip" type="button"><span class="flip-front">merge request</span><span class="flip-back">A proposed change reviewed before it lands. The unit of the tenant-contributor model and of the whole consolidation.</span></button>
+      </div>
+
+      <h2>Each port is a win-win</h2>
+      <p>The best consolidation work delivers value on the way. Take a concrete case you have already met: the in-production base stores conversations but has no replay; the other harness has a working <a href="ch131-the-conversation-time-machine.html">time machine</a>. Port replay into the base and you have done two things at once - shipped a feature real users were asking for, and moved the two platforms one step closer to being one. That is the pattern to look for: a feature that is missing here, present there, and demanded now. Merge those, and consolidation stops being a tax and starts being a series of wins.</p>
+
+      <div class="stepper">
+        <div class="step" data-title="Compare">
+          <h3>1. Compare the two honestly</h3>
+          <div class="diagram">
+            <div class="d-box hot">compare<small>feature by feature</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box dim">pick base</div>
+            <div class="d-box dim">port</div>
+            <div class="d-box dim">new version</div>
+          </div>
+          <p class="step-cap">Lay the two harnesses side by side: what each has, what is in production, what each does better. No favourites yet - just an honest matrix everyone can see.</p>
+        </div>
+        <div class="step" data-title="Pick the base">
+          <h3>2. Pick the in-production base</h3>
+          <div class="diagram">
+            <div class="d-box good">compare</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">base = the one with real users<small>lower risk</small></div>
+            <div class="d-box dim">port</div>
+            <div class="d-box dim">new version</div>
+          </div>
+          <p class="step-cap">Choose the harness already carrying production traffic as the foundation. It is the safest bet and the least disruptive to the people depending on it.</p>
+        </div>
+        <div class="step" data-title="Port">
+          <h3>3. Port the best features across</h3>
+          <div class="diagram">
+            <div class="d-box good">base</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">+ replay, + a better idea<small>each a win-win</small></div>
+            <div class="d-box dim">new version</div>
+          </div>
+          <p class="step-cap">Graft the other harness's strengths onto the base - replay, a cleaner interface, a smarter default - and refactor to adopt its best practices. Every port ships value and advances the merge.</p>
+        </div>
+        <div class="step" data-title="Ship one">
+          <h3>4. Cut one unified version</h3>
+          <div class="diagram">
+            <div class="d-box good">base + ports</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">one harness<small>new home repo</small></div>
+          </div>
+          <p class="step-cap">The result is a single offering - often in a new home repository where all future changes land. Two bridges became one road, and both teams' best work crossed over.</p>
+        </div>
+      </div>
+
+      <h2>Write down why - the decision record</h2>
+      <p>Consolidation decisions get questioned for months. A lead returns from leave; a new engineer asks "why did we pick that one?"; someone wonders if the choice was politics. The antidote is an <dfn>ADR</dfn> - an Architecture Decision Record - a short document capturing what was compared and why a choice was made. It is not bureaucracy; it is the proof that a decision was considered, not arbitrary, and it saves you re-arguing the same point every time a new person joins. Keep them tiny:</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">adr-007-harness-base.md - a decision record</div>
+        <div class="wl-line"><code># ADR 007: Which harness is the base</code>
+          <div class="wl-note">A numbered, titled record. A repo accumulates a folder of these, each one decision, read in minutes.</div></div>
+        <div class="wl-line"><code>## Status: accepted</code>
+          <div class="wl-note">Decisions have a lifecycle - proposed, accepted, superseded. Status tells a future reader whether this is still the current call.</div></div>
+        <div class="wl-line"><code>## Context</code></div>
+        <div class="wl-line"><code>Two harnesses overlap; we must ship one.</code>
+          <div class="wl-note">The situation, briefly. Enough for someone absent from the room to understand the forces in play.</div></div>
+        <div class="wl-line"><code>## Decision</code></div>
+        <div class="wl-line"><code>Base = harness A (in production); port replay from B.</code>
+          <div class="wl-note">The actual choice, in one line. This is what people will quote back - so make it unambiguous.</div></div>
+        <div class="wl-line"><code>## Consequences</code></div>
+        <div class="wl-line"><code>B's team contributes ports via merge requests.</code>
+          <div class="wl-note">What follows from the choice - including how the other team stays involved. Honest about trade-offs, so nobody feels a cost was hidden.</div></div>
+      </div>
+
+      <h2>Scale delivery: the tenant-contributor model</h2>
+      <p>Once there is one harness, demand for features usually outpaces the small core team. The move that scales is the <dfn>tenant-contributor</dfn> model: the teams that <em>use</em> the harness also contribute to it. A tenant needs a feature, writes it, and raises a <a href="ch096-git-fundamentals.html">merge request</a>; the core team reviews and merges, producing a new version. This aligns contributors with the value they need and multiplies delivery beyond what the core team could write alone. It works best once a tenant's requirements are clear; during the discovery phase, a newcomer first learns the platform through the backlog before contributing freely. And the architecture has to permit it - a stable <dfn>skills middleware</dfn> or tool interface is the seam that lets many hands add capabilities without stepping on each other, exactly the kind of pluggable layer you saw dissected in the <a href="ch091-claude-code-dissected.html">best-known harness</a>.</p>
+
+      <div class="tbl"><table>
+        <tr><th>Question</th><th>Harness A</th><th>Harness B</th></tr>
+        <tr><td>In production with users?</td><td>Yes</td><td>No - dev only</td></tr>
+        <tr><td>Conversation replay?</td><td>No</td><td>Yes</td></tr>
+        <tr><td>Code-exec sandbox?</td><td>Basic</td><td>More developed</td></tr>
+        <tr><td>Skills middleware?</td><td>Yes</td><td>Partial</td></tr>
+        <tr><td>Verdict</td><td>Base</td><td>Port from</td></tr>
+      </table></div>
+
+      <p>That matrix is the whole strategy on one screen: keep A (it has users and the skills layer), port B's replay and sandbox strengths, record why in an ADR, and open the door for both teams to contribute. The engineering is the easy part; the honesty is the hard part.</p>
+
+      <div class="callout note"><span class="co-label">Careful</span>
+      <p>The failure mode here is never technical - it is a team feeling steamrolled because "their" platform lost. Hear every perspective, make the losing team's best ideas visibly win by porting them, and let them contribute to the unified result. A merge that is engineered perfectly but leaves half the people resentful has not actually succeeded.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will find an <code>adr/</code> or <code>docs/decisions/</code> folder, a platform-comparison spreadsheet, and commit messages like "port replay from the other harness." An internal platform that accepts merge requests from the product teams that use it is the tenant-contributor model in the flesh, and a monorepo consolidation is often the "new home repo" where the unified harness lives. When a large organisation says "we're merging the two agent platforms," the meeting is about base, ports, and who contributes - precisely this chapter, and a fitting place to close the course.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. When consolidating two harnesses into one, what is the usual going-in position?</p>
+          <div class="q-opts">
+            <button data-opt="a">Rewrite a brand-new harness from scratch to avoid favouring either team</button>
+            <button data-opt="b">Keep the one already in production with real users as the base, and port the best features from the other</button>
+            <button data-opt="c">Randomly pick one and delete the other</button>
+          </div>
+          <p class="q-explain">The in-production harness is the lower-risk foundation. Build on it, graft the other's strengths across, and refactor - the rewrite-from-scratch is the slow, risky, morale-sapping option.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. Why is porting a feature like conversation replay called a "win-win"?</p>
+          <div class="q-opts">
+            <button data-opt="a">It costs nothing</button>
+            <button data-opt="b">It lets you delete the other team's code</button>
+            <button data-opt="c">It ships a feature real users were asking for AND moves the two platforms one step closer to being one</button>
+          </div>
+          <p class="q-explain">The best consolidation work delivers value on the way: a feature missing here and present there, demanded now, both fixes a gap and advances the merge.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. What is an ADR for?</p>
+          <div class="q-opts">
+            <button data-opt="a">Recording what was compared and why a choice was made, so absent people and future maintainers see it was not arbitrary</button>
+            <button data-opt="b">Automatically deploying the harness</button>
+            <button data-opt="c">Measuring agent latency</button>
+          </div>
+          <p class="q-explain">An Architecture Decision Record is a short doc capturing context, decision, and consequences - proof the choice was considered, so you do not re-argue it every time a new person joins.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. What is the hardest part of merging two platforms?</p>
+          <div class="q-opts">
+            <button data-opt="a">Writing the diff</button>
+            <button data-opt="b">The organisational side - hearing every perspective so no team feels steamrolled - not the code</button>
+            <button data-opt="c">Choosing a programming language</button>
+          </div>
+          <p class="q-explain">The engineering is the easy part. A technically perfect merge that leaves half the people resentful has failed; making the losing team's best ideas visibly win is the real work.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Merging two harnesses is a decision problem before a code problem: whose base, which features survive, and how to merge without wasting effort or bruising pride.</li>
+          <li>Build on the harness already in production with real users - the lower-risk base - then port the best features from the other and refactor, rather than rewriting from scratch.</li>
+          <li>Make each port a win-win: a feature missing here but present there and demanded now (like replay) both ships value and advances the merge.</li>
+          <li>Record decisions in short ADRs (context, decision, consequences) so the choice is transparent and not re-argued whenever someone new arrives.</li>
+          <li>Scale delivery with the tenant-contributor model - the teams that use the harness raise merge requests the core team reviews - enabled by a stable skills/middleware seam.</li>
+          <li>The hardest part is human: hear every perspective, let the other team's best ideas visibly win, and a unified harness in one home repo becomes something everyone owns.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

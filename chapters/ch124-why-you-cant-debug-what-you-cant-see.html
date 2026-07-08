@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why you can't debug what you can't see — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch124">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XV · The Enterprise Agent Platform</div>
+        <h1>Why you can't debug what you can't see</h1>
+        <p class="ch-tagline">An operations team says your agent is the reason everything got slow. You believe them or you don't - but either way, you have no data to answer with. This is the chapter where that stops happening.</p>
+        <div class="ch-meta"><span>~25 min</span><span>Chapter 124 of 133</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>Thursday, 4pm. A message lands from the operations team of a large bank: <em>"Since your agent went live, the shared reporting system is slow. Can you turn it off while we investigate?"</em> You do not think it is you. But when the product owner asks the obvious question - <em>"how much time is the agent actually adding?"</em> - you open your mouth and nothing comes out. You have logs, technically: a wall of print statements that say things like <code>calling model</code> and <code>done</code>. None of them have a timestamp you trust. None of them connect to each other. You cannot say whether one user question took two seconds or twenty, or which step inside it was slow, or whether the slow thing was even yours.</p>
+        <p>So you argue from feelings, and you lose. Not because you were wrong - later it turned out to be a database index, nothing to do with you - but because the person with the data wins the meeting, and that person was not you. That helpless afternoon is where every engineer discovers the same law: you cannot manage, defend, or fix what you cannot see.</p>
+      </section>
+
+      <h2>The thing you were missing has a name</h2>
+      <p><dfn>Observability</dfn> is the practice of emitting enough signal from a running system that you can answer questions about it <em>after the fact</em>, without redeploying or adding new print statements. The word sounds grand; the idea is humble. It just means: leave a trail. When something goes wrong at 4pm on Thursday, the trail is already there, and you read it instead of guessing.</p>
+      <p>You have already met the atom this is built around. Back in <a href="ch045-react-loop-by-hand.html">the ReAct loop</a>, one user question spun the agent through several turns - think, call a tool, observe, think again. Each of those turns did real work that took real time and could fail in a real way. Observability is simply the discipline of recording that work as it happens, in a form you can query later.</p>
+      <p>The trap in the story was believing that "we have logs" is the same as "we can see." It is not. Raw logs are one signal out of three, and on their own they answer only one kind of question. To run an agent in production you need all three.</p>
+
+      <h2>The three signals</h2>
+      <p>Every observability system, no matter the vendor, is built from the same three kinds of data. People call them the three <dfn>signals</dfn> (or, older word, the three pillars). Each answers a different question, and the whole art is knowing which one to reach for.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">log</span><span class="flip-back">A timestamped record of one discrete event: "at 16:04:02, the search tool returned an error." Logs answer WHAT happened, in exact words. Great detail, but no shape - a million lines and no idea which belong together.</span></button>
+        <button class="flip" type="button"><span class="flip-front">metric</span><span class="flip-back">A number measured over time: requests per minute, error rate, p95 latency. Metrics answer HOW MUCH and the trend. Cheap to store, perfect for alerts and dashboards - but they are aggregates, so no single request is visible in them.</span></button>
+        <button class="flip" type="button"><span class="flip-front">trace</span><span class="flip-back">The full causal path of ONE request as it moves through the system. Answers WHERE in the chain the time or the failure was. This is the signal the story was missing.</span></button>
+        <button class="flip" type="button"><span class="flip-front">span</span><span class="flip-back">One unit of work inside a trace - a single tool call, a single model call - with a start time, an end time, a name, and attributes. Spans nest inside each other like Russian dolls.</span></button>
+        <button class="flip" type="button"><span class="flip-front">trace id</span><span class="flip-back">The shared label stamped on every span of one request, so scattered pieces can be stitched back into a single story. The thread that ties the dolls together.</span></button>
+        <button class="flip" type="button"><span class="flip-front">instrumentation</span><span class="flip-back">The act of adding the code that emits signals - starting a span, recording a metric. Can be automatic (a library wraps your calls) or manual (you write it yourself).</span></button>
+      </div>
+
+      <p>Hold the difference in your head with one sentence: <strong>logs say what, metrics say how much, traces say where.</strong> The Thursday meeting needed a trace, and a trace was the one thing you did not have.</p>
+
+      <h2>Why agents need traces more than most systems</h2>
+      <p>A plain web server does one small thing per request: receive, look up, reply. A flat log is almost enough for it. An agent is the opposite. As you saw in the loop, a single user question fans <em>out</em>: the model plans, then a tool runs, then a search returns documents, then the model reads them and answers - and any of those steps might repeat two or three times. One question can easily become a dozen internal operations across several services.</p>
+      <p>A flat log of that is chaos - twelve unrelated lines, no order, no parent, no idea which tool call belongs to which user. A <dfn>trace</dfn> takes those same twelve operations and arranges them as a tree: the user turn at the root, each model call and tool call a branch beneath it, each with its own duration. Now the question "which step was slow?" has an answer you can point at. Watch one user turn become a trace:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="The turn begins">
+          <h3>1. A user question opens the root span</h3>
+          <div class="diagram">
+            <div class="d-box hot">user_turn<small>span opens, clock starts</small></div>
+            <div class="d-box dim">llm.plan</div>
+            <div class="d-box dim">tool.search</div>
+            <div class="d-box dim">llm.answer</div>
+          </div>
+          <p class="step-cap">The moment the request arrives, we open a root span and stamp it with a fresh trace id. Everything that happens next will carry that same id, so it can all be gathered back together.</p>
+        </div>
+        <div class="step" data-title="The model plans">
+          <h3>2. The model call is a child span</h3>
+          <div class="diagram">
+            <div class="d-box">user_turn</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">llm.plan<small>520 ms</small></div>
+            <div class="d-box dim">tool.search</div>
+            <div class="d-box dim">llm.answer</div>
+          </div>
+          <p class="step-cap">The first model call opens a child span nested under the root. We record how long it took and how many tokens it used. If the whole turn is slow, we will be able to see exactly how much of the blame lands here.</p>
+        </div>
+        <div class="step" data-title="A tool runs">
+          <h3>3. The slow step reveals itself</h3>
+          <div class="diagram">
+            <div class="d-box">user_turn</div>
+            <div class="d-box good">llm.plan</div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">tool.search<small>900 ms</small></div>
+            <div class="d-box dim">llm.answer</div>
+          </div>
+          <p class="step-cap">The search tool takes 900 milliseconds - nearly twice the model call. Without a trace this would be invisible; with one, it is the obvious suspect. This is the "where" that logs and metrics cannot give you.</p>
+        </div>
+        <div class="step" data-title="The answer, and the whole picture">
+          <h3>4. The turn closes and the tree is complete</h3>
+          <div class="diagram">
+            <div class="d-box good">user_turn<small>1840 ms total</small></div>
+            <div class="d-box good">llm.plan</div>
+            <div class="d-box good">tool.search</div>
+            <div class="d-box good">llm.answer<small>400 ms</small></div>
+          </div>
+          <p class="step-cap">The root span closes. You now hold a small tree: one turn, three children, each with its own duration. Sum the children, spot the outlier, answer the meeting. The whole turn took 1.84 seconds, and now you can say which 0.9 of it was the search.</p>
+        </div>
+      </div>
+
+      <h2>Build a tiny tracer, so it stops being magic</h2>
+      <p>A trace is not a mysterious cloud product. At heart it is a list of spans, each with a name, a depth in the tree, and a duration. You can build the whole idea in a dozen lines. Press <strong>Run</strong> - this records a fake agent turn and prints its trace as a little waterfall, the same shape a real tool would show you.</p>
+
+      <div class="pyrun" data-title="A trace is just a list of timed spans">
+<textarea class="py-src" spellcheck="false">
+# A span = one unit of work: a name, how deep in the tree,
+# and how long it took. A trace = an ordered list of them.
+TRACE = []
+
+def span(name, depth, ms):
+    TRACE.append({"name": name, "depth": depth, "ms": ms})
+
+# One agent turn, faked. In real code each of these lines
+# would be a real model call or tool call wrapped in a timer.
+span("user_turn",   0, 1840)   # the root: the whole question
+span("llm.plan",    1,  520)   # child: the model decides what to do
+span("tool.search", 1,  900)   # child: the slow step
+span("llm.answer",  1,  400)   # child: the model writes the reply
+
+def show(trace):
+    for s in trace:
+        indent = "  " * s["depth"]
+        bar = "#" * (s["ms"] // 60)
+        print(f"{indent}{s['name']:14} {s['ms']:5} ms  {bar}")
+
+show(TRACE)
+
+children = [s["ms"] for s in TRACE if s["depth"] == 1]
+print()
+print("root total:", TRACE[0]["ms"], "ms")
+print("slowest child:", max(children), "ms  <- start here")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Change the <code>ms</code> numbers and re-run: make <code>llm.plan</code> the slow one and watch the "slowest child" line move. That single line - find the biggest child and start there - is the entire debugging instinct that the Thursday meeting was missing. A real tracing tool does exactly this, for millions of traces, with a nicer chart.</p></div>
+
+      <h2>What to record on an agent's spans</h2>
+      <p>Traces are only as useful as the attributes you hang on each span. For agents, a small set of fields turns a trace from "it was slow" into "here is the bill." On each model span, record the <dfn>attributes</dfn> - the labelled facts attached to a span - that matter: the model name, the number of input and output tokens, the latency, and the cost. On each tool span: the tool name, whether it succeeded, and how long it took. Do this and a trace answers not just "which step was slow" but "which step was expensive," "which model version was used," and "did that tool error and get retried."</p>
+      <p>These are also the numbers every other chapter in this act builds on. You cannot <a href="ch045-react-loop-by-hand.html">cap a runaway loop</a> you cannot measure, and you certainly cannot tell an operations team the agent added 1.8 seconds if you never recorded the 1.8 seconds.</p>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will meet these three signals the moment you touch a production agent. When a colleague says "add a trace id to the logs so I can correlate them," they are asking you to stitch logs onto traces. When an on-call engineer pastes a "p95 latency" graph into a channel, that is a metric. When someone opens a tool like Grafana, Datadog, or Honeycomb, clicks one slow request, and expands a waterfall of nested bars - that is a trace, exactly the tree you just built by hand. And when a platform team at a large bank asks every agent team to "emit standard telemetry," they mean: give us all three signals, in an agreed format, so we can see across all of you at once. The next chapter is about that agreed format.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="c">
+          <p class="q-text">1. An operations team claims your agent added latency to a shared system. Which signal most directly lets you prove how much time the agent added to one request?</p>
+          <div class="q-opts">
+            <button data-opt="a">Logs - read every line and add up the timestamps by hand</button>
+            <button data-opt="b">Metrics - look at the average latency across all requests</button>
+            <button data-opt="c">A trace - the causal tree of that one request, with a duration on every step</button>
+          </div>
+          <p class="q-explain">Logs are unordered detail and metrics are aggregates; only a trace shows one request's steps and their individual durations, which is exactly "how much time did the agent add, and where."</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">2. What is a span?</p>
+          <div class="q-opts">
+            <button data-opt="a">The total time a whole conversation took</button>
+            <button data-opt="b">One timed unit of work inside a trace - a single tool or model call, with a start, end, and attributes</button>
+            <button data-opt="c">A single line of log text</button>
+          </div>
+          <p class="q-explain">A trace is a tree of spans; each span is one operation (one tool call, one model call) with its own clock and its own labelled attributes.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why do agents rely on traces more than a simple web server does?</p>
+          <div class="q-opts">
+            <button data-opt="a">One user question fans out into many internal model and tool calls, so you need the tree to see which step was slow or failed</button>
+            <button data-opt="b">Agents produce fewer events, so each one matters more</button>
+            <button data-opt="c">Web servers cannot be traced at all</button>
+          </div>
+          <p class="q-explain">The ReAct loop turns one question into a burst of nested operations. A flat log of that is chaos; a trace arranges the same operations into a tree you can actually read.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">4. You have logs, metrics, and traces all wired up. Someone asks "what was the exact error message the search tool returned at 16:04?" Which do you reach for?</p>
+          <div class="q-opts">
+            <button data-opt="a">Metrics - they store the error text</button>
+            <button data-opt="b">Traces - they contain full messages</button>
+            <button data-opt="c">Logs - they are the timestamped record of the exact event, in words</button>
+          </div>
+          <p class="q-explain">Logs say WHAT happened, verbatim. Metrics only count, and while a span can carry an error flag, the full human-readable message is the log's job. The three signals are complementary - pick by the question.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>You cannot manage, defend, or fix what you cannot see - observability is the discipline of leaving a queryable trail so you read the past instead of guessing about it.</li>
+          <li>There are three signals: logs say WHAT happened, metrics say HOW MUCH and the trend, traces say WHERE in the causal chain the time or failure was.</li>
+          <li>A trace is a tree of spans sharing one trace id; each span is a single timed operation with attributes. It is just a list of timed units - you built one in a dozen lines.</li>
+          <li>Agents need traces especially, because one question fans out into many nested model and tool calls that a flat log cannot untangle.</li>
+          <li>Record the useful attributes on each span - model, tokens, latency, cost, tool name, success - and a trace turns "it was slow" into "here is exactly where, and here is the bill."</li>
+          <li>"We have logs" is not "we can see." Production agents need all three signals, in an agreed format - which is the next chapter.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>
