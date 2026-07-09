@@ -1053,6 +1053,20 @@
           "title": "Merging two platforms into one",
           "tagline": "Two rival harnesses, one offering - picking the in-production base, porting the best features, decision records, and the tenant-contributor model where users raise merge requests",
           "minutes": 30
+        },
+        {
+          "id": "ch134",
+          "slug": "ch134-checkpointing-at-scale.html",
+          "title": "Checkpointing at scale: embedded or a service",
+          "tagline": "The saver abstraction underneath persistence - swap in-memory for Postgres or Redis, let it run the migrations, and when many agent instances need one shared store, expose the checkpointer as a REST service",
+          "minutes": 35
+        },
+        {
+          "id": "ch135",
+          "slug": "ch135-the-checkpoint-graph.html",
+          "title": "The checkpoint graph: branching and time-travel",
+          "tagline": "Every checkpoint points to its parent, so history is a graph not a line - branches, a head pointer, pending writes on interrupt, and why light references live in a fast database while the heavy state lives in a blob",
+          "minutes": 35
         }
       ]
     }

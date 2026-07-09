@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkpointing at scale: embedded or a service — Under the Hood</title>
+<script>(function(){var t=localStorage.getItem("uth-theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/site.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script src="../assets/js/site.js" defer></script>
+<script src="../assets/js/pyrunner.js" defer></script>
+</head>
+<body data-chapter="ch134">
+<a class="skip" href="#main">Skip to content</a>
+<div class="layout">
+  <aside id="sidebar" aria-label="Chapter navigation"></aside>
+  <main id="main">
+    <div class="content">
+
+      <header class="ch-hero">
+        <div class="ch-kicker">Act XV · The Enterprise Agent Platform</div>
+        <h1>Checkpointing at scale: embedded or a service</h1>
+        <p class="ch-tagline">The time machine needs somewhere to keep its tapes. This is the machinery underneath - the saver interface you swap, the database it sets up, and why a fleet of agents needs a shared checkpoint service instead of a drawer under the counter.</p>
+        <div class="ch-meta"><span>~35 min</span><span>Chapter 134 of 135</span></div>
+      </header>
+
+      <section class="panel story">
+        <div class="story-label">The story</div>
+        <p>A single corner shop keeps its accounts in a ledger in a drawer under the counter. It works perfectly: one shopkeeper, one book, always in reach. Then the shop becomes a chain of forty branches, and the drawer stops working - branch twelve cannot see what branch three wrote, two clerks scribble on the same line at once, and the totals go to war. The fix is not a bigger drawer. It is a central records office that every branch phones, one place that holds the real book and knows how to take forty updates at the same moment without anyone's entry clobbering anyone else's.</p>
+        <p>Your agent's memory has the same two lives. Back when you built the <a href="ch131-the-conversation-time-machine.html">conversation time machine</a>, saving a checkpoint was easy because you imagined one process holding the state. But production agents run as many copies at once (you saw pods and replicas in the deployment act), and the drawer-under-the-counter approach - state living inside one process - breaks the moment a second copy needs to read it. This chapter is about the drawer and the records office: the embedded checkpointer that suits a single deployment, the shared checkpoint service that a fleet needs, and the one small interface that lets you swap between them without rewriting the agent.</p>
+      </section>
+
+      <h2>The one interface underneath it all</h2>
+      <p>Whatever stores your checkpoints, it hides behind a single small contract. In the framework you have been meeting, that contract is the <dfn>checkpoint saver</dfn> - a base class with a handful of methods: put a checkpoint, get one back, list what is there, and record the in-between <a href="ch131-the-conversation-time-machine.html">pending writes</a>. Some methods are mandatory, some optional. The point of an interface is freedom: write the agent against the contract, and you can slide any storage behind it - memory, a database, or a remote service - without touching a line of agent code. Everything else in this chapter is just different things plugged into that one socket.</p>
+
+      <div class="flipgrid">
+        <button class="flip" type="button"><span class="flip-front">checkpoint saver</span><span class="flip-back">The interface (a base class) that persistence hides behind: put/get/list a checkpoint, plus pending writes. Swap the implementation, keep the agent the same.</span></button>
+        <button class="flip" type="button"><span class="flip-front">in-memory saver</span><span class="flip-back">The default: state kept in the running process. Zero setup, perfect for a test or a single instance - and gone the moment the process restarts or a second copy needs it.</span></button>
+        <button class="flip" type="button"><span class="flip-front">persistent saver</span><span class="flip-back">State written to Postgres or Redis via a connection URL. Survives restarts; shared by anything that can reach the database. The everyday production choice for one deployment.</span></button>
+        <button class="flip" type="button"><span class="flip-front">setup / migration</span><span class="flip-back">The first-run step that creates the checkpoint tables. The library can run it for you from the URL, or you pre-create the tables and it becomes a no-op.</span></button>
+        <button class="flip" type="button"><span class="flip-front">checkpoint service</span><span class="flip-back">Persistence exposed as a REST API that all agent instances call. The records office - one shared store, built to handle concurrent writes and race conditions across a fleet.</span></button>
+        <button class="flip" type="button"><span class="flip-front">workload identity</span><span class="flip-back">Connecting to the database with a cloud identity token or a vault-injected password instead of a hardcoded secret - the credential is resolved at runtime, never baked into the image.</span></button>
+      </div>
+
+      <h2>The embedded saver: a connection URL and done</h2>
+      <p>For a single deployment, persistence is almost anticlimactic. By default the framework uses the <dfn>in-memory saver</dfn> - fine for a test, but state vanishes on restart. To make it durable, you give it one thing: a Postgres or a Redis connection URL. That single config is the whole switch. The library sees a persistent store is configured and routes every checkpoint to it - Redis keeps them as key-value entries by <a href="ch131-the-conversation-time-machine.html">thread id</a>, Postgres keeps them in a small set of tables (checkpoints, their blobs, and their writes).</p>
+      <p>Two details make it production-ready. First, <dfn>setup</dfn>: the first time it connects, the library can run the migration scripts that create those tables for you; if your team pre-creates them, the setup call simply does nothing and moves on. Second, credentials. You never hardcode a database password. The URL carries a placeholder, and at runtime the value is resolved - from a <dfn>cloud identity token</dfn> (the deployment's own identity, granted access to the database) or from a password pulled out of a secrets vault and injected as an environment variable by your <a href="ch132-shipping-a-harness-as-a-product.html">Helm chart</a>. The secret lives in the vault; the image and the code never see it.</p>
+
+      <div class="walkthrough">
+        <div class="wl-head">config for a persistent checkpointer</div>
+        <div class="wl-line"><code>checkpointer:</code></div>
+        <div class="wl-line"><code>  postgres_url: "postgresql://agent:__VAULT__@db:5432/state"</code>
+          <div class="wl-note">The single switch. Provide a Postgres (or Redis) URL and the library stops using memory and starts persisting. The <code>__VAULT__</code> placeholder is resolved at runtime - the real password is injected from a secrets vault, never written here.</div></div>
+        <div class="wl-line"><code>  run_setup: true</code>
+          <div class="wl-note">On first connect, run the migrations that create the checkpoint tables. Set it false if your team pre-creates the schema - then setup is a harmless no-op.</div></div>
+        <div class="wl-line"><code>  # no code change to switch stores - only this URL</code>
+          <div class="wl-note">Because everything sits behind the saver interface, moving from memory to Postgres to Redis is a config edit, not a rewrite. The agent never knows which store it is talking to.</div></div>
+      </div>
+
+      <div class="callout note"><span class="co-label">Note</span>
+      <p>The migrations create the tables; they do <em>not</em> hand out database permissions. The user in your connection string must already have the right access, and it is good practice to separate the account that runs migrations from the account that runs day-to-day queries. Most platforms deliberately do not bundle database management - teams usually already have a database with roles, run the migration themselves, and hand the agent a connection string that can only read and write the checkpoint tables. Flexibility over a one-size-fits-all box.</p></div>
+
+      <h2>Why a fleet needs a records office</h2>
+      <p>Here is where the drawer breaks. An <dfn>embedded</dfn> saver that keeps state inside the process is invisible to every other copy of the process. Run one instance and it is fine. Run ten - which any real deployment does, for load and resilience - and instance seven cannot see the conversation instance two is holding, and two writers can race on the same checkpoint. A shared database helps, but some platforms go one step further and expose checkpointing as its own <dfn>checkpoint service</dfn>: a small REST API in front of the store that every agent instance calls. It is built to handle concurrent, asynchronous updates and to resolve the race conditions a shared store invites.</p>
+      <p>The elegant part is that this changes nothing for the agent. The service has a thin client - a checkpoint saver that implements the very same interface, but whose put/get/list methods send HTTP requests to the service instead of talking to a database directly. Same contract, different wire. Watch the two shapes side by side:</p>
+
+      <div class="stepper">
+        <div class="step" data-title="One instance, embedded">
+          <h3>1. One instance: the drawer works</h3>
+          <div class="diagram">
+            <div class="d-box hot">agent<small>embedded saver</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">state<small>in this process</small></div>
+          </div>
+          <p class="step-cap">A single agent keeps its checkpoints in-process or in its own database. Simple and fast - nobody else needs to see them, so the drawer under the counter is plenty.</p>
+        </div>
+        <div class="step" data-title="A fleet, embedded">
+          <h3>2. A fleet: the drawer breaks</h3>
+          <div class="diagram">
+            <div class="d-col"><div class="d-box hot">agent copy 1</div><div class="d-box hot">agent copy 2</div><div class="d-box hot">agent copy 3</div></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-col"><div class="d-box dim">state 1</div><div class="d-box dim">state 2</div><div class="d-box dim">state 3</div></div>
+          </div>
+          <p class="step-cap">Now three copies run at once behind a load balancer. Each holds its own state; a request routed to copy 3 cannot see the conversation copy 1 started. The memory is split three ways.</p>
+        </div>
+        <div class="step" data-title="A shared service">
+          <h3>3. A shared checkpoint service</h3>
+          <div class="diagram">
+            <div class="d-col"><div class="d-box">agent copy 1</div><div class="d-box">agent copy 2</div><div class="d-box">agent copy 3</div></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box hot">checkpoint service<small>REST · handles concurrency</small></div>
+            <span class="d-arrow">&#8594;</span>
+            <div class="d-box good">one store</div>
+          </div>
+          <p class="step-cap">All three copies call one checkpoint service over REST. It owns the single store and resolves concurrent writes. Any copy can pick up any conversation - the records office everyone phones.</p>
+        </div>
+      </div>
+
+      <h2>Swap the store, keep the agent</h2>
+      <p>The whole idea fits in a few lines: define the interface once, then provide different bodies for it. Below, the identical two-turn agent runs first against an in-process store, then against a stand-in for a REST service - and the agent code never changes. Press <strong>Run</strong>.</p>
+
+      <div class="pyrun" data-title="One saver interface, two backends">
+<textarea class="py-src" spellcheck="false">
+# A checkpoint saver is just an interface: put a state, get it back,
+# list what is stored. Swap the body to change WHERE state lives.
+class CheckpointSaver:
+    def put(self, thread, state):  raise NotImplementedError
+    def get(self, thread):         raise NotImplementedError
+    def list_threads(self):        raise NotImplementedError
+
+class InMemorySaver(CheckpointSaver):
+    def __init__(self):            self.store = {}
+    def put(self, thread, state):  self.store[thread] = state
+    def get(self, thread):         return self.store.get(thread)
+    def list_threads(self):        return list(self.store)
+
+class RestSaver(CheckpointSaver):
+    # SAME interface, but every call goes to a shared HTTP service,
+    # so many agent copies read and write ONE store.
+    def __init__(self, url):       self.url = url
+    def put(self, thread, state):  print("  POST", self.url, "thread", thread, "state", state)
+    def get(self, thread):         print("  GET ", self.url, "thread", thread); return "(from service)"
+    def list_threads(self):        print("  GET ", self.url, "list"); return []
+
+def run_two_turns(saver, thread):
+    saver.put(thread, {"step": 1, "answer": None})
+    saver.put(thread, {"step": 2, "answer": 42})
+    return saver.get(thread)
+
+print("embedded, inside this one process:")
+mem = InMemorySaver()
+print("  final state:", run_two_turns(mem, "conv-1"))
+print("  threads stored:", mem.list_threads())
+
+print()
+print("same agent code, swapped to a shared service:")
+run_two_turns(RestSaver("http://state-svc"), "conv-1")
+</textarea>
+      </div>
+
+      <div class="callout tip"><span class="co-label">Tip</span>
+      <p>Add a third implementation - a <code>BlobSaver</code> that prints "wrote to blob storage" - and drop it into <code>run_two_turns</code>. You just extended the system to a new backend without touching the agent. That is exactly how a team adds file or blob storage to a real checkpointer: implement the interface's required methods, register it in config, done.</p></div>
+
+      <div class="callout wild"><span class="co-label">In the wild</span>
+      <p>You will see a <code>checkpointer</code> block in a config with a Postgres or Redis URL, a <code>setup()</code> call on first boot that creates the tables, and a vault reference where a password should be. When a colleague says "the in-memory checkpointer is fine for the demo but we need Postgres for staging", that is this switch. When an agent runs as several replicas and someone asks "how do they share conversation state?", the answer is a shared database or a checkpoint service with a REST saver client. And "who runs the migrations versus who runs the queries?" is the separate-accounts question every platform team eventually has.</p></div>
+
+      <section class="quiz">
+        <h2>Check yourself</h2>
+        <div class="q" data-answer="b">
+          <p class="q-text">1. What is the point of the checkpoint saver being an interface (a base class)?</p>
+          <div class="q-opts">
+            <button data-opt="a">It makes checkpoints save faster</button>
+            <button data-opt="b">You can swap the storage behind it - memory, Postgres, Redis, a REST service - without changing the agent code</button>
+            <button data-opt="c">It is required by law</button>
+          </div>
+          <p class="q-explain">Write the agent against the contract (put/get/list/pending-writes) and any storage can slide in behind it. Changing stores becomes a config edit, not a rewrite.</p>
+        </div>
+        <div class="q" data-answer="c">
+          <p class="q-text">2. To make an embedded checkpointer durable instead of in-memory, what do you typically provide?</p>
+          <div class="q-opts">
+            <button data-opt="a">A new programming language</button>
+            <button data-opt="b">A faster CPU</button>
+            <button data-opt="c">A Postgres or Redis connection URL - that single config switches it to the persistent store</button>
+          </div>
+          <p class="q-explain">The library sees a persistent store is configured and routes checkpoints to it. Setup can create the tables on first run; credentials are resolved from a vault or cloud identity, never hardcoded.</p>
+        </div>
+        <div class="q" data-answer="a">
+          <p class="q-text">3. Why does an embedded, in-process checkpointer break when an agent runs as several replicas?</p>
+          <div class="q-opts">
+            <button data-opt="a">Each copy holds its own state, so one replica cannot see the conversation another replica is holding</button>
+            <button data-opt="b">Replicas cannot run Python</button>
+            <button data-opt="c">In-memory storage is illegal in production</button>
+          </div>
+          <p class="q-explain">State inside one process is invisible to the others. A shared database or a checkpoint service gives every copy one place to read and write, so any copy can continue any conversation.</p>
+        </div>
+        <div class="q" data-answer="b">
+          <p class="q-text">4. What is the REST checkpoint saver (the service client)?</p>
+          <div class="q-opts">
+            <button data-opt="a">A different agent framework</button>
+            <button data-opt="b">An implementation of the same saver interface whose methods send HTTP requests to a shared checkpoint service instead of a local database</button>
+            <button data-opt="c">A tool the model calls to run code</button>
+          </div>
+          <p class="q-explain">Same contract, different wire: the client honours the put/get/list interface but delegates each call to the REST service, so the agent code is identical whether state is local or remote.</p>
+        </div>
+      </section>
+
+      <section class="takeaways">
+        <h2>Key takeaways</h2>
+        <ul>
+          <li>Persistence hides behind one small interface - the checkpoint saver (put/get/list + pending writes) - so you can swap storage without changing the agent.</li>
+          <li>The default is an in-memory saver (great for tests, lost on restart); a persistent saver just needs a Postgres or Redis connection URL.</li>
+          <li>Setup runs the migrations that create the checkpoint tables on first connect, or does nothing if you pre-create them; credentials come from a cloud identity or a vault, never hardcoded.</li>
+          <li>Migrations create tables, not permissions - keep the migration account separate from the query account, and most platforms leave database provisioning to the consuming team.</li>
+          <li>An embedded in-process saver cannot be shared across replicas; a fleet needs a shared database or a checkpoint service (a REST API that handles concurrent writes).</li>
+          <li>The checkpoint service has a thin client that implements the same saver interface over HTTP, so scaling from one instance to many changes the config, not the agent.</li>
+        </ul>
+      </section>
+
+      <div class="ch-done">
+        <button class="complete-btn" data-complete>Mark chapter complete</button>
+      </div>
+      <nav class="ch-nav" data-chnav aria-label="Chapter navigation"></nav>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>
