@@ -170,6 +170,23 @@
     return fig;
   }
 
+  // Chapter hero art: prefer a per-chapter illustration, fall back to the
+  // act illustration, and if neither exists remove the figure.
+  function chapterArtFigure(chapterSrc, actSrc, alt, cls) {
+    var fig = el("figure", cls);
+    var img = document.createElement("img");
+    img.alt = alt;
+    img.loading = "lazy";
+    var stage = 0; // 0 = trying per-chapter image, 1 = trying act image
+    img.onerror = function () {
+      if (stage === 0) { stage = 1; img.src = actSrc; }
+      else { fig.remove(); }
+    };
+    img.src = chapterSrc;
+    fig.appendChild(img);
+    return fig;
+  }
+
   /* ---------------- chapter footer nav + completion ---------------- */
 
   function buildChapterExtras(nav) {
@@ -179,12 +196,15 @@
     var idx = flat.findIndex(function (x) { return x.ch.id === currentId; });
     if (idx === -1) return;
 
-    // inject this act's storybook illustration under the hero
+    // inject a storybook illustration under the hero: this chapter's own if
+    // one exists, otherwise the act's shared illustration
     var hero = document.querySelector(".ch-hero");
     if (hero && !document.querySelector(".ch-art")) {
       var act = flat[idx].act;
       hero.insertAdjacentElement("afterend",
-        artFigure(ROOT + "assets/img/" + act.id + ".jpg",
+        chapterArtFigure(
+          ROOT + "assets/img/chapters/" + currentId + ".jpg",
+          ROOT + "assets/img/" + act.id + ".jpg",
           "Hand-drawn illustration for Act " + act.num + ": " + act.title, "ch-art"));
     }
 
